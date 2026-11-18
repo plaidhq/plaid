@@ -60,8 +60,10 @@ until cutover.
 
 ## Windows
 
-Compile-checked (`cargo check/clippy --target x86_64-pc-windows-msvc`) and never run. Same settings and data
-layout as macOS; hotkey settings keep macOS key codes, mapped from virtual keys in hotkey/vk.rs.
+Built and tested on GitHub Actions (`.github/workflows/app.yml`, windows-latest): unit tests and the
+`--file` replay against a mock Volcengine endpoint (plaid/tests/replay.rs). Never run on a desktop: no hotkey,
+mic or paste has been exercised. Same settings and data layout as macOS; hotkey settings keep macOS key codes,
+mapped from virtual keys in hotkey/vk.rs.
 
 - **Hotkey**: right Alt (61) by default, also for dev builds. Win and Alt bindings send the unassigned vkE8
   around the press so releasing them doesn't open Start or the menu bar. Injected events are ignored, which
