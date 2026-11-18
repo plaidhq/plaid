@@ -175,6 +175,7 @@ pub fn check(args: &[String]) -> Result<(), String> {
     super::dictionary::check(&mut ui)?;
     super::refine::check(&mut ui)?;
     super::commands::check(&mut ui)?;
+    ui.check_close()?;
     println!("ui-check: PASS");
     Ok(())
 }
@@ -316,6 +317,32 @@ impl Ui {
                 })
                 .map_err(|e| e.to_string())?;
             self.cx.run_until_parked();
+        }
+        Ok(())
+    }
+
+    /// ⌘W (Ctrl+W off macOS) closes the active window.
+    fn check_close(&mut self) -> Result<(), String> {
+        self.cx.update(super::bind_keys);
+        self.open(Page::General, facts())?;
+        let handle = self.window.take().ok_or("no window")?;
+        let key = if cfg!(target_os = "macos") {
+            "cmd-w"
+        } else {
+            "ctrl-w"
+        };
+        let active = self.cx.update(|cx| cx.active_window()) == Some(handle);
+        self.cx
+            .update_window(handle, |_, window, cx| {
+                window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx)
+            })
+            .map_err(|e| e.to_string())?;
+        self.cx.run_until_parked();
+        let open = self.cx.update(|cx| cx.windows().contains(&handle));
+        if open {
+            return Err(format!(
+                "FAIL {key} left the window open (active: {active})"
+            ));
         }
         Ok(())
     }

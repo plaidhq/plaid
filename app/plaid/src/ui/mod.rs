@@ -25,6 +25,32 @@ use plaid_core::store::Store;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+actions!(plaid, [CloseWindow, Minimize, Quit]);
+
+/// Standard window shortcuts for the settings and onboarding windows. The app has no main menu (it is a menu bar
+/// app), so AppKit supplies none of these. Text fields keep their own bindings (gpui-base input).
+pub fn bind_keys(cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    cx.bind_keys([
+        KeyBinding::new("cmd-w", CloseWindow, None),
+        KeyBinding::new("cmd-m", Minimize, None),
+        KeyBinding::new("cmd-q", Quit, None),
+    ]);
+    #[cfg(not(target_os = "macos"))]
+    cx.bind_keys([KeyBinding::new("ctrl-w", CloseWindow, None)]);
+    // The global handlers only mark the action handled; the keystroke observer then acts on the window that
+    // received the key (App alone does not know it, and active_window is the platform's key window).
+    cx.on_action(|_: &CloseWindow, _| {});
+    cx.on_action(|_: &Minimize, _| {});
+    cx.observe_keystrokes(|e, window, _| match e.action.as_deref() {
+        Some(a) if a.as_any().is::<CloseWindow>() => window.remove_window(),
+        Some(a) if a.as_any().is::<Minimize>() => window.minimize_window(),
+        _ => {}
+    })
+    .detach();
+    cx.on_action(|_: &Quit, cx| cx.quit());
+}
+
 /// What the running app hands the settings window: the controller's inbox and the hotkey hook's state.
 pub struct Live {
     pub tx: async_channel::Sender<Msg>,
