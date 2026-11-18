@@ -2,9 +2,11 @@
 //! from settings.json and the dictation history from disk (refreshed when records.jsonl changes); anything that
 //! changes records goes to the controller as a `Msg`, which owns the store while the app runs.
 pub mod assets;
+mod commands;
 mod general;
 mod key_field;
 pub mod mav;
+mod refine;
 #[cfg(all(feature = "snapshot", any(target_os = "macos", target_os = "linux")))]
 pub mod snapshot;
 
@@ -316,6 +318,8 @@ impl Settings {
         let m = self.model.clone();
         let v: AnyView = match page {
             Page::General => cx.new(|cx| general::General::new(m, window, cx)).into(),
+            Page::Refine => cx.new(|cx| refine::Refine::new(m, window, cx)).into(),
+            Page::Commands => cx.new(|cx| commands::Commands::new(m, window, cx)).into(),
             _ => cx.new(|_| Todo(page)).into(),
         };
         self.pages.push((page, v.clone()));
