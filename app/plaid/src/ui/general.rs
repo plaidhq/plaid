@@ -358,11 +358,13 @@ impl General {
             .map(|&c| MenuEntry {
                 label: key_name(c).into(),
                 checked: c == code,
+                rule: false,
             })
             .collect();
         items.push(MenuEntry {
             label: "未绑定".into(),
             checked: code < 0,
+            rule: false,
         });
         let open = self.menu == Some(Menu::Key(s));
         let this = cx.entity().downgrade();
@@ -424,12 +426,14 @@ impl General {
         let mut items = vec![MenuEntry {
             label: system.clone().into(),
             checked: chosen.is_none(),
+            rule: false,
         }];
         for (id, name) in &facts.mics {
             ids.push(Some(id.clone()));
             items.push(MenuEntry {
                 label: name.clone().into(),
                 checked: chosen.as_deref() == Some(id.as_str()),
+                rule: false,
             });
         }
         let missing = chosen
@@ -440,6 +444,7 @@ impl General {
             items.push(MenuEntry {
                 label: "已选设备未连接，暂用系统默认".into(),
                 checked: true,
+                rule: false,
             });
         }
         let current = items

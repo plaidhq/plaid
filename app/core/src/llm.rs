@@ -209,6 +209,62 @@ pub fn render(template: &str, vars: &[(&str, &str)]) -> String {
     })
 }
 
+/// Endpoint from the llmFormat / llmBaseUrl / llmModel settings.
+pub fn endpoint(mut setting: impl FnMut(&str) -> Option<String>) -> Endpoint {
+    Endpoint::new(
+        &setting("llmFormat").unwrap_or_else(|| "openai".into()),
+        &setting("llmBaseUrl").unwrap_or_default(),
+        &setting("llmModel").unwrap_or_default(),
+    )
+}
+
+/// What a refine request is filled with besides the settings.
+pub struct Fill<'a> {
+    pub text: &'a str,
+    pub app: &'a str,
+    pub history: &'a [String],
+    pub hotwords: &'a str,
+    pub fixes: &'a [crate::store::Fix],
+}
+
+/// The refine request: prompt, template, context and extra body from settings; the 10 newest corrections.
+pub fn refine_request(
+    mut setting: impl FnMut(&str) -> Option<String>,
+    ep: &Endpoint,
+    key: Option<&str>,
+    f: &Fill,
+    timeout: Duration,
+) -> Result<Request, String> {
+    let system = setting("llmPrompt").unwrap_or_else(|| DEFAULT_PROMPT.into());
+    let template = setting("llmTemplate").unwrap_or_else(|| DEFAULT_TEMPLATE.into());
+    let corrections: Vec<String> = f
+        .fixes
+        .iter()
+        .take(10)
+        .map(|x| format!("{} → {}", x.from, x.to))
+        .collect();
+    let context = setting("llmContext").unwrap_or_default();
+    let user = render(
+        &template,
+        &[
+            ("context", &context),
+            ("hotwords", f.hotwords),
+            ("app", f.app),
+            ("history", &f.history.join("\n")),
+            ("corrections", &corrections.join("; ")),
+            ("text", f.text),
+        ],
+    );
+    request(
+        ep,
+        key,
+        &system,
+        &user,
+        setting("llmExtraBody").as_deref(),
+        timeout,
+    )
+}
+
 /// `extra`: JSON object merged over the body (llmExtraBody), e.g. to turn off reasoning.
 pub fn request(
     ep: &Endpoint,

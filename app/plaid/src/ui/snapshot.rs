@@ -170,6 +170,8 @@ pub fn check(args: &[String]) -> Result<(), String> {
     let mut ui = Ui::new(out)?;
     check_general(&mut ui)?;
     super::history::check(&mut ui)?;
+    super::refine::check(&mut ui)?;
+    super::commands::check(&mut ui)?;
     println!("ui-check: PASS");
     Ok(())
 }
@@ -404,6 +406,40 @@ impl Ui {
         let path = self.out.join(format!("{name}.png"));
         img.save(&path).map_err(|e| e.to_string())?;
         println!("{}", path.display());
+        Ok(())
+    }
+
+    /// Types into the focused field, one keystroke per character (`window.dispatch_keystroke`, which feeds the
+    /// focused input handler), then renders.
+    pub(super) fn type_text(&mut self, text: &str) -> Result<(), String> {
+        for c in text.chars() {
+            let key = match c {
+                ' ' => "space".to_string(),
+                c => c.to_string(),
+            };
+            self.key_stroke(Keystroke {
+                modifiers: Modifiers::default(),
+                key,
+                key_char: None,
+            })?;
+        }
+        self.frame()
+    }
+
+    /// One named keystroke, e.g. "enter", "cmd-a", "tab", then renders.
+    pub(super) fn key(&mut self, name: &'static str) -> Result<(), String> {
+        self.key_stroke(Keystroke::parse(name).map_err(|e| format!("{name}: {e}"))?)?;
+        self.frame()
+    }
+
+    fn key_stroke(&mut self, k: Keystroke) -> Result<(), String> {
+        let handle = self.window.ok_or("no window")?;
+        self.cx
+            .update_window(handle, |_, window, cx| {
+                window.dispatch_keystroke(k, cx);
+            })
+            .map_err(|e| e.to_string())?;
+        self.cx.run_until_parked();
         Ok(())
     }
 

@@ -48,6 +48,10 @@ fn main() {
         Some("--snapshot") => Some(ui::snapshot::run(&args[2..])),
         #[cfg(all(feature = "snapshot", any(target_os = "macos", target_os = "linux")))]
         Some("--ui-check") => Some(ui::snapshot::check(&args[2..])),
+        // A flag this build doesn't know (e.g. --snapshot without the feature) must not start the normal app.
+        Some(a) if a.starts_with("--") && a != "--hud-test" => {
+            Some(Err(format!("unknown argument {a}")))
+        }
         _ => None,
     };
     if let Some(r) = headless {

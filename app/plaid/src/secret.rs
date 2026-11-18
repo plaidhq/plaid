@@ -2,6 +2,14 @@
 //! dev.neo.plaid.volc is the Swift app's service, so its key carries over), Windows Credential Manager otherwise.
 //! Accounts: "apiKey" is the Volcengine key, "llm:<host>" the LLM keys.
 
+/// An LLM endpoint's key: PLAID_LLM_KEY, else the credential stored for its host.
+pub fn llm_key(base: &str) -> Option<String> {
+    std::env::var("PLAID_LLM_KEY")
+        .ok()
+        .or_else(|| get(&plaid_core::llm::key_account(base)).ok().flatten())
+        .filter(|k| !k.is_empty())
+}
+
 /// PLAID_API_KEY wins, for replays and CI.
 pub fn api_key() -> Result<String, String> {
     if let Ok(k) = std::env::var("PLAID_API_KEY") {

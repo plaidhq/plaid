@@ -497,6 +497,8 @@ pub fn popup(
 pub struct MenuEntry {
     pub label: SharedString,
     pub checked: bool,
+    /// Draw a separator line below this entry.
+    pub rule: bool,
 }
 
 /// The open menu of a pop-up: white rounded panel, blue highlight under the pointer.
@@ -518,7 +520,7 @@ pub fn menu(
         .shadow(vec![shadow(0., 6., 18., 0., 0x00000059, false)])
         .children(items.into_iter().enumerate().map(move |(i, it)| {
             let pick = on_pick.clone();
-            hit(SharedString::from(format!("{id}-{i}")))
+            let row = hit(SharedString::from(format!("{id}-{i}")))
                 .h(px(19.))
                 .flex()
                 .items_center()
@@ -532,7 +534,11 @@ pub fn menu(
                         .when(it.checked, |d| d.child("✓")),
                 )
                 .child(div().whitespace_nowrap().child(it.label))
-                .on_click(move |_, w, cx| pick(i, w, cx))
+                .on_click(move |_, w, cx| pick(i, w, cx));
+            let rule = it
+                .rule
+                .then(|| div().my(px(5.)).h(px(1.)).bg(hexa(0x0000001f)));
+            div().child(row).children(rule)
         }))
 }
 

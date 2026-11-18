@@ -450,6 +450,7 @@ impl History {
         .map(|(l, c)| MenuEntry {
             label: l.into(),
             checked: c,
+            rule: false,
         })
         .collect();
         let this = cx.entity().downgrade();
@@ -642,10 +643,12 @@ impl History {
                     "复制".into()
                 },
                 checked: false,
+                rule: false,
             },
             MenuEntry {
                 label: format!("导出选中的 {n} 条…").into(),
                 checked: false,
+                rule: false,
             },
         ];
         let this = cx.entity().downgrade();

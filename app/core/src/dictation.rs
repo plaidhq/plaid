@@ -1101,11 +1101,7 @@ impl Controller {
     }
 
     fn configured(p: &mut impl Platform) -> Option<Endpoint> {
-        let ep = Endpoint::new(
-            &p.setting("llmFormat").unwrap_or_else(|| "openai".into()),
-            &p.setting("llmBaseUrl").unwrap_or_default(),
-            &p.setting("llmModel").unwrap_or_default(),
-        );
+        let ep = llm::endpoint(|k| p.setting(k));
         (!ep.base.is_empty()).then_some(ep)
     }
 
@@ -1118,43 +1114,16 @@ impl Controller {
         timeout: Duration,
         p: &mut impl Platform,
     ) -> Result<llm::Request, String> {
-        let system = p
-            .setting("llmPrompt")
-            .unwrap_or_else(|| llm::DEFAULT_PROMPT.into());
-        let template = p
-            .setting("llmTemplate")
-            .unwrap_or_else(|| llm::DEFAULT_TEMPLATE.into());
-        let corrections: Vec<String> = self
-            .store
-            .fixes()
-            .iter()
-            .take(10)
-            .map(|f| format!("{} → {}", f.from, f.to))
-            .collect();
-        let (context, hotwords) = (
-            p.setting("llmContext").unwrap_or_default(),
-            p.terms(true).join(", "),
-        );
-        let user = llm::render(
-            &template,
-            &[
-                ("context", &context),
-                ("hotwords", &hotwords),
-                ("app", app),
-                ("history", &history.join("\n")),
-                ("corrections", &corrections.join("; ")),
-                ("text", text),
-            ],
-        );
+        let hotwords = p.terms(true).join(", ");
         let key = p.llm_key(&ep.base);
-        llm::request(
-            ep,
-            key.as_deref(),
-            &system,
-            &user,
-            p.setting("llmExtraBody").as_deref(),
-            timeout,
-        )
+        let fill = llm::Fill {
+            text,
+            app,
+            history,
+            hotwords: &hotwords,
+            fixes: &self.store.fixes(),
+        };
+        llm::refine_request(|k| p.setting(k), ep, key.as_deref(), &fill, timeout)
     }
 
     /// Optional LLM pass between the ASR final and the paste. Fails open: errors and timeouts paste the raw text.

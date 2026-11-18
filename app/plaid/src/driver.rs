@@ -355,10 +355,7 @@ impl Platform for Driver {
 
     /// PLAID_LLM_KEY wins (replays); the Keychain read never prompts.
     fn llm_key(&mut self, base: &str) -> Option<String> {
-        std::env::var("PLAID_LLM_KEY")
-            .ok()
-            .or_else(|| secret::get(&llm::key_account(base)).ok().flatten())
-            .filter(|k| !k.is_empty())
+        secret::llm_key(base)
     }
 
     fn llm(&mut self, id: u64, req: llm::Request) {
