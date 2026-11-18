@@ -38,7 +38,8 @@ until cutover.
   actions.json has entries.
 - **Commands on Windows** run through `powershell -NoProfile -NonInteractive -Command`. A timeout kills only
   powershell, not its children (unix kills the process group). Not run on a real machine yet.
-- **Recovery cannot be cancelled.** Its result shows on the HUD instead of in History. Dictation is refused while
+- **Recovery cannot be cancelled.** It runs from 历史 重试 (or `--recover`); the updated record shows in History,
+  progress and failures only on the HUD. Dictation is refused while
   it runs, as in Swift. Like Swift it sends the whole recording at once; in 1 of 4 replays of a 17 s recording the
   server dropped part of the middle (the other 3 matched the live transcript).
 - **A stalled connect ends at the finish deadline.** Commands queue while the WebSocket connects; key-up arms the
@@ -51,7 +52,9 @@ until cutover.
 ## Not ported
 
 - Settings import from the Swift app's UserDefaults and Keychain (`dev.neo.plaid.volc`) at cutover.
-- `--export` feedback bundle and `--ogg` (Opus.swift; debug only).
+- Opus upload (Volc.swift `codec`, Swift default `opus`, 32 kbps). The port always streams PCM, about 8x the
+  traffic; 设置 has no 上传格式 picker.
+- `--export` CLI flag (历史 导出 writes the same feedback bundle) and `--ogg` (debug only).
 - Windows focused-field text (needs UI Automation). Without it Windows has no PLAID_BEFORE, no field context
   for the ASR and no edit learning.
 
@@ -124,8 +127,9 @@ Not yet exercised in a live run of the GPUI app:
 - Keychain LLM key;
 - clipboard restore on quit;
 - GUI memory and idle CPU;
-- settings window, HUD and onboarding on a real screen: window activation, focus rings, Windows window chrome,
-  fonts and HUD transparency;
+- settings window, HUD and onboarding on a real screen: window activation, hidden macOS traffic lights, focus
+  rings, Windows window chrome, fonts and HUD transparency;
+- 设置 shortcut recorder (needs the live key hook and accessibility);
 - onboarding accessibility prompt and its try-it paste; mic permission state;
 - history copy, audio playback, 重试 round trip and the export save dialog; Finder reveal;
 - 优化 LLM test against a real endpoint (only the error path is snapshotted) and 命令 trial run of a real command;
