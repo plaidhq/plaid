@@ -8,6 +8,8 @@ mod history;
 mod key_field;
 pub mod mav;
 pub mod onboarding;
+mod overview;
+mod perf;
 mod refine;
 #[cfg(all(feature = "snapshot", any(target_os = "macos", target_os = "linux")))]
 pub mod snapshot;
@@ -329,6 +331,8 @@ impl Settings {
             }
             Page::Refine => cx.new(|cx| refine::Refine::new(m, window, cx)).into(),
             Page::Commands => cx.new(|cx| commands::Commands::new(m, window, cx)).into(),
+            Page::Overview => cx.new(|cx| overview::Overview::new(m, window, cx)).into(),
+            Page::Perf => cx.new(|cx| perf::Perf::new(m, window, cx)).into(),
             _ => cx.new(|_| Todo(page)).into(),
         };
         self.pages.push((page, v.clone()));
