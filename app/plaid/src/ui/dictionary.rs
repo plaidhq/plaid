@@ -289,6 +289,8 @@ pub struct Dictionary {
     sheet: Option<Sheet>,
     /// A DeepSeek key for background checking (env or keychain), read once.
     fallback_key: bool,
+    /// Focused while the confirm sheet is up, so the overlay gets Esc.
+    overlay_focus: FocusHandle,
 }
 
 impl Dictionary {
@@ -351,6 +353,7 @@ impl Dictionary {
             confirm: false,
             sheet: None,
             fallback_key,
+            overlay_focus: cx.focus_handle(),
         }
     }
 
@@ -491,13 +494,17 @@ impl Dictionary {
         cx.notify();
     }
 
-    fn batch(&mut self, i: usize, cx: &mut Context<Self>) {
+    fn batch(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.batch_open = false;
         let fixes = self.derived(cx).fixes.clone();
         match i {
             0 => self.accept(&fixes, false, cx),
             1 => self.accept(&fixes, true, cx),
-            _ => self.confirm = true,
+            _ => {
+                // Nothing in the confirm sheet takes focus; the overlay does, so Esc reaches it.
+                self.confirm = true;
+                self.overlay_focus.focus(window, cx);
+            }
         }
         cx.notify();
     }
@@ -1043,23 +1050,25 @@ impl Dictionary {
                 .child(
                     div()
                         .flex()
-                        .items_baseline()
+                        .items_start()
                         .gap(px(6.))
+                        // from → to wraps as a group (as in the canvas); the count keeps the top-right corner.
                         .child(
                             div()
+                                .flex_1()
                                 .min_w_0()
-                                .truncate()
-                                .line_through()
-                                .text_color(hex(0x7a7a7a))
-                                .child(f.from.clone()),
-                        )
-                        .child(div().flex_none().text_color(hex(GREEN)).child("→"))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .font_weight(bold())
-                                .child(f.to.clone()),
+                                .flex()
+                                .flex_wrap()
+                                .items_baseline()
+                                .gap_x(px(6.))
+                                .child(
+                                    div()
+                                        .line_through()
+                                        .text_color(hex(0x7a7a7a))
+                                        .child(f.from.clone()),
+                                )
+                                .child(div().text_color(hex(GREEN)).child("→"))
+                                .child(div().font_weight(bold()).child(f.to.clone())),
                         )
                         .child(
                             div()
@@ -1141,8 +1150,8 @@ impl Dictionary {
                             cx.notify();
                         });
                     },
-                    move |i, _, cx| {
-                        let _ = pick.update(cx, |this, cx| this.batch(i, cx));
+                    move |i, w, cx| {
+                        let _ = pick.update(cx, |this, cx| this.batch(i, w, cx));
                     },
                 ))
             });
@@ -1474,6 +1483,7 @@ impl Render for Dictionary {
                 el.child(
                     div()
                         .id("dict-overlay")
+                        .track_focus(&self.overlay_focus)
                         .absolute()
                         .inset_0()
                         .occlude()
@@ -1531,6 +1541,21 @@ fn type_text(ui: &mut super::snapshot::Ui, text: &str) -> Result<(), String> {
     super::snapshot::expect("keystroke reached a text field", handled.get(), &None)
 }
 
+/// Presses one named key (`escape`, `enter`) in the focused element.
+#[cfg(feature = "snapshot")]
+fn press(ui: &mut super::snapshot::Ui, key: &'static str) -> Result<(), String> {
+    poke(ui, move |_, w, cx| {
+        w.dispatch_keystroke(
+            Keystroke {
+                modifiers: Default::default(),
+                key: key.into(),
+                key_char: None,
+            },
+            cx,
+        );
+    })
+}
+
 #[cfg(feature = "snapshot")]
 fn hotwords_file() -> String {
     read(path())
@@ -1548,6 +1573,9 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     };
     let has_line = |l: &str| hotwords_file().split('\n').any(|x| x == l);
     let dismissed_has = |k: &str| dismissed().contains(k);
+    // Shared fixture state this check mutates; restored at the end so later checks see the fixture.
+    let auto = config::data_dir().join(AUTO_RULES);
+    let saved = (hotwords_file(), read(&auto), config::raw("dismissedFixes"));
 
     ui.open(Page::Dictionary, facts())?;
     ui.shot("dictionary")?;
@@ -1572,6 +1600,15 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         "cancel keeps dismissedFixes",
         config::raw("dismissedFixes") == before && !ui.has("confirm-ok"),
         &before,
+    )?;
+    // Esc dismisses the confirm sheet too.
+    ui.click("fix-batch")?;
+    ui.click("fix-batch-menu-2")?;
+    press(ui, "escape")?;
+    expect(
+        "Esc closes the confirm sheet",
+        config::raw("dismissedFixes") == before && !ui.has("confirm-ok"),
+        &None,
     )?;
 
     // Row 0 is cooper netes → Kubernetes (3 times): Kubernetes is already a line, so 加热词 is disabled.
@@ -1613,7 +1650,6 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     )?;
 
     // Learned rule 杰森 → JSON: ignoring it records it and regenerates hotwords.auto.txt without it.
-    let auto = config::data_dir().join(AUTO_RULES);
     expect(
         "auto file has the learned rule",
         read(&auto).contains("杰森 -> JSON"),
@@ -1675,8 +1711,7 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         !ui.has(&format!("entry-{gpui}")),
         &None,
     )?;
-    let debounced = has_line("GPUI");
-    println!("  ..  delete before debounce: GPUI still on disk = {debounced}");
+    expect("delete waits for the debounce", has_line("GPUI"), &None)?;
     ui.close()?;
     expect(
         "close saves the draft",
@@ -1694,6 +1729,15 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     expect(
         "sheet saved a hotword",
         has_line("张小明") && !ui.has("entry-sheet"),
+        &Some(hotwords_file()),
+    )?;
+    // Enter in the field saves like the 保存 button.
+    ui.click("dict-add")?;
+    type_text(ui, "Neo")?;
+    press(ui, "enter")?;
+    expect(
+        "Enter saves the sheet",
+        has_line("Neo") && !ui.has("entry-sheet"),
         &Some(hotwords_file()),
     )?;
 
@@ -1740,8 +1784,11 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &None,
     )?;
     ui.shot("dictionary-edit")?;
+    press(ui, "escape")?;
+    expect("Esc closes the entry sheet", !ui.has("entry-sheet"), &None)?;
+    ui.click(&format!("entry-edit-{tauri}"))?;
     ui.click("entry-cancel")?;
-    expect("cancel closes the sheet", !ui.has("entry-sheet"), &None)?;
+    expect("取消 closes the sheet", !ui.has("entry-sheet"), &None)?;
 
     // Raw mode: typing saves on close.
     ui.click("dict-raw")?;
@@ -1763,12 +1810,19 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     ui.close()?;
 
     // Empty dictionary.
-    let body = hotwords_file();
     write_atomic(&path(), b"").map_err(|e| e.to_string())?;
     ui.open(Page::Dictionary, facts())?;
     expect("empty state", ui.has("dict-add-first"), &None)?;
     ui.shot("dictionary-empty")?;
     ui.close()?;
+
+    let (body, auto_body, fixes) = saved;
     write_atomic(&path(), body.as_bytes()).map_err(|e| e.to_string())?;
+    write_atomic(&auto, auto_body.as_bytes()).map_err(|e| e.to_string())?;
+    config::set(
+        "dismissedFixes",
+        fixes.map_or(serde_json::Value::Null, serde_json::Value::String),
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
