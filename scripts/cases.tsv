@@ -1,8 +1,0 @@
-Tingting	今天下午3点，我们在会议室讨论一下语音输入法的方案。
-Tingting	帮我把这个PR合并到main分支，然后跑一下CI。
-Tingting	这个接口的延迟大概是200毫秒，比之前快了一倍。
-Tingting	我觉得我们可以用Swift写一个菜单栏应用，然后通过WebSocket调用火山引擎的API。
-Tingting	明天早上9点半提醒我给张经理打电话。
-Tingting	嗯，那个，就是说我们下周要不要再约一次会议？
-Tingting	关于这次的发布计划，我想先说一下背景。上个月我们收到了很多用户反馈，主要集中在启动速度和内存占用这两个方面。所以这次版本的重点是性能优化，具体来说包括三件事：第一，把冷启动时间从两秒降到一秒以内；第二，减少后台常驻内存；第三，修复几个已知的崩溃问题。
-Samantha	Please schedule a meeting with the design team next Tuesday at 10 am.
