@@ -16,8 +16,11 @@ until cutover.
 | Learner.swift, Field.swift (EditWatch) | controller Learner, driver `Watch` | |
 | Actions.swift | core/actions.rs, plaid/run.rs | Same env vars, including PLAID_BUNDLE. |
 | Paste.swift | plaid/paste.rs, paste_win.rs, driver `verify_target` | The clipboard is restored on quit as well. |
-| Mic.swift `micDevice` | audio.rs `input_device` | Same Core Audio UID; falls back to the default input. No device list or picker yet. |
-| Recovery.swift | controller `recover`, driver `recognize` | No History UI yet: `plaid --recover [at]`; status goes to the HUD. |
+| Mic.swift `micDevice` | audio.rs `input_device`, 设置 page picker | Same Core Audio UID; falls back to the default input. |
+| Recovery.swift | controller `recover`, driver `recognize`, 历史 重试 | Also `plaid --recover [at]`; status goes to the HUD. |
+| Settings.swift and its pages | plaid/ui/*.rs | Mac OS X 10.9 look drawn in GPUI (ui/mav.rs); see **Settings window** below. |
+| HUD | plaid/hud | Same states; restyled as a 10.9 HUD panel. |
+| Onboarding | ui/onboarding.rs | Opens at launch until a Volc key is saved and accessibility is granted. |
 
 ## Behaviour differences
 
@@ -47,8 +50,6 @@ until cutover.
 
 ## Not ported
 
-- UI: settings pages (General, Hotkeys, Dictionary, Refine, Actions), History, Overview, Perf. The new UI will be
-  designed from scratch.
 - Settings import from the Swift app's UserDefaults and Keychain (`dev.neo.plaid.volc`) at cutover.
 - `--export` feedback bundle and `--ogg` (Opus.swift; debug only).
 - Windows focused-field text (needs UI Automation). Without it Windows has no PLAID_BEFORE, no field context
@@ -56,7 +57,21 @@ until cutover.
 
 ## New, not yet built
 
-- Launch at login (macOS and Windows). The Swift app never had it; it waits for the settings UI.
+- Launch at login (macOS and Windows). The Swift app never had it.
+
+## Settings window
+
+Pages 概览, 历史, 词典, 优化, 命令, 设置 and 性能 follow the Swift pages. Tray 历史/设置 open the window on that page.
+Checked offscreen only: `plaid --ui-check <dir>` (snapshot feature, fixture data, no window shown, no device or
+key access) clicks through every page and writes PNGs. Differences from Swift:
+
+- 设置: no 测试 button for the Volc key; no launch-at-login switch.
+- 历史: 重试 cannot be cancelled and its failure shows on the HUD only; export does not flush an unsaved 词典
+  draft first.
+- 词典: rows drop the 来源 and 添加于 columns; adds a 全部 tab. The sidebar badge counts pending suggestions.
+- 命令: an actions.json parse error locks only the cards and the add menu (as in the Swift source).
+- 性能: the trend axis labels every second day.
+- No tooltips anywhere.
 
 ## Windows
 
@@ -108,4 +123,10 @@ Not yet exercised in a live run of the GPUI app:
 - window title;
 - Keychain LLM key;
 - clipboard restore on quit;
-- GUI memory and idle CPU.
+- GUI memory and idle CPU;
+- settings window, HUD and onboarding on a real screen: window activation, focus rings, Windows window chrome,
+  fonts and HUD transparency;
+- onboarding accessibility prompt and its try-it paste; mic permission state;
+- history copy, audio playback, 重试 round trip and the export save dialog; Finder reveal;
+- 优化 LLM test against a real endpoint (only the error path is snapshotted) and 命令 trial run of a real command;
+- 性能 memory figures on Windows; empty states with no records.
