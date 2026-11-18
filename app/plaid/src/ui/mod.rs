@@ -3,6 +3,7 @@
 //! changes records goes to the controller as a `Msg`, which owns the store while the app runs.
 pub mod assets;
 mod commands;
+mod dictionary;
 mod general;
 mod history;
 mod key_field;
@@ -333,6 +334,11 @@ impl Settings {
             Page::Commands => cx.new(|cx| commands::Commands::new(m, window, cx)).into(),
             Page::Overview => cx.new(|cx| overview::Overview::new(m, window, cx)).into(),
             Page::Perf => cx.new(|cx| perf::Perf::new(m, window, cx)).into(),
+            Page::Dictionary => {
+                let nav = cx.entity().downgrade();
+                cx.new(|cx| dictionary::Dictionary::new(m, nav, window, cx))
+                    .into()
+            }
             _ => cx.new(|_| Todo(page)).into(),
         };
         self.pages.push((page, v.clone()));

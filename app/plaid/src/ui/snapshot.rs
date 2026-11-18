@@ -172,6 +172,7 @@ pub fn check(args: &[String]) -> Result<(), String> {
     super::overview::check(&mut ui)?;
     super::perf::check(&mut ui)?;
     super::history::check(&mut ui)?;
+    super::dictionary::check(&mut ui)?;
     super::refine::check(&mut ui)?;
     super::commands::check(&mut ui)?;
     println!("ui-check: PASS");
@@ -588,7 +589,7 @@ pub(super) fn fixture(dir: &Path) -> std::io::Result<()> {
     };
     write(
         "hotwords.txt",
-        "Plaid\nKubernetes\nGPUI\n火山引擎\ncooper netes => Kubernetes\n",
+        "Plaid\nKubernetes\nGPUI\n火山引擎\n",
     )?;
     write(
         "actions.json",
@@ -691,5 +692,16 @@ pub(super) fn fixture(dir: &Path) -> std::io::Result<()> {
             .collect();
         std::fs::write(dir.join("events.log"), body)?;
     }
+    // --- 词典 page fixture: a JSON term (so 杰森 -> JSON becomes a learned rule), an alias line with a block
+    // list, and a replacement.
+    let hotwords = dir.join("hotwords.txt");
+    let mut body = std::fs::read_to_string(&hotwords)?;
+    for line in ["JSON", "Tauri | 陶瑞 | 套瑞 ~~~ 金牛座", "克劳德 -> Claude"] {
+        if !body.split('\n').any(|l| l == line) {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    std::fs::write(&hotwords, body)?;
     Ok(())
 }
