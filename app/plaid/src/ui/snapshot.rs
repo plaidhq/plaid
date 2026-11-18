@@ -169,6 +169,7 @@ pub fn check(args: &[String]) -> Result<(), String> {
     };
     let mut ui = Ui::new(out)?;
     check_general(&mut ui)?;
+    super::history::check(&mut ui)?;
     println!("ui-check: PASS");
     Ok(())
 }
@@ -417,7 +418,7 @@ impl Ui {
     }
 }
 
-fn facts() -> Facts {
+pub(super) fn facts() -> Facts {
     Facts {
         volc_key: true,
         mics: vec![
@@ -466,7 +467,7 @@ const SENTENCES: [(&str, &str); 12] = [
 const APPS: [&str; 5] = ["Slack", "Visual Studio Code", "Safari", "微信", "Terminal"];
 
 /// Deterministic history over the last ~40 days (only when the folder has none yet).
-fn fixture(dir: &Path) -> std::io::Result<()> {
+pub(super) fn fixture(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     if !dir.join("records.jsonl").exists() {
         let mut store = Store::load(dir);
@@ -559,5 +560,33 @@ fn fixture(dir: &Path) -> std::io::Result<()> {
         "settings.json",
         r#"{"llmEnabled":"1","llmModel":"deepseek-chat"}"#,
     )?;
+
+    // --- History page (ui/history.rs) ---------------------------------------------------------------------------
+    // One second of silence for the newest failed record, so its retry is offered, and two records saved without
+    // paste for the 未粘贴 filter. Only once per fixture folder.
+    let mut store = Store::load(dir);
+    if !store.all.is_empty() && !store.all.iter().any(|r| r.audio.is_some()) {
+        if let Some(at) = store
+            .all
+            .iter()
+            .rev()
+            .find(|r| r.is_failure())
+            .map(|r| r.at)
+            && let Some(name) = store.save_audio(&vec![0u8; 32000], at)
+        {
+            store.update(at, |r| r.audio = Some(name));
+        }
+        let n = store.all.len();
+        for back in [2, 20] {
+            if let Some(at) = store.all[..n.saturating_sub(back) + 1]
+                .iter()
+                .rev()
+                .find(|r| !r.is_failure())
+                .map(|r| r.at)
+            {
+                store.update(at, |r| r.outcome = Some("saved".into()));
+            }
+        }
+    }
     Ok(())
 }

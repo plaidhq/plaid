@@ -3,6 +3,7 @@
 //! changes records goes to the controller as a `Msg`, which owns the store while the app runs.
 pub mod assets;
 mod general;
+mod history;
 mod key_field;
 pub mod mav;
 pub mod onboarding;
@@ -317,6 +318,13 @@ impl Settings {
         let m = self.model.clone();
         let v: AnyView = match page {
             Page::General => cx.new(|cx| general::General::new(m, window, cx)).into(),
+            Page::History => {
+                let s = cx.entity().downgrade();
+                let go = move |p: Page, _: &mut Window, cx: &mut App| {
+                    let _ = s.update(cx, |s, cx| s.show(p, cx));
+                };
+                cx.new(|cx| history::History::new(m, go, window, cx)).into()
+            }
             _ => cx.new(|_| Todo(page)).into(),
         };
         self.pages.push((page, v.clone()));
