@@ -5,6 +5,8 @@ pub mod assets;
 mod general;
 mod key_field;
 pub mod mav;
+mod overview;
+mod perf;
 #[cfg(all(feature = "snapshot", any(target_os = "macos", target_os = "linux")))]
 pub mod snapshot;
 
@@ -316,6 +318,8 @@ impl Settings {
         let m = self.model.clone();
         let v: AnyView = match page {
             Page::General => cx.new(|cx| general::General::new(m, window, cx)).into(),
+            Page::Overview => cx.new(|cx| overview::Overview::new(m, window, cx)).into(),
+            Page::Perf => cx.new(|cx| perf::Perf::new(m, window, cx)).into(),
             _ => cx.new(|_| Todo(page)).into(),
         };
         self.pages.push((page, v.clone()));

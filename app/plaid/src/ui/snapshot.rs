@@ -43,6 +43,8 @@ pub fn check(args: &[String]) -> Result<(), String> {
     };
     let mut ui = Ui::new(out)?;
     check_general(&mut ui)?;
+    super::overview::check(&mut ui)?;
+    super::perf::check(&mut ui)?;
     println!("ui-check: PASS");
     Ok(())
 }
@@ -427,5 +429,70 @@ fn fixture(dir: &Path) -> std::io::Result<()> {
         "settings.json",
         r#"{"llmEnabled":"1","llmModel":"deepseek-chat"}"#,
     )?;
+    // --- Perf page fixture: an events.log, plus LLM fallbacks, a saved-only result, a quiet mic and two local-engine
+    // records among recent plain (LLM off, unedited, not failed) records so every Perf section has something to show.
+    if !dir.join("events.log").exists() {
+        let mut store = Store::load(dir);
+        let n = store.all.len();
+        let picks: Vec<chrono::DateTime<Utc>> = store.all
+            [n.saturating_sub(150)..n.saturating_sub(20)]
+            .iter()
+            .filter(|r| r.llm == "off" && r.edited.is_none() && !r.is_failure())
+            .step_by(4)
+            .map(|r| r.at)
+            .collect();
+        for (k, at) in picks.into_iter().take(10).enumerate() {
+            store.update(at, |r| match k {
+                0 | 1 => {
+                    r.llm = "timeout".into();
+                    r.llm_ms = Some(2000);
+                    r.total_ms += 2000;
+                }
+                2 => r.llm = "skipped".into(),
+                3 => {
+                    r.llm = "error: HTTP 500".into();
+                    r.llm_ms = Some(640);
+                    r.total_ms += 640;
+                }
+                4 => r.outcome = Some("saved".into()),
+                5..=7 => {
+                    r.mic = Some("Shure MV7".into());
+                    r.speech_rms = Some(120);
+                }
+                _ => r.engine = Some("local".into()),
+            });
+        }
+        let now = chrono::Local::now();
+        let lines = [
+            (26, 0, "launch 0.11.0"),
+            (26, 10, "key down 63"),
+            (26, 11, "start"),
+            (26, 14, "key up 63"),
+            (26, 14, "stop 3.1s"),
+            (26, 15, "finished 312 ms"),
+            (26, 16, "pasted 18 chars into Slack"),
+            (3, 0, "key down 63"),
+            (3, 1, "start"),
+            (3, 4, "key up 63"),
+            (3, 4, "stop 2.4s"),
+            (3, 6, "asr failed: timeout"),
+            (2, 0, "key down 63"),
+            (2, 1, "start"),
+            (2, 3, "esc"),
+            (1, 0, "key down 63"),
+            (1, 1, "start"),
+            (1, 4, "stop 3.6s"),
+            (1, 5, "empty result"),
+            (0, 0, "llm error: HTTP 500"),
+        ];
+        let body: String = lines
+            .iter()
+            .map(|(h, s, msg)| {
+                let t = now - Duration::hours(*h) - Duration::minutes(10) + Duration::seconds(*s);
+                format!("{} {msg}\n", t.format("%Y-%m-%dT%H:%M:%S%.3f%:z"))
+            })
+            .collect();
+        std::fs::write(dir.join("events.log"), body)?;
+    }
     Ok(())
 }
