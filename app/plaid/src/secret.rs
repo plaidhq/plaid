@@ -1,5 +1,5 @@
-//! API keys in the OS credential store: on macOS one Keychain item under the bundle id holding all accounts
-//! (migrate.rs copies the Swift app's keys once), on Windows one Credential Manager entry per account.
+//! API keys in the OS credential store: on macOS one Keychain item under the bundle id holding all accounts, on
+//! Windows one Credential Manager entry per account.
 //! Accounts: "apiKey" is the Volcengine key, "llm:<host>" the LLM keys.
 
 /// An LLM endpoint's key: PLAID_LLM_KEY, else the credential stored for its host.

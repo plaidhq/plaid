@@ -2,7 +2,8 @@
 
 State of the GPUI app against the Swift Volc-only app it replaced (v0.10.0 build 31, bundle id dev.neo.plaid.volc).
 The Swift sources were removed after commit 71d69dc; read them there. Bundle ids are now com.neospaceindustries.plaid
-(release) and com.neospaceindustries.plaid.dev.
+(release) and com.neospaceindustries.plaid.dev. The one-time settings/Keychain import ran on 2026-11-18 and was
+removed afterwards (migrate.rs, commit fa9d596).
 
 ## Ported
 
@@ -19,7 +20,6 @@ The Swift sources were removed after commit 71d69dc; read them there. Bundle ids
 | Paste.swift | plaid/paste.rs, paste_win.rs, driver `verify_target` | The clipboard is restored on quit as well. |
 | Mic.swift `micDevice` | audio.rs `input_device`, 设置 page picker | Same Core Audio UID; falls back to the default input. |
 | Recovery.swift | controller `recover`, driver `recognize`, 历史 重试 | Also `plaid --recover [at]`; status goes to the HUD. |
-| UserDefaults, Keychain (dev.neo.plaid.volc) | migrate.rs | Release first launch, while settings.json is missing: defaults → settings.json, Keychain accounts copied (one system dialog per old item) into the single new item (secret.rs keeps all accounts in one JSON item, so a re-signed build costs one dialog). |
 | Settings.swift and its pages | plaid/ui/*.rs | Mac OS X 10.9 look drawn in GPUI (ui/mav.rs); see **Settings window** below. |
 | HUD | plaid/hud | Same states; restyled as a 10.9 HUD panel. |
 | Onboarding | ui/onboarding.rs | Opens at launch until a Volc key is saved and accessibility is granted. |
