@@ -276,8 +276,10 @@ pub fn rms(pcm: &[u8]) -> f64 {
         return 0.;
     }
     let sum: f64 = pcm
-        .chunks_exact(2)
-        .map(|b| i16::from_le_bytes([b[0], b[1]]) as f64)
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| i16::from_le_bytes(*b) as f64)
         .map(|s| s * s)
         .sum();
     (sum / n as f64).sqrt()
@@ -497,10 +499,10 @@ impl Controller {
                     }
                 }
                 Timer::LowInput => {
-                    if self.idle() {
-                        if let Some(n) = self.u.as_ref().map(Utterance::low_note) {
-                            p.hud(Hud::Flash(n));
-                        }
+                    if self.idle()
+                        && let Some(n) = self.u.as_ref().map(Utterance::low_note)
+                    {
+                        p.hud(Hud::Flash(n));
                     }
                 }
                 Timer::Learned => {

@@ -140,6 +140,19 @@ pub(super) fn offered() -> Vec<i32> {
         .collect()
 }
 
+/// Stores `holdKey`/`tapKey` (-1 clears) with its display name and rebinds the live hook.
+pub(super) fn set_shortcut(model: &Entity<Model>, key: &str, code: i32, cx: &mut App) {
+    model.update(cx, |m, cx| {
+        m.set(key, code, cx);
+        if code >= 0 {
+            m.set(&format!("{key}Name"), key_name(code), cx);
+        }
+    });
+    if let Some(l) = cx.try_global::<Live>() {
+        l.keys.rebind();
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Shortcut {
     Hold,
@@ -292,15 +305,7 @@ impl General {
     }
 
     fn set_shortcut(&mut self, s: Shortcut, code: i32, cx: &mut Context<Self>) {
-        self.model.update(cx, |m, cx| {
-            m.set(s.key(), code, cx);
-            if code >= 0 {
-                m.set(&format!("{}Name", s.key()), key_name(code), cx);
-            }
-        });
-        if let Some(l) = cx.try_global::<Live>() {
-            l.keys.rebind();
-        }
+        set_shortcut(&self.model, s.key(), code, cx);
     }
 
     fn record(&mut self, s: Shortcut, cx: &mut Context<Self>) {

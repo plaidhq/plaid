@@ -5,6 +5,7 @@ pub mod assets;
 mod general;
 mod key_field;
 pub mod mav;
+pub mod onboarding;
 #[cfg(all(feature = "snapshot", any(target_os = "macos", target_os = "linux")))]
 pub mod snapshot;
 
@@ -484,32 +485,37 @@ pub fn open(page: Page, cx: &mut App) {
                 }
             })
             .detach();
-            // Pick up new dictations and facts that change while the window is open.
-            cx.spawn(async move |cx| {
-                loop {
-                    cx.background_executor()
-                        .timer(std::time::Duration::from_secs(1))
-                        .await;
-                    let alive = cx.update(|cx| {
-                        poll.update(cx, |m, cx| {
-                            m.refresh(cx);
-                            let t = trusted();
-                            if t != m.facts.trusted {
-                                m.facts.trusted = t;
-                                cx.notify();
-                            }
-                        })
-                        .is_ok()
-                    });
-                    if !alive {
-                        break;
-                    }
-                }
-            })
-            .detach();
+            poll_facts(poll, cx);
         }
         Err(e) => crate::trace::log(&format!("settings window: {e}")),
     }
+}
+
+/// Picks up new dictations and facts that change while a window is open, until the model is dropped.
+fn poll_facts(model: WeakEntity<Model>, cx: &mut App) {
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(1))
+                .await;
+            let alive = cx.update(|cx| {
+                model
+                    .update(cx, |m, cx| {
+                        m.refresh(cx);
+                        let t = trusted();
+                        if t != m.facts.trusted {
+                            m.facts.trusted = t;
+                            cx.notify();
+                        }
+                    })
+                    .is_ok()
+            });
+            if !alive {
+                break;
+            }
+        }
+    })
+    .detach();
 }
 
 /// Regular app (Dock icon, ⌘-tab) while the window is open; accessory again after it closes.

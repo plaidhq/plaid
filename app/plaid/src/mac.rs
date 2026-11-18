@@ -345,3 +345,22 @@ mod tests {
         }
     }
 }
+
+#[link(name = "AVFoundation", kind = "framework")]
+unsafe extern "C" {
+    static AVMediaTypeAudio: &'static objc2_foundation::NSString;
+}
+
+/// Microphone permission without prompting: Some(true) allowed, Some(false) denied or restricted, None not asked
+/// yet (the first recording asks).
+pub fn mic_allowed() -> Option<bool> {
+    let cls = objc2::runtime::AnyClass::get(c"AVCaptureDevice")?;
+    // SAFETY: class method taking an AVMediaType string and returning AVAuthorizationStatus (NSInteger).
+    let status: isize =
+        unsafe { objc2::msg_send![cls, authorizationStatusForMediaType: AVMediaTypeAudio] };
+    match status {
+        0 => None,
+        3 => Some(true),
+        _ => Some(false),
+    }
+}

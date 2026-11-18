@@ -119,10 +119,10 @@ pub fn parse<'a>(text: &str, actions: &'a [Action], wake: &str) -> Parsed<'a> {
     for a in actions {
         for t in a.triggers() {
             let n = t.graphemes(true).count();
-            if n > best.map_or(0, |b| b.2) {
-                if let Some(r) = strip(t, rest) {
-                    best = Some((a, r, n));
-                }
+            if n > best.map_or(0, |b| b.2)
+                && let Some(r) = strip(t, rest)
+            {
+                best = Some((a, r, n));
             }
         }
     }

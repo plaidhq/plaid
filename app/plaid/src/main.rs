@@ -104,6 +104,9 @@ fn run(hud: WindowHandle<hud::Hud>, cx: &mut App) {
     if !config::actions().0.is_empty() {
         crate::run::prewarm();
     }
+    if ui::onboarding::needed() {
+        ui::onboarding::open(cx);
+    }
     cx.spawn(async move |cx| {
         while let Ok(m) = rx.recv().await {
             ctl.handle(m, &mut driver);
@@ -115,13 +118,11 @@ fn run(hud: WindowHandle<hud::Hud>, cx: &mut App) {
     .detach();
 }
 
-/// Starts the key hook. macOS: once Accessibility is granted (asks once at launch, then polls without prompting).
+/// Starts the key hook. macOS: once Accessibility is granted (polls without prompting; the first-run window asks).
 fn install_hotkey(tx: async_channel::Sender<Msg>, state: std::sync::Arc<hotkey::State>) {
-    #[cfg(target_os = "macos")]
-    let trusted = mac::request_trust();
     std::thread::spawn(move || {
         #[cfg(target_os = "macos")]
-        if !trusted {
+        if !mac::trusted() {
             trace::log("waiting for Accessibility");
             while !mac::trusted() {
                 std::thread::sleep(std::time::Duration::from_secs(2));

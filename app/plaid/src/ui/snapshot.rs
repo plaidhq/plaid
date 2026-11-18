@@ -13,8 +13,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let Some(out) = args.first() else {
         return Err("usage: plaid --snapshot <outdir> [page…]".into());
     };
-    if args.get(1).map(String::as_str) == Some("hud") {
-        return hud(out);
+    match args.get(1).map(String::as_str) {
+        Some("hud") => return hud(out),
+        Some("onboarding") => return onboarding(out),
+        _ => {}
     }
     let pages: Vec<Page> = if args.len() > 1 {
         args[1..]
@@ -112,23 +114,47 @@ fn hud(out: &str) -> Result<(), String> {
     ];
     let mut ui = Ui::new(out)?;
     for (name, msgs) in states {
-        let (handle, _) = ui
-            .cx
-            .update(|cx| {
-                let hud = cx.new(|_| {
-                    let mut h = crate::hud::Hud::new();
-                    for m in msgs {
-                        h.apply(m);
-                    }
-                    h
-                });
-                let mut opts = crate::hud::options(point(px(0.), px(0.)));
-                opts.window_background = WindowBackgroundAppearance::Opaque;
-                gpui_kit::open_window(opts, cx, |_, cx| cx.new(|_| Backdrop(hud)))
-            })
-            .map_err(|e| e.to_string())?;
-        ui.window = Some(handle.into());
-        ui.frame()?;
+        let mut opts = crate::hud::options(point(px(0.), px(0.)));
+        opts.window_background = WindowBackgroundAppearance::Opaque;
+        ui.open_with(opts, |_, cx| {
+            let hud = cx.new(|_| {
+                let mut h = crate::hud::Hud::new();
+                for m in msgs {
+                    h.apply(m);
+                }
+                h
+            });
+            cx.new(|_| Backdrop(hud))
+        })?;
+        ui.shot(name)?;
+        ui.close()?;
+    }
+    Ok(())
+}
+
+/// `plaid --snapshot <outdir> onboarding`: each first-run step; the key and permission steps also before granting.
+fn onboarding(out: &str) -> Result<(), String> {
+    use super::onboarding::{Onboarding, window_options};
+    let mut ui = Ui::new(out)?;
+    let missing = Facts {
+        volc_key: false,
+        trusted: false,
+        ..facts()
+    };
+    let shots = [
+        ("onboarding-0", 0, facts()),
+        ("onboarding-1-missing", 1, missing.clone()),
+        ("onboarding-1", 1, facts()),
+        ("onboarding-2-missing", 2, missing),
+        ("onboarding-2", 2, facts()),
+        ("onboarding-3", 3, facts()),
+        ("onboarding-4", 4, facts()),
+    ];
+    for (name, step, f) in shots {
+        ui.open_with(window_options(None, false), |window, cx| {
+            let model = cx.new(|_| Model::new(f));
+            cx.new(|cx| Onboarding::new(step, model, window, cx))
+        })?;
         ui.shot(name)?;
         ui.close()?;
     }
@@ -253,14 +279,20 @@ impl Ui {
     }
 
     pub(super) fn open(&mut self, page: Page, facts: Facts) -> Result<(), String> {
+        self.open_with(super::window_options(None, false), |window, cx| {
+            let model = cx.new(|_| Model::new(facts));
+            cx.new(|cx| Settings::new(page, model, window, cx))
+        })
+    }
+
+    pub(super) fn open_with<V: Render>(
+        &mut self,
+        opts: WindowOptions,
+        build: impl FnOnce(&mut Window, &mut App) -> Entity<V>,
+    ) -> Result<(), String> {
         let (handle, _) = self
             .cx
-            .update(|cx| {
-                let model = cx.new(|_| Model::new(facts));
-                gpui_kit::open_window(super::window_options(None, false), cx, |window, cx| {
-                    cx.new(|cx| Settings::new(page, model, window, cx))
-                })
-            })
+            .update(|cx| gpui_kit::open_window(opts, cx, build))
             .map_err(|e| e.to_string())?;
         self.window = Some(handle.into());
         self.frame()

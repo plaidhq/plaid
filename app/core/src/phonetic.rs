@@ -141,7 +141,7 @@ pub fn apply(text: &str, entries: &[Entry], threshold: f64) -> String {
             taken.push(f);
         }
     }
-    taken.sort_by(|a, b| b.lo.cmp(&a.lo));
+    taken.sort_by_key(|a| std::cmp::Reverse(a.lo));
     let mut out = text.to_owned();
     for t in taken {
         out.replace_range(toks[t.lo].range.start..toks[t.hi].range.end, t.target);
