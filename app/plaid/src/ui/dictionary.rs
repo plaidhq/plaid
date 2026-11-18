@@ -778,8 +778,12 @@ impl Dictionary {
                                 .gap(px(6.))
                                 .child(
                                     div()
-                                        .flex_none()
-                                        .max_w(relative(0.75))
+                                        .min_w_0()
+                                        // Leave room for the block note when there is one.
+                                        .map(|d| match shape.block() {
+                                            Some(_) => d.flex_none().max_w(relative(0.75)),
+                                            None => d.flex_1(),
+                                        })
                                         .truncate()
                                         .when(raw, |d| d.font_family("Menlo").text_size(px(11.)))
                                         .child(title),
@@ -1803,10 +1807,35 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &Some(hotwords_file()),
     )?;
 
-    // 打开优化 switches pages.
+    // 打开优化 switches pages. Settings caches page views, so the page is not released: the pending
+    // delete is saved by the 500 ms debounce while another page is shown.
     ui.open(Page::Dictionary, facts())?;
+    // The offscreen app runs on a test dispatcher with a fake clock; grab its executor while the
+    // page still renders (pokes run in this page's render).
+    let executor = Rc::new(std::cell::RefCell::new(None));
+    let slot = executor.clone();
+    poke(ui, move |_, _, cx| {
+        *slot.borrow_mut() = Some(cx.background_executor().clone())
+    })?;
+    let zed = hotwords_file()
+        .split('\n')
+        .position(|l| l == "Zed")
+        .ok_or("Zed line")?;
+    ui.click(&format!("entry-del-{zed}"))?;
+    expect("delete pending before page switch", has_line("Zed"), &None)?;
     ui.click("open-refine")?;
     expect("打开优化 leaves the page", !ui.has("dict-add"), &None)?;
+    executor
+        .borrow()
+        .as_ref()
+        .ok_or("executor")?
+        .advance_clock(Duration::from_millis(600));
+    ui.frame()?;
+    expect(
+        "debounce saves the draft off-page",
+        !has_line("Zed"),
+        &Some(hotwords_file()),
+    )?;
     ui.close()?;
 
     // Empty dictionary.
