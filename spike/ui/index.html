@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; -webkit-user-select: none; cursor: default; }
+  body { display: flex; align-items: flex-end; justify-content: center; height: 100vh; font: 14px -apple-system, "Segoe UI", sans-serif; }
+  #pill { max-width: calc(100vw - 16px); margin-bottom: 4px; padding: 8px 14px; border-radius: 18px; background: rgba(28, 28, 30, .88);
+          color: #fff; display: flex; gap: 8px; align-items: center; box-sizing: border-box; }
+  #dot { width: 8px; height: 8px; border-radius: 50%; background: #ff453a; flex: none; }
+  #pill[data-state="finishing"] #dot { background: #ffd60a; }
+  #pill[data-state="error"] #dot { background: #8e8e93; }
+  #pill[data-state="info"] #dot { background: #30d158; }
+  #text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+  #text span { direction: ltr; unicode-bidi: plaintext; }
+</style>
+<div id="pill" data-state="listening"><div id="dot"></div><div id="text"><span>正在听…</span></div></div>
+<script>
+  const pill = document.getElementById("pill"), span = document.querySelector("#text span");
+  const ev = window.__TAURI__.event;
+  ev.listen("hud", ({ payload }) => {
+    pill.dataset.state = payload.state;
+    span.textContent = payload.text || (payload.state === "listening" ? "正在听…" : "");
+    // Echo what was rendered so the spike can verify the pipeline without a screenshot.
+    requestAnimationFrame(() => ev.emit("hud-rendered", { state: pill.dataset.state, text: span.textContent, width: pill.offsetWidth }));
+  }).then(() => ev.emit("hud-ready"));
+</script>

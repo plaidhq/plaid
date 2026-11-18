@@ -1,0 +1,118 @@
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"用 cloud code 写"},"out":"用 Claude Code 写"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"问一下克劳德吧"},"out":"问一下Claude吧"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"连接要 keep a life"},"out":"连接要 keep-alive"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"so the web socket reconnects"},"out":"so the WebSocket reconnects"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"push 到 github 上"},"out":"push 到 GitHub 上"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"傅平说的"},"out":"傅平说的"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"付平来了"},"out":"傅平来了"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"扶贫办工作人员"},"out":"扶贫办工作人员"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"the cloud weather is bad"},"out":"the cloud weather is bad"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"改一下 prompts"},"out":"改一下 prompts"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"这些 tokens 很贵"},"out":"这些 tokens 很贵"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"用 Claude Code 写"},"out":"用 Claude Code 写"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"我在 Claude 里"},"out":"我在 Claude 里"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"打开 ghosty"},"out":"打开 Ghostty"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"短到短的测试"},"out":"端到端的测试"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"今天天气很好，我们去公园"},"out":"今天天气很好，我们去公园"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"提个 pr"},"out":"提个 pr"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":""},"out":""}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"在 work tree 里"},"out":"在 worktree 里"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"E to E 有覆盖"},"out":"e2e 有覆盖"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"跑一下 ci"},"out":"跑一下 CI"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"在你那种出示"},"out":"在你那种出示"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"那里留言。"},"out":"那里留言。"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"中新网房产"},"out":"中新网房产"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"不如搞 code 的"},"out":"不如Claude Code 的"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"别的Agent去"},"out":"别的Agent去"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"a Plaid app"},"out":"a Plaid app"}
+{"fn":"phonetic","in":{"lines":["Claude Code | cloud code | 高 Code","agent","Claude | 克劳德 | cloud ~~~ weather | 天气","keep-alive","WebSocket","GitHub","傅平 ~~~ 扶贫 | 脱贫","Plaid","prompt","token","端到端","李娜","刘洋","王芳","Ghostty","PR","CI | ci","worktree | work tree","e2e | e to e"],"text":"绿色的女孩说了行"},"out":"绿色的女孩说了行"}
+{"fn":"snapshot.apply","in":{"lines":["Neo | Nio","wrong -> right","-> ignored","# comment is filtered by Hotwords.lines, not Snapshot","Plaid ~~~ 格子"],"text":"I am nio","threshold":0.84999999999999998},"out":"I am Neo"}
+{"fn":"snapshot.apply","in":{"lines":["Neo | Nio","wrong -> right","-> ignored","# comment is filtered by Hotwords.lines, not Snapshot","Plaid ~~~ 格子"],"text":"this is WRONG and wrong","threshold":0.84999999999999998},"out":"this is right and right"}
+{"fn":"snapshot.apply","in":{"lines":["Neo | Nio","wrong -> right","-> ignored","# comment is filtered by Hotwords.lines, not Snapshot","Plaid ~~~ 格子"],"text":"Plaid 格子衫","threshold":0.84999999999999998},"out":"Plaid 格子衫"}
+{"fn":"snapshot.apply","in":{"lines":["Neo | Nio","wrong -> right","-> ignored","# comment is filtered by Hotwords.lines, not Snapshot","Plaid ~~~ 格子"],"text":"plaid","threshold":0.84999999999999998},"out":"Plaid"}
+{"fn":"snapshot.apply","in":{"lines":["Neo | Nio","wrong -> right","-> ignored","# comment is filtered by Hotwords.lines, not Snapshot","Plaid ~~~ 格子"],"text":"","threshold":0.84999999999999998},"out":""}
+{"fn":"snapshot.apply","in":{"lines":["Neo | Nio","wrong -> right","-> ignored","# comment is filtered by Hotwords.lines, not Snapshot","Plaid ~~~ 格子"],"text":"嗨 Neo","threshold":0.84999999999999998},"out":"嗨 Neo"}
+{"fn":"snapshot.terms","in":{"lines":["Neo | Nio","wrong -> right","-> ignored","# comment is filtered by Hotwords.lines, not Snapshot","Plaid ~~~ 格子"]},"out":["Neo","right","ignored","# comment is filtered by Hotwords.lines, not Snapshot","Plaid"]}
+{"fn":"snapshot.context","in":{"dialog":[],"lines":["Neo | Nio","wrong -> right","-> ignored","# comment is filtered by Hotwords.lines, not Snapshot","Plaid ~~~ 格子"]},"out":"{\"hotwords\":[{\"word\":\"Neo\"},{\"word\":\"# comment is filtered by Hotwords.lines, not Snapshot\"},{\"word\":\"Plaid\"}]}"}
+{"fn":"snapshot.context","in":{"dialog":[],"lines":[]},"out":null}
+{"fn":"snapshot.context","in":{"dialog":["你好"],"lines":["Neo | Nio","wrong -> right","-> ignored","# comment is filtered by Hotwords.lines, not Snapshot","Plaid ~~~ 格子"]},"out":"{\"hotwords\":[{\"word\":\"Neo\"},{\"word\":\"# comment is filtered by Hotwords.lines, not Snapshot\"},{\"word\":\"Plaid\"}],\"context_type\":\"dialog_ctx\",\"context_data\":[{\"text\":\"你好\"}]}"}
+{"fn":"snapshot.context","in":{"dialog":["你好"],"lines":[]},"out":"{\"context_type\":\"dialog_ctx\",\"context_data\":[{\"text\":\"你好\"}]}"}
+{"fn":"snapshot.context","in":{"dialog":["a\"b","c\\d"],"lines":["Neo | Nio","wrong -> right","-> ignored","# comment is filtered by Hotwords.lines, not Snapshot","Plaid ~~~ 格子"]},"out":"{\"hotwords\":[{\"word\":\"Neo\"},{\"word\":\"# comment is filtered by Hotwords.lines, not Snapshot\"},{\"word\":\"Plaid\"}],\"context_type\":\"dialog_ctx\",\"context_data\":[{\"text\":\"a\\\"b\"},{\"text\":\"c\\\\d\"}]}"}
+{"fn":"snapshot.context","in":{"dialog":["a\"b","c\\d"],"lines":[]},"out":"{\"context_type\":\"dialog_ctx\",\"context_data\":[{\"text\":\"a\\\"b\"},{\"text\":\"c\\\\d\"}]}"}
+{"fn":"tidy","in":"另外一方面是 有一些，其实 如果 e to e 测试 OK。 好","out":"另外一方面是有一些，其实如果 e to e 测试 OK。好"}
+{"fn":"tidy","in":"中文 English 中文","out":"中文 English 中文"}
+{"fn":"tidy","in":"你好 ，世界","out":"你好，世界"}
+{"fn":"tidy","in":"ａ　ｂ","out":"ａ　ｂ"}
+{"fn":"tidy","in":"全角 （括号） 测试","out":"全角（括号）测试"}
+{"fn":"chars","in":"你好world 123 abc","out":5}
+{"fn":"chars","in":"Claude Code 很好用","out":5}
+{"fn":"chars","in":"𠀀𪚥 emoji 😀 ok","out":4}
+{"fn":"chars","in":"x86_64-apple","out":3}
+{"fn":"chars","in":"","out":0}
+{"fn":"chars","in":"ＡＢＣ１２３","out":1}
+{"fn":"chars","in":"é è ü","out":3}
+{"fn":"replacements","in":["连接要 keep a life 吗","连接要 Keeplife 吗"],"out":[["keep a life","Keeplife"]]}
+{"fn":"overlap","in":["连接要 keep a life 吗","连接要 Keeplife 吗"],"out":0.76470588235294112}
+{"fn":"insertedSpan","in":["连接要 keep a life 吗","连接要 Keeplife 吗"],"out":[4,8,"Keep"]}
+{"fn":"replacements","in":["我是工成","我是工程师"],"out":[["工成","工程师"]]}
+{"fn":"overlap","in":["我是工成","我是工程师"],"out":0.75}
+{"fn":"insertedSpan","in":["我是工成","我是工程师"],"out":[3,5,"程师"]}
+{"fn":"replacements","in":["王思邈来了","王思淼来了"],"out":[["思邈","思淼"]]}
+{"fn":"overlap","in":["王思邈来了","王思淼来了"],"out":0.80000000000000004}
+{"fn":"insertedSpan","in":["王思邈来了","王思淼来了"],"out":[2,3,"淼"]}
+{"fn":"replacements","in":["hello world","hello world!"],"out":[]}
+{"fn":"overlap","in":["hello world","hello world!"],"out":1}
+{"fn":"insertedSpan","in":["hello world","hello world!"],"out":[11,12,"!"]}
+{"fn":"replacements","in":["今天天气好","今天天气好，我们出去玩吧"],"out":[]}
+{"fn":"overlap","in":["今天天气好","今天天气好，我们出去玩吧"],"out":1}
+{"fn":"insertedSpan","in":["今天天气好","今天天气好，我们出去玩吧"],"out":[5,12,"，我们出去玩吧"]}
+{"fn":"replacements","in":["嗯那个我们走","我们走"],"out":[]}
+{"fn":"overlap","in":["嗯那个我们走","我们走"],"out":0.5}
+{"fn":"insertedSpan","in":["嗯那个我们走","我们走"],"out":null}
+{"fn":"replacements","in":["用 cloud code 写代码","用 Claude Code 写代码"],"out":[["cloud","Claude"],["code","Code"]]}
+{"fn":"overlap","in":["用 cloud code 写代码","用 Claude Code 写代码"],"out":0.8125}
+{"fn":"insertedSpan","in":["用 cloud code 写代码","用 Claude Code 写代码"],"out":[2,10,"Claude C"]}
+{"fn":"replacements","in":["a","b"],"out":[["a","b"]]}
+{"fn":"overlap","in":["a","b"],"out":0}
+{"fn":"insertedSpan","in":["a","b"],"out":[0,1,"b"]}
+{"fn":"replacements","in":["","x"],"out":[]}
+{"fn":"overlap","in":["","x"],"out":0}
+{"fn":"insertedSpan","in":["","x"],"out":[0,1,"x"]}
+{"fn":"replacements","in":["推送到 get hub","推送到 GitHub"],"out":[["get hub","GitHub"]]}
+{"fn":"overlap","in":["推送到 get hub","推送到 GitHub"],"out":0.63636363636363635}
+{"fn":"insertedSpan","in":["推送到 get hub","推送到 GitHub"],"out":[4,8,"GitH"]}
+{"fn":"replacements","in":["这个 PR 要合并","这个 MR 要合并"],"out":[["PR","MR"]]}
+{"fn":"overlap","in":["这个 PR 要合并","这个 MR 要合并"],"out":0.88888888888888884}
+{"fn":"insertedSpan","in":["这个 PR 要合并","这个 MR 要合并"],"out":[3,4,"M"]}
+{"fn":"replacements","in":["克劳德 Code 很好","Claude Code 很好"],"out":[["克劳德","Claude"]]}
+{"fn":"overlap","in":["克劳德 Code 很好","Claude Code 很好"],"out":0.72727272727272729}
+{"fn":"insertedSpan","in":["克劳德 Code 很好","Claude Code 很好"],"out":[0,6,"Claude"]}
+{"fn":"editedSpan","in":["ab你好cd",2,4,"ab您好呀cd"],"out":"您好呀"}
+{"fn":"editedSpan","in":["ab你好cd",2,4,"ab  cd"],"out":null}
+{"fn":"editedSpan","in":["ab你好cd",2,4,"xb你好cd"],"out":null}
+{"fn":"editedSpan","in":["😀x",2,3,"😀yz"],"out":"yz"}
+{"fn":"rules","in":{"after":"用Claude Code 写","before":"用克劳德 Code 写","terms":["Claude Code","Claude","GitHub","Plaid"]},"out":[["克劳德 Code","Claude Code"],["克劳德","Claude"]]}
+{"fn":"rules","in":{"after":"推送到GitHub上","before":"推送到吉特哈布上","terms":["Claude Code","Claude","GitHub","Plaid"]},"out":[["吉特哈布","GitHub"]]}
+{"fn":"rules","in":{"after":"打开 Claude","before":"打开 cloud","terms":["Claude Code","Claude","GitHub","Plaid"]},"out":[]}
+{"fn":"rules","in":{"after":"Plaid很好","before":"普莱德很好","terms":["Claude Code","Claude","GitHub","Plaid"]},"out":[["普莱德","Plaid"]]}
+{"fn":"rules","in":{"after":"Plaid","before":"普莱德","terms":["Claude Code","Claude","GitHub","Plaid"]},"out":[["普莱德","Plaid"]]}
+{"fn":"actions.parse","in":{"actions":[{"aliases":["搜一下"],"name":"搜索","run":"x"},{"aliases":[],"name":"搜索文件","run":"x"},{"aliases":[],"name":"Git Push","run":"x"},{"aliases":[],"name":"空","run":"  "}],"text":"Plaid 搜索 天气","wake":"Plaid"},"out":["run","搜索","天气"]}
+{"fn":"actions.parse","in":{"actions":[{"aliases":["搜一下"],"name":"搜索","run":"x"},{"aliases":[],"name":"搜索文件","run":"x"},{"aliases":[],"name":"Git Push","run":"x"},{"aliases":[],"name":"空","run":"  "}],"text":"嗯，plaid。搜索文件 报告。","wake":"Plaid"},"out":["run","搜索文件","报告"]}
+{"fn":"actions.parse","in":{"actions":[{"aliases":["搜一下"],"name":"搜索","run":"x"},{"aliases":[],"name":"搜索文件","run":"x"},{"aliases":[],"name":"Git Push","run":"x"},{"aliases":[],"name":"空","run":"  "}],"text":"Plaids 搜索","wake":"Plaid"},"out":["dictation"]}
+{"fn":"actions.parse","in":{"actions":[{"aliases":["搜一下"],"name":"搜索","run":"x"},{"aliases":[],"name":"搜索文件","run":"x"},{"aliases":[],"name":"Git Push","run":"x"},{"aliases":[],"name":"空","run":"  "}],"text":"Plaid 打开","wake":"Plaid"},"out":["unknown","打开"]}
+{"fn":"actions.parse","in":{"actions":[{"aliases":["搜一下"],"name":"搜索","run":"x"},{"aliases":[],"name":"搜索文件","run":"x"},{"aliases":[],"name":"Git Push","run":"x"},{"aliases":[],"name":"空","run":"  "}],"text":"你好","wake":"Plaid"},"out":["dictation"]}
+{"fn":"actions.parse","in":{"actions":[{"aliases":["搜一下"],"name":"搜索","run":"x"},{"aliases":[],"name":"搜索文件","run":"x"},{"aliases":[],"name":"Git Push","run":"x"},{"aliases":[],"name":"空","run":"  "}],"text":"搜一下 Rust","wake":""},"out":["run","搜索","Rust"]}
+{"fn":"actions.parse","in":{"actions":[{"aliases":["搜一下"],"name":"搜索","run":"x"},{"aliases":[],"name":"搜索文件","run":"x"},{"aliases":[],"name":"Git Push","run":"x"},{"aliases":[],"name":"空","run":"  "}],"text":"git push","wake":""},"out":["run","Git Push",""]}
+{"fn":"actions.parse","in":{"actions":[{"aliases":["搜一下"],"name":"搜索","run":"x"},{"aliases":[],"name":"搜索文件","run":"x"},{"aliases":[],"name":"Git Push","run":"x"},{"aliases":[],"name":"空","run":"  "}],"text":"ＰＬＡＩＤ　Git Push -f","wake":"Plaid"},"out":["run","Git Push","-f"]}
+{"fn":"actions.parse","in":{"actions":[{"aliases":["搜一下"],"name":"搜索","run":"x"},{"aliases":[],"name":"搜索文件","run":"x"},{"aliases":[],"name":"Git Push","run":"x"},{"aliases":[],"name":"空","run":"  "}],"text":"Plaid","wake":"Plaid"},"out":["unknown",""]}
+{"fn":"actions.parse","in":{"actions":[{"aliases":["搜一下"],"name":"搜索","run":"x"},{"aliases":[],"name":"搜索文件","run":"x"},{"aliases":[],"name":"Git Push","run":"x"},{"aliases":[],"name":"空","run":"  "}],"text":"嘿 Plaid 搜索","wake":"嘿 Plaid"},"out":["run","搜索",""]}
+{"fn":"actions.parse","in":{"actions":[{"aliases":["搜一下"],"name":"搜索","run":"x"},{"aliases":[],"name":"搜索文件","run":"x"},{"aliases":[],"name":"Git Push","run":"x"},{"aliases":[],"name":"空","run":"  "}],"text":"嘿，Plaid。搜索 x","wake":"嘿 Plaid"},"out":["run","搜索","x"]}
+{"fn":"volc.frame","in":{"json":true,"last":false,"payload":"7b7d","type":1},"out":"11101000000000027b7d"}
+{"fn":"volc.frame","in":{"json":false,"last":true,"payload":"010203","type":2},"out":"1122000000000003010203"}
+{"fn":"volc.parse","in":"11931000000000070000001c7b22726573756c74223a7b2274657874223a22e4bda0e5a5bd227d7d","out":{"error":null,"last":true,"text":"你好"}}
+{"fn":"volc.parse","in":"11f0100002aea54100000003626164","out":{"error":"45000001 bad","last":true,"text":null}}
+{"fn":"volc.parse","in":"1190100000000000","out":{"error":null,"last":false,"text":null}}
+{"fn":"volc.parse","in":"1192100000000000","out":{"error":null,"last":true,"text":null}}
+{"fn":"volc.parse","in":"11901000000000021f8b","out":{"error":"unexpected gzip payload","last":true,"text":null}}
+{"fn":"volc.parse","in":"1120","out":null}
+{"fn":"volc.parse","in":"119010000000000901","out":null}
