@@ -300,7 +300,7 @@ impl Ui {
             .cx
             .update(|cx| gpui_kit::open_window(opts, cx, build))
             .map_err(|e| e.to_string())?;
-        self.window = Some(handle.into());
+        self.window = Some(handle);
         self.frame()
     }
 
@@ -587,10 +587,7 @@ pub(super) fn fixture(dir: &Path) -> std::io::Result<()> {
         }
         Ok(())
     };
-    write(
-        "hotwords.txt",
-        "Plaid\nKubernetes\nGPUI\n火山引擎\n",
-    )?;
+    write("hotwords.txt", "Plaid\nKubernetes\nGPUI\n火山引擎\n")?;
     write(
         "actions.json",
         r#"[{"name":"打开终端","phrases":["打开终端"],"run":"open -a Terminal"},{"name":"翻译","phrases":["翻译"],"run":"pbpaste | trans","input":"selection"}]"#,

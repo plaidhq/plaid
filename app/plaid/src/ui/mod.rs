@@ -45,6 +45,7 @@ pub enum Page {
 }
 
 impl Page {
+    #[cfg(all(feature = "snapshot", any(target_os = "macos", target_os = "linux")))]
     pub const ALL: [Page; 7] = [
         Page::Overview,
         Page::History,
@@ -283,6 +284,8 @@ pub struct Settings {
     page: Page,
     model: Entity<Model>,
     pages: Vec<(Page, AnyView)>,
+    /// 词典 suggestions waiting for a decision (sidebar badge); recounted when the model or hotwords.txt changes.
+    pending: usize,
 }
 
 impl Settings {
@@ -292,7 +295,8 @@ impl Settings {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Settings {
-        cx.observe(&model, |_, _, cx| cx.notify()).detach();
+        cx.observe(&model, |this, _, cx| this.count_pending(cx))
+            .detach();
         cx.observe_window_activation(window, |_, window, cx| {
             // Shortcut recording only while the window is frontmost: otherwise the hook would swallow and bind the
             // next key typed in another app. Closing the recorder's channel ends the page's recording state.
@@ -304,11 +308,18 @@ impl Settings {
             cx.notify();
         })
         .detach();
+        let pending = dictionary::pending(model.read(cx));
         Settings {
             page,
             model,
             pages: vec![],
+            pending,
         }
+    }
+
+    fn count_pending(&mut self, cx: &mut Context<Self>) {
+        self.pending = dictionary::pending(self.model.read(cx));
+        cx.notify();
     }
 
     pub fn show(&mut self, page: Page, cx: &mut Context<Self>) {
@@ -339,18 +350,19 @@ impl Settings {
                 cx.new(|cx| dictionary::Dictionary::new(m, nav, window, cx))
                     .into()
             }
-            _ => cx.new(|_| Todo(page)).into(),
         };
         self.pages.push((page, v.clone()));
         v
     }
 
     fn sidebar(&self, cx: &mut Context<Self>) -> Div {
+        let pending = self.pending;
         let group = |label: &'static str, pages: &[Page], cx: &mut Context<Self>| {
             div()
                 .child(source_header(label))
                 .children(pages.iter().map(|&p| {
-                    source_row(p.slug(), p.icon(), p.title(), p == self.page)
+                    let count = if p == Page::Dictionary { pending } else { 0 };
+                    source_row(p.slug(), p.icon(), p.title(), p == self.page, count)
                         .on_click(cx.listener(move |this, _, _, cx| this.show(p, cx)))
                 }))
         };
@@ -414,17 +426,6 @@ impl Render for Settings {
                     .child(self.sidebar(cx))
                     .child(div().flex_1().min_w_0().h_full().child(page)),
             )
-    }
-}
-
-/// Placeholder for pages not built yet.
-struct Todo(Page);
-
-impl Render for Todo {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .p(px(22.))
-            .child(hint(format!("{}：尚未完成", self.0.title())))
     }
 }
 

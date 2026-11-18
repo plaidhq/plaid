@@ -179,10 +179,10 @@ impl Drop for Capture {
 
 fn feed(sink: &Shared, frames: impl Iterator<Item = f32>) {
     // try_lock: never block the audio thread; contention only happens at the moment Capture drops.
-    if let Ok(mut g) = sink.try_lock() {
-        if let Some(s) = g.as_mut() {
-            s.feed(frames);
-        }
+    if let Ok(mut g) = sink.try_lock()
+        && let Some(s) = g.as_mut()
+    {
+        s.feed(frames);
     }
 }
 

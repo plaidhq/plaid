@@ -79,9 +79,9 @@ fn pending_fixes(store: &Store, own: &str, autos: &[(String, String, usize)]) ->
 }
 
 /// Number of pending suggestions, for the sidebar badge.
-#[allow(dead_code)]
 pub(super) fn pending(model: &Model) -> usize {
-    pending_fixes(&model.store, &read(path()), &[]).len()
+    let autos = model.store.auto_rules(&config::terms(false), &dismissed());
+    pending_fixes(&model.store, &read(path()), &autos).len()
 }
 
 /// What one dictionary line does, as its row shows it.
@@ -360,7 +360,7 @@ impl Dictionary {
     // --- Draft -------------------------------------------------------------------------------------------------
 
     /// Writes the draft now; regenerates the learned rules against it.
-    fn flush(&mut self, cx: &App) {
+    fn flush(&mut self, cx: &mut App) {
         self.generation += 1;
         self.derived = None;
         let body = self.text.clone();
@@ -373,6 +373,7 @@ impl Dictionary {
                     .read(cx)
                     .store
                     .write_auto_rules(&config::terms(false), &dismissed());
+                let _ = self.nav.update(cx, |s, cx| s.count_pending(cx));
             }
             Err(e) => self.error = Some(e.to_string()),
         }

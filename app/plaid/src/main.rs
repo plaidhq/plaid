@@ -116,7 +116,7 @@ fn run(hud: WindowHandle<hud::Hud>, cx: &mut App) {
             ctl.handle(m, &mut driver);
             state.set(ctl.keys());
             let changes = std::mem::take(&mut driver.hud);
-            let _ = cx.update(|cx| changes.into_iter().for_each(|h| hud::apply(&hud, h, cx)));
+            cx.update(|cx| changes.into_iter().for_each(|h| hud::apply(&hud, h, cx)));
         }
     })
     .detach();

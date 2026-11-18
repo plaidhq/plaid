@@ -284,6 +284,7 @@ pub fn source_row(
     glyph: &'static str,
     label: impl Into<SharedString>,
     selected: bool,
+    count: usize,
 ) -> Stateful<Div> {
     let row = hit(id)
         .h(px(22.))
@@ -294,19 +295,40 @@ pub fn source_row(
         .pr(px(10.))
         .border_t_1()
         .border_color(transparent_black());
-    if selected {
+    // NSOutlineView count badge: grey pill, inverted on the selected row.
+    let (pill, digits) = if selected {
+        (0xffffff, 0x3a78d0)
+    } else {
+        (0x8d9cb0, 0xffffff)
+    };
+    let badge = (count > 0).then(|| {
+        div()
+            .ml_auto()
+            .h(px(14.))
+            .min_w(px(20.))
+            .px(px(5.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .bg(hex(pill))
+            .text_color(hex(digits))
+            .text_size(px(11.))
+            .font_weight(bold())
+            .child(count.to_string())
+    });
+    let row = if selected {
         row.bg(vgrad(0x64a0e3, 0x2a6ccc))
             .border_color(hex(0x4a89d8))
             .border_b_1()
             .text_color(hex(0xffffff))
             .font_weight(bold())
             .child(icon(glyph, 16., hex(0xffffff)))
-            .child(label.into())
     } else {
         row.text_color(hex(0x1c1c1c))
             .child(icon(glyph, 16., hex(0x6d7f93)))
-            .child(label.into())
-    }
+    };
+    row.child(label.into()).children(badge)
 }
 
 // --- Boxes and rows --------------------------------------------------------------------------------------------
@@ -369,10 +391,6 @@ pub fn hint(text: impl Into<SharedString>) -> Div {
         .line_height(px(15.))
         .text_color(hex(HINT))
         .child(text.into())
-}
-
-pub fn small(text: impl Into<SharedString>) -> Div {
-    div().text_size(px(11.)).child(text.into())
 }
 
 // --- Buttons ---------------------------------------------------------------------------------------------------
@@ -721,21 +739,6 @@ pub fn tabs(
             s.child(div().relative().child(label.to_string()))
                 .on_click(move |_, w, cx| pick(i, w, cx))
         }))
-}
-
-/// Box under a tab strip; the strip overlaps its top edge by half its height.
-pub fn tab_box() -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(8.))
-        .px(px(16.))
-        .pt(px(20.))
-        .pb(px(14.))
-        .rounded(px(5.))
-        .bg(hexa(0x0000000a))
-        .border_1()
-        .border_color(hexa(0x00000024))
 }
 
 /// Disclosure triangle with a label.
