@@ -37,6 +37,31 @@ const CHECK_FILL: [(u32, f32); 4] = [
     (0x9dccf8, 1.),
 ];
 
+/// `div().id(..)` for anything clickable. Snapshot builds also record the element's bounds under its id, so offscreen
+/// checks can click controls by id (see `snapshot::click`).
+pub fn hit(id: impl Into<ElementId>) -> Stateful<Div> {
+    let id: ElementId = id.into();
+    #[cfg(feature = "snapshot")]
+    let key = id.to_string();
+    let d = div().id(id).relative();
+    #[cfg(feature = "snapshot")]
+    let d = d.child(
+        canvas(
+            move |b, _, _| PROBES.with(|p| p.borrow_mut().insert(key, b)),
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0(),
+    );
+    d
+}
+
+#[cfg(feature = "snapshot")]
+thread_local! {
+    /// Bounds of every `hit` element painted in the last frame, by id.
+    pub static PROBES: std::cell::RefCell<std::collections::HashMap<String, Bounds<Pixels>>> = Default::default();
+}
+
 pub fn hex(c: u32) -> Hsla {
     rgb(c).into()
 }
@@ -162,8 +187,7 @@ pub fn light(kind: Light, active: bool) -> Stateful<Div> {
             "light-zoom",
         ),
     };
-    let mut d = div()
-        .id(SharedString::from(format!("{id}-{}", kind as u8)))
+    let mut d = hit(SharedString::from(format!("{id}-{}", kind as u8)))
         .relative()
         .size(px(12.))
         .flex_none()
@@ -261,8 +285,7 @@ pub fn source_row(
     label: impl Into<SharedString>,
     selected: bool,
 ) -> Stateful<Div> {
-    let row = div()
-        .id(id)
+    let row = hit(id)
         .h(px(22.))
         .flex()
         .items_center()
@@ -355,8 +378,7 @@ pub fn small(text: impl Into<SharedString>) -> Div {
 // --- Buttons ---------------------------------------------------------------------------------------------------
 
 fn button_frame(id: impl Into<ElementId>, small: bool) -> Stateful<Div> {
-    div()
-        .id(id)
+    hit(id)
         .relative()
         .flex()
         .flex_none()
@@ -423,8 +445,7 @@ pub fn popup(
     label: impl Into<SharedString>,
     width: f32,
 ) -> Stateful<Div> {
-    div()
-        .id(id)
+    hit(id)
         .flex()
         .flex_none()
         .w(px(width))
@@ -480,14 +501,14 @@ pub struct MenuEntry {
 
 /// The open menu of a pop-up: white rounded panel, blue highlight under the pointer.
 pub fn menu(
-    id: impl Into<ElementId>,
+    id: impl Into<SharedString>,
     width: f32,
     items: Vec<MenuEntry>,
     on_pick: impl Fn(usize, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
+    let id: SharedString = id.into();
     let on_pick = std::rc::Rc::new(on_pick);
-    div()
-        .id(id)
+    hit(id.clone())
         .min_w(px(width))
         .py(px(4.))
         .rounded(px(5.))
@@ -497,8 +518,7 @@ pub fn menu(
         .shadow(vec![shadow(0., 6., 18., 0., 0x00000059, false)])
         .children(items.into_iter().enumerate().map(move |(i, it)| {
             let pick = on_pick.clone();
-            div()
-                .id(i)
+            hit(SharedString::from(format!("{id}-{i}")))
                 .h(px(19.))
                 .flex()
                 .items_center()
@@ -548,8 +568,7 @@ pub fn checkbox(
         mark.border_color(hex(0x8e8e8e))
             .bg(vgrad(0xffffff, 0xe9e9e9))
     };
-    div()
-        .id(id)
+    hit(id)
         .flex()
         .items_center()
         .gap(px(6.))
@@ -581,8 +600,7 @@ pub fn radio(
         dot.border_color(hex(0x8e8e8e))
             .bg(vgrad(0xffffff, 0xe9e9e9))
     };
-    div()
-        .id(id)
+    hit(id)
         .flex()
         .items_center()
         .gap(px(6.))
@@ -593,15 +611,15 @@ pub fn radio(
 
 /// Segmented control (NSSegmentedControl, rounded style).
 pub fn segmented(
-    id: impl Into<ElementId>,
+    id: impl Into<SharedString>,
     items: &[&str],
     selected: usize,
     on_pick: impl Fn(usize, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
+    let id: SharedString = id.into();
     let on_pick = std::rc::Rc::new(on_pick);
     let n = items.len();
-    div()
-        .id(id)
+    hit(id.clone())
         .flex()
         .flex_none()
         .h(px(21.))
@@ -611,8 +629,7 @@ pub fn segmented(
         .shadow(vec![shadow(0., 1., 1., 0., 0x00000012, false)])
         .children(items.iter().enumerate().map(|(i, label)| {
             let pick = on_pick.clone();
-            let mut s = div()
-                .id(i)
+            let mut s = hit(SharedString::from(format!("{id}-{i}")))
                 .flex()
                 .items_center()
                 .px(px(11.))
@@ -638,15 +655,15 @@ pub fn segmented(
 
 /// Tab strip of an NSTabView: segmented look with a blue selected tab, centered over the box.
 pub fn tabs(
-    id: impl Into<ElementId>,
+    id: impl Into<SharedString>,
     items: &[&str],
     selected: usize,
     on_pick: impl Fn(usize, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
+    let id: SharedString = id.into();
     let on_pick = std::rc::Rc::new(on_pick);
     let n = items.len();
-    div()
-        .id(id)
+    hit(id.clone())
         .flex()
         .flex_none()
         .h(px(22.))
@@ -660,8 +677,7 @@ pub fn tabs(
                 let d = if i == 0 { d.rounded_l(px(3.)) } else { d };
                 if i == n - 1 { d.rounded_r(px(3.)) } else { d }
             };
-            let s = r(div()
-                .id(i)
+            let s = r(hit(SharedString::from(format!("{id}-{i}")))
                 .relative()
                 .flex()
                 .items_center()
@@ -723,8 +739,7 @@ pub fn disclosure(
     label: impl Into<SharedString>,
     on_toggle: impl Fn(&mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
-    div()
-        .id(id)
+    hit(id)
         .flex()
         .items_center()
         .gap(px(6.))
@@ -772,8 +787,7 @@ pub fn stepper(
     let on_step = std::rc::Rc::new(on_step);
     let half = |dir: i64, glyph: &'static str| {
         let step = on_step.clone();
-        div()
-            .id(SharedString::from(format!("{id}-{dir}")))
+        hit(SharedString::from(format!("{id}-{dir}")))
             .flex_1()
             .flex()
             .items_center()
@@ -902,7 +916,7 @@ pub fn table_header(cols: &[(&str, f32)]) -> Div {
 
 /// One table row: alternating fill, blue when selected.
 pub fn table_row(id: impl Into<ElementId>, index: usize, selected: bool) -> Stateful<Div> {
-    let r = div().id(id).flex().items_center().min_h(px(20.));
+    let r = hit(id).flex().items_center().min_h(px(20.));
     if selected {
         r.bg(hex(ROW_SELECTED)).text_color(hex(0xffffff))
     } else if index % 2 == 1 {
@@ -950,8 +964,7 @@ pub fn bar_button(
     glyph: &'static str,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
-    div()
-        .id(id)
+    hit(id)
         .w(px(24.))
         .h_full()
         .flex()

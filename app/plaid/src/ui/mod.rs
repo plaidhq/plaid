@@ -260,10 +260,12 @@ pub fn pick_list(
         .flex_col()
         .child(popup(id, current, width).on_click(move |_, w, cx| toggle(w, cx)))
         .when(open, |d| {
+            // As NSPopUpButton: the menu opens with the checked item over the button face.
+            let lift = items.iter().position(|i| i.checked).unwrap_or(0) as f32 * 19. + 4.;
             d.child(deferred(
                 anchored().snap_to_window_with_margin(px(8.)).child(
                     menu(SharedString::from(format!("{id}-menu")), width, items, pick)
-                        .mt(px(1.))
+                        .mt(px(-lift))
                         .on_mouse_down_out(move |_, w, cx| close(w, cx)),
                 ),
             ))
@@ -284,8 +286,17 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> Settings {
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
-        cx.observe_window_activation(window, |_, _, cx| cx.notify())
-            .detach();
+        cx.observe_window_activation(window, |_, window, cx| {
+            // Shortcut recording only while the window is frontmost: otherwise the hook would swallow and bind the
+            // next key typed in another app. Closing the recorder's channel ends the page's recording state.
+            if !window.is_window_active()
+                && let Some(l) = cx.try_global::<Live>()
+            {
+                l.keys.stop_recording();
+            }
+            cx.notify();
+        })
+        .detach();
         Settings {
             page,
             model,

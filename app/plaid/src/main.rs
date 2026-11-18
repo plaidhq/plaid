@@ -5,6 +5,7 @@
 //   plaid --recover [at]  recognize a record's saved audio again (default: newest with audio), save in place
 //   plaid --store-key     read the API key from stdin into this app's credential store
 //   plaid --snapshot <dir> [page]  (feature `snapshot`) render settings pages offscreen to PNGs with fixture data
+//   plaid --ui-check <dir>         (feature `snapshot`) click through settings pages offscreen, assert on writes
 // Windows release builds are GUI-subsystem (no console window); redirected stdin/stdout still work.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 mod audio;
@@ -45,6 +46,8 @@ fn main() {
         Some("--store-key") => Some(cli::store_key()),
         #[cfg(all(feature = "snapshot", any(target_os = "macos", target_os = "linux")))]
         Some("--snapshot") => Some(ui::snapshot::run(&args[2..])),
+        #[cfg(all(feature = "snapshot", any(target_os = "macos", target_os = "linux")))]
+        Some("--ui-check") => Some(ui::snapshot::check(&args[2..])),
         _ => None,
     };
     if let Some(r) = headless {

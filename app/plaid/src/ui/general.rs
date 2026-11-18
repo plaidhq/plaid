@@ -131,7 +131,7 @@ pub fn key_name(code: i32) -> String {
 }
 
 /// Modifiers offered in the shortcut menus. Right ⌥ belongs to the installed Swift Plaid on macOS dev builds.
-fn offered() -> Vec<i32> {
+pub(super) fn offered() -> Vec<i32> {
     let dev_mac = cfg!(target_os = "macos") && !config::release();
     MODIFIERS
         .iter()

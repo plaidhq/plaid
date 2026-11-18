@@ -243,6 +243,13 @@ impl Store {
         }
     }
 
+    /// Deletes every record and saved recording; usage totals are kept (History's 清空历史).
+    pub fn clear(&mut self) {
+        self.all.clear();
+        let _ = std::fs::remove_file(self.records_path());
+        let _ = std::fs::remove_dir_all(self.audio_dir());
+    }
+
     /// Changes the newest record with this id (key-down time) and rewrites the log.
     pub fn update(&mut self, id: DateTime<Utc>, change: impl FnOnce(&mut Record)) {
         if let Some(r) = self.all.iter_mut().rev().find(|r| r.at == id) {

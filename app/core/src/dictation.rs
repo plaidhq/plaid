@@ -134,6 +134,8 @@ pub enum Msg {
         id: DateTime<Utc>,
         result: Result<String, String>,
     },
+    /// Delete all records and recordings (History's 清空历史); refused while dictating or retrying.
+    Clear,
 }
 
 pub trait Platform {
@@ -543,6 +545,14 @@ impl Controller {
             } => self.ran(generation, action, outcome, p),
             Msg::Recover { id } => self.recover(id, p),
             Msg::Recovered { id, result } => self.recovered(id, result, p),
+            Msg::Clear => {
+                if !self.idle() || self.recovering.is_some() {
+                    return p.hud(Hud::Flash("请等当前听写或重试结束后再试".into()));
+                }
+                self.store.clear();
+                self.relearn(p);
+                p.log("history cleared");
+            }
             _ => {}
         }
     }
@@ -2093,5 +2103,23 @@ mod tests {
         let id = t.c.store.all.last().unwrap().at;
         assert!(has(&t.send(Msg::Recover { id }), "没有保留录音"));
         assert!(t.c.recovering().is_none());
+    }
+
+    #[test]
+    fn clear_waits_for_idle_and_keeps_usage() {
+        let mut t = T::new();
+        t.key(gesture::Action::StartHold);
+        t.loud(1, 30);
+        assert!(has(&t.send(Msg::Clear), "请等当前听写或重试结束后再试"));
+        t.key(gesture::Action::Stop);
+        t.quiet(1);
+        t.flush();
+        t.done(1, Ok("你好"));
+        let usage: i64 = t.c.store.usage.values().map(|u| u.n).sum();
+        assert!(!t.c.store.all.is_empty() && usage > 0);
+        t.send(Msg::Clear);
+        assert!(t.c.store.all.is_empty());
+        assert!(!t.c.store.dir().join("records.jsonl").exists());
+        assert_eq!(t.c.store.usage.values().map(|u| u.n).sum::<i64>(), usage);
     }
 }

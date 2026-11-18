@@ -1,7 +1,7 @@
 //! `plaid --snapshot <outdir> [page…]`: renders settings pages offscreen to PNGs, with fixture history written
 //! into PLAID_DATA_DIR (required, so a real data folder is never touched) and fixture OS facts (no keychain, no
-//! audio devices, no window on screen).
-use super::{Facts, Model, Page, Settings};
+//! audio devices, no window on screen). `plaid --ui-check <outdir>` also clicks through the pages (see `check`).
+use super::{Facts, Model, Page, Settings, mav};
 use crate::config;
 use chrono::{Duration, TimeZone, Utc};
 use gpui_kit::*;
@@ -13,9 +13,6 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let Some(out) = args.first() else {
         return Err("usage: plaid --snapshot <outdir> [page…]".into());
     };
-    if std::env::var_os("PLAID_DATA_DIR").is_none() {
-        return Err("set PLAID_DATA_DIR to a scratch folder".into());
-    }
     let pages: Vec<Page> = if args.len() > 1 {
         args[1..]
             .iter()
@@ -29,42 +26,263 @@ pub fn run(args: &[String]) -> Result<(), String> {
     } else {
         Page::ALL.to_vec()
     };
-    fixture(&config::data_dir()).map_err(|e| format!("fixture: {e}"))?;
-    std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
-
-    let platform = gpui_kit::platform::current_platform(true);
-    let mut cx = HeadlessAppContext::with_platform(
-        platform.text_system(),
-        Arc::new(super::assets::Assets),
-        gpui_kit::platform::current_headless_renderer,
-    );
-    cx.update(gpui_kit::init);
+    let mut ui = Ui::new(out)?;
     for page in pages {
-        let (handle, _) = cx
+        ui.open(page, facts())?;
+        ui.shot(page.slug())?;
+        ui.close()?;
+    }
+    Ok(())
+}
+
+/// `plaid --ui-check <outdir>`: drives each page offscreen by clicking controls by id, asserts on the files the
+/// clicks write, and saves a PNG of each interesting state. Exits non-zero on the first failed assertion.
+pub fn check(args: &[String]) -> Result<(), String> {
+    let Some(out) = args.first() else {
+        return Err("usage: plaid --ui-check <outdir>".into());
+    };
+    let mut ui = Ui::new(out)?;
+    check_general(&mut ui)?;
+    println!("ui-check: PASS");
+    Ok(())
+}
+
+fn check_general(ui: &mut Ui) -> Result<(), String> {
+    ui.open(Page::General, facts())?;
+    let before = config::raw("asrContext");
+    ui.click("asrContext")?;
+    expect(
+        "asrContext unchecked",
+        config::raw("asrContext").as_deref() == Some("0"),
+        &before,
+    )?;
+    ui.click("asrContext")?;
+    expect(
+        "asrContext checked",
+        config::raw("asrContext").as_deref() == Some("1"),
+        &None,
+    )?;
+
+    ui.click("advanced")?;
+    ui.shot("general-advanced")?;
+    let silence = config::value("silenceRMS");
+    ui.click("silenceRMS-1")?;
+    let up = config::value("silenceRMS");
+    expect("silence stepper up", up.as_deref() == Some("510"), &silence)?;
+    ui.click("silenceRMS--1")?;
+    ui.click("silenceRMS--1")?;
+    expect(
+        "silence stepper down",
+        config::value("silenceRMS").as_deref() == Some("490"),
+        &up,
+    )?;
+
+    ui.click("hold")?;
+    ui.shot("general-menu")?;
+    let want = super::general::offered()[0];
+    ui.click("hold-menu-0")?;
+    expect(
+        "hold key picked from menu",
+        config::value("holdKey") == Some(want.to_string())
+            && config::value("holdKeyName") == Some(super::general::key_name(want)),
+        &None,
+    )?;
+    expect("menu closed after pick", !ui.has("hold-menu-0"), &None)?;
+    let y = ui.bounds("reveal").map(|b| b.origin.y);
+    ui.scroll("asrContext", -400.)?;
+    let y2 = ui.bounds("reveal").map(|b| b.origin.y);
+    expect(
+        "page scrolls",
+        matches!((y, y2), (Some(a), Some(b)) if b < a),
+        &None,
+    )?;
+    ui.shot("general-scrolled")?;
+    ui.close()?;
+
+    ui.open(
+        Page::General,
+        Facts {
+            volc_key: false,
+            ..facts()
+        },
+    )?;
+    expect(
+        "key field in edit mode",
+        ui.has("key-save") && !ui.has("key-change"),
+        &None,
+    )?;
+    ui.shot("general-nokey")?;
+    ui.close()
+}
+
+pub(super) fn expect(what: &str, ok: bool, was: &Option<String>) -> Result<(), String> {
+    if ok {
+        println!("  ok  {what}");
+        Ok(())
+    } else {
+        Err(format!("FAIL {what} (before: {was:?})"))
+    }
+}
+
+/// One offscreen app with at most one settings window open at a time.
+pub(super) struct Ui {
+    cx: HeadlessAppContext,
+    out: std::path::PathBuf,
+    window: Option<AnyWindowHandle>,
+}
+
+impl Ui {
+    fn new(out: &str) -> Result<Ui, String> {
+        if std::env::var_os("PLAID_DATA_DIR").is_none() {
+            return Err("set PLAID_DATA_DIR to a scratch folder".into());
+        }
+        fixture(&config::data_dir()).map_err(|e| format!("fixture: {e}"))?;
+        std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
+        let platform = gpui_kit::platform::current_platform(true);
+        let mut cx = HeadlessAppContext::with_platform(
+            platform.text_system(),
+            Arc::new(super::assets::Assets),
+            gpui_kit::platform::current_headless_renderer,
+        );
+        cx.update(gpui_kit::init);
+        Ok(Ui {
+            cx,
+            out: out.into(),
+            window: None,
+        })
+    }
+
+    pub(super) fn open(&mut self, page: Page, facts: Facts) -> Result<(), String> {
+        let (handle, _) = self
+            .cx
             .update(|cx| {
-                let model = cx.new(|_| Model::new(facts()));
+                let model = cx.new(|_| Model::new(facts));
                 gpui_kit::open_window(super::window_options(None, false), cx, |window, cx| {
                     cx.new(|cx| Settings::new(page, model, window, cx))
                 })
             })
             .map_err(|e| e.to_string())?;
-        // Two frames: the first lays out lazily created page views, the second paints them settled.
+        self.window = Some(handle.into());
+        self.frame()
+    }
+
+    /// Two frames: the first lays out lazily created views, the second paints them settled. Probes are rebuilt.
+    pub(super) fn frame(&mut self) -> Result<(), String> {
+        let handle = self.window.ok_or("no window")?;
         for _ in 0..2 {
-            cx.update_window(handle, |_, window, cx| {
-                window.refresh();
-                window.draw(cx).clear(cx);
+            mav::PROBES.with(|p| p.borrow_mut().clear());
+            self.cx
+                .update_window(handle, |_, window, cx| {
+                    window.refresh();
+                    window.draw(cx).clear(cx);
+                })
+                .map_err(|e| e.to_string())?;
+            self.cx.run_until_parked();
+        }
+        Ok(())
+    }
+
+    pub(super) fn has(&self, id: &str) -> bool {
+        mav::PROBES.with(|p| p.borrow().contains_key(id))
+    }
+
+    /// Clicks the center of the control painted with this id, then renders the result.
+    pub(super) fn click(&mut self, id: &str) -> Result<(), String> {
+        let handle = self.window.ok_or("no window")?;
+        let Some(b) = mav::PROBES.with(|p| p.borrow().get(id).copied()) else {
+            return Err(format!("FAIL no control {id:?} on screen"));
+        };
+        let position = b.center();
+        self.cx
+            .update_window(handle, |_, window, cx| {
+                let modifiers = Modifiers::default();
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position,
+                        modifiers,
+                        pressed_button: None,
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::MouseDown(MouseDownEvent {
+                        button: MouseButton::Left,
+                        position,
+                        modifiers,
+                        click_count: 1,
+                        first_mouse: false,
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::MouseUp(MouseUpEvent {
+                        button: MouseButton::Left,
+                        position,
+                        modifiers,
+                        click_count: 1,
+                    }),
+                    cx,
+                );
             })
             .map_err(|e| e.to_string())?;
-            cx.run_until_parked();
-        }
-        let img = cx.capture_screenshot(handle).map_err(|e| e.to_string())?;
-        let path = Path::new(out).join(format!("{}.png", page.slug()));
+        self.cx.run_until_parked();
+        self.frame()
+    }
+
+    /// Scrolls the pane under the control with this id by `dy` pixels (negative scrolls content up).
+    pub(super) fn scroll(&mut self, id: &str, dy: f32) -> Result<(), String> {
+        let handle = self.window.ok_or("no window")?;
+        let Some(b) = mav::PROBES.with(|p| p.borrow().get(id).copied()) else {
+            return Err(format!("FAIL no control {id:?} on screen"));
+        };
+        self.cx
+            .update_window(handle, |_, window, cx| {
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position: b.center(),
+                        modifiers: Modifiers::default(),
+                        pressed_button: None,
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::Scroll(ScrollEvent {
+                        position: b.center(),
+                        delta: ScrollDelta::Pixels(point(px(0.), px(dy))),
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+            })
+            .map_err(|e| e.to_string())?;
+        self.frame()
+    }
+
+    pub(super) fn bounds(&self, id: &str) -> Option<Bounds<Pixels>> {
+        mav::PROBES.with(|p| p.borrow().get(id).copied())
+    }
+
+    pub(super) fn shot(&mut self, name: &str) -> Result<(), String> {
+        let handle = self.window.ok_or("no window")?;
+        let img = self
+            .cx
+            .capture_screenshot(handle)
+            .map_err(|e| e.to_string())?;
+        let path = self.out.join(format!("{name}.png"));
         img.save(&path).map_err(|e| e.to_string())?;
         println!("{}", path.display());
-        cx.update_window(handle, |_, window, _| window.remove_window())
-            .map_err(|e| e.to_string())?;
+        Ok(())
     }
-    Ok(())
+
+    pub(super) fn close(&mut self) -> Result<(), String> {
+        if let Some(handle) = self.window.take() {
+            self.cx
+                .update_window(handle, |_, window, _| window.remove_window())
+                .map_err(|e| e.to_string())?;
+            self.cx.run_until_parked();
+        }
+        Ok(())
+    }
 }
 
 fn facts() -> Facts {
