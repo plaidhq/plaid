@@ -1753,10 +1753,18 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     bring(ui, "perf-stage-59")?;
     ui.scroll("perf-stage-59", 0.)?;
     ui.shot("perf-stages-hover")?;
-    bring(ui, "perf-sort-4")?;
-    ui.click("perf-sort-4")?;
-    ui.click("perf-row-0")?;
+    // Newest first, the fifth row is a hand-corrected fixture record: raw vs pasted diff plus 修改后.
+    bring(ui, "perf-raw-more")?;
+    ui.shot("perf-raw")?;
+    ui.click("perf-row-4")?;
     expect("row opens the inspector", ui.has("perf-inspector"), &None)?;
+    bring(ui, "perf-inspector")?;
+    ui.shot("perf-inspector-diff")?;
+    // LLM column descending puts a timed-out record first: the LLM field and the JSON disclosure.
+    bring(ui, "perf-sort-5")?;
+    ui.click("perf-sort-5")?;
+    ui.click("perf-sort-5")?;
+    ui.click("perf-row-0")?;
     bring(ui, "perf-json")?;
     ui.click("perf-json")?;
     expect("raw JSON disclosed", ui.has("perf-json-body"), &None)?;
@@ -1766,16 +1774,25 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     ui.click("perf-raw-more")?;
     expect("raw menu open", ui.has("perf-raw-menu-0"), &None)?;
     ui.shot("perf-raw-menu")?;
-    ui.click("perf-inspector")?; // a click outside dismisses the menu
+    ui.click("perf-row-0")?; // a click outside dismisses the menu; the row is already selected
     expect("raw menu closed", !ui.has("perf-raw-menu-0"), &None)?;
-    bring(ui, "perf-kinds")?;
-    let had = (0..EVENTS).any(|i| ui.has(&format!("perf-event-err-{i}")));
-    expect("events list shows an error line", had, &None)?;
-    ui.click("perf-kinds")?;
-    ui.click("perf-kinds-menu-0")?;
-    let errors = (0..EVENTS).any(|i| ui.has(&format!("perf-event-err-{i}")));
-    expect("errors hidden after toggling 错误 off", !errors, &None)?;
+    let event = |ui: &super::snapshot::Ui, i: usize| {
+        [format!("perf-event-{i}"), format!("perf-event-err-{i}")]
+            .into_iter()
+            .find(|id| ui.has(id))
+    };
+    let deep = event(ui, 8).ok_or("FAIL fewer than 9 events")?;
+    bring(ui, &deep)?;
+    let errors =
+        |ui: &super::snapshot::Ui| (0..EVENTS).any(|i| ui.has(&format!("perf-event-err-{i}")));
+    expect("events list shows an error line", errors(ui), &None)?;
     ui.shot("perf-events")?;
+    ui.click("perf-kinds")?;
+    expect("kinds menu open", ui.has("perf-kinds-menu-0"), &None)?;
+    ui.shot("perf-kinds-menu")?;
+    ui.click("perf-kinds-menu-0")?;
+    expect("errors hidden after toggling 错误 off", !errors(ui), &None)?;
+    ui.shot("perf-events-filtered")?;
     expect(
         "event kinds",
         kind("asr failed: timeout") == Kind::Error

@@ -435,10 +435,10 @@ fn fixture(dir: &Path) -> std::io::Result<()> {
         let mut store = Store::load(dir);
         let n = store.all.len();
         let picks: Vec<chrono::DateTime<Utc>> = store.all
-            [n.saturating_sub(150)..n.saturating_sub(20)]
+            [n.saturating_sub(70)..n.saturating_sub(5)]
             .iter()
             .filter(|r| r.llm == "off" && r.edited.is_none() && !r.is_failure())
-            .step_by(4)
+            .step_by(3)
             .map(|r| r.at)
             .collect();
         for (k, at) in picks.into_iter().take(10).enumerate() {
