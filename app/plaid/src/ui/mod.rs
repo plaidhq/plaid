@@ -2,6 +2,7 @@
 //! from settings.json and the dictation history from disk (refreshed when records.jsonl changes); anything that
 //! changes records goes to the controller as a `Msg`, which owns the store while the app runs.
 pub mod assets;
+mod dictionary;
 mod general;
 mod key_field;
 pub mod mav;
@@ -316,6 +317,11 @@ impl Settings {
         let m = self.model.clone();
         let v: AnyView = match page {
             Page::General => cx.new(|cx| general::General::new(m, window, cx)).into(),
+            Page::Dictionary => {
+                let nav = cx.entity().downgrade();
+                cx.new(|cx| dictionary::Dictionary::new(m, nav, window, cx))
+                    .into()
+            }
             _ => cx.new(|_| Todo(page)).into(),
         };
         self.pages.push((page, v.clone()));

@@ -141,7 +141,8 @@ pub fn day(at: DateTime<Utc>) -> String {
     at.with_timezone(&Local).format("%Y-%m-%d").to_string()
 }
 
-fn write_atomic(path: &Path, body: &[u8]) -> std::io::Result<()> {
+/// Writes through a temp file and rename, creating the folder if needed.
+pub fn write_atomic(path: &Path, body: &[u8]) -> std::io::Result<()> {
     if let Some(d) = path.parent() {
         std::fs::create_dir_all(d)?;
     }

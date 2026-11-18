@@ -43,6 +43,7 @@ pub fn check(args: &[String]) -> Result<(), String> {
     };
     let mut ui = Ui::new(out)?;
     check_general(&mut ui)?;
+    super::dictionary::check(&mut ui)?;
     println!("ui-check: PASS");
     Ok(())
 }
@@ -427,5 +428,16 @@ fn fixture(dir: &Path) -> std::io::Result<()> {
         "settings.json",
         r#"{"llmEnabled":"1","llmModel":"deepseek-chat"}"#,
     )?;
+    // --- 词典 page fixture: a JSON term (so 杰森 -> JSON becomes a learned rule), an alias line with a block
+    // list, and a replacement.
+    let hotwords = dir.join("hotwords.txt");
+    let mut body = std::fs::read_to_string(&hotwords)?;
+    for line in ["JSON", "Tauri | 陶瑞 | 套瑞 ~~~ 金牛座", "克劳德 -> Claude"] {
+        if !body.split('\n').any(|l| l == line) {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    std::fs::write(&hotwords, body)?;
     Ok(())
 }
