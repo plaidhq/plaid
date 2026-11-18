@@ -24,7 +24,11 @@ impl KeyField {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> KeyField {
-        let input = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder("粘贴 API key"));
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder("粘贴 API key")
+        });
         cx.subscribe_in(&input, window, |this, _, e: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = e {
                 this.save(window, cx);

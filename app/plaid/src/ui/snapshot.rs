@@ -71,7 +71,10 @@ fn facts() -> Facts {
     Facts {
         volc_key: true,
         mics: vec![
-            ("BuiltInMicrophoneDevice".into(), "MacBook Pro 麦克风".into()),
+            (
+                "BuiltInMicrophoneDevice".into(),
+                "MacBook Pro 麦克风".into(),
+            ),
             ("AppleUSBAudioEngine:Shure:MV7".into(), "Shure MV7".into()),
         ],
         default_mic: Some("MacBook Pro 麦克风".into()),
@@ -82,17 +85,32 @@ fn facts() -> Facts {
 
 const SENTENCES: [(&str, &str); 12] = [
     ("帮我把这个函数改成异步的", "帮我把这个函数改成异步的。"),
-    ("明天下午三点开会讨论一下发布计划", "明天下午三点开会，讨论一下发布计划。"),
-    ("这个 bug 是因为缓存没有失效", "这个 bug 是因为缓存没有失效。"),
+    (
+        "明天下午三点开会讨论一下发布计划",
+        "明天下午三点开会，讨论一下发布计划。",
+    ),
+    (
+        "这个 bug 是因为缓存没有失效",
+        "这个 bug 是因为缓存没有失效。",
+    ),
     ("我觉得可以先上线灰度版本", "我觉得可以先上线灰度版本。"),
-    ("把 docker compose 里的端口改成八零八零", "把 Docker Compose 里的端口改成 8080。"),
+    (
+        "把 docker compose 里的端口改成八零八零",
+        "把 Docker Compose 里的端口改成 8080。",
+    ),
     ("周五之前把文档发给我", "周五之前把文档发给我。"),
-    ("这个接口的延迟大概在两百毫秒左右", "这个接口的延迟大概在 200 毫秒左右。"),
+    (
+        "这个接口的延迟大概在两百毫秒左右",
+        "这个接口的延迟大概在 200 毫秒左右。",
+    ),
     ("好的没问题", "好的，没问题。"),
     ("麻烦看一下这个 PR", "麻烦看一下这个 PR。"),
     ("用 go 写一个简单的反向代理", "用 Go 写一个简单的反向代理。"),
     ("今晚的会议改到明天", "今晚的会议改到明天。"),
-    ("把 kubernetes 的配置也一起更新", "把 Kubernetes 的配置也一起更新。"),
+    (
+        "把 kubernetes 的配置也一起更新",
+        "把 Kubernetes 的配置也一起更新。",
+    ),
 ];
 
 const APPS: [&str; 5] = ["Slack", "Visual Studio Code", "Safari", "微信", "Terminal"];
@@ -105,7 +123,9 @@ fn fixture(dir: &Path) -> std::io::Result<()> {
         let now = Utc.with_ymd_and_hms(2026, 11, 18, 9, 0, 0).unwrap();
         let mut seed: u64 = 7;
         let mut next = move |n: u64| {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (seed >> 33) % n.max(1)
         };
         let mut records = vec![];
@@ -146,9 +166,13 @@ fn fixture(dir: &Path) -> std::io::Result<()> {
         }
         records.sort_by_key(|r| r.at);
         // Hand corrections that the dictionary page offers as fixes.
-        for (k, (from, to)) in [("cooper netes", "Kubernetes"), ("杰森", "JSON"), ("瑞迪斯", "Redis")]
-            .iter()
-            .enumerate()
+        for (k, (from, to)) in [
+            ("cooper netes", "Kubernetes"),
+            ("杰森", "JSON"),
+            ("瑞迪斯", "Redis"),
+        ]
+        .iter()
+        .enumerate()
         {
             for j in 0..(3 - k) {
                 let i = records.len() - 5 - k * 4 - j;
@@ -181,6 +205,9 @@ fn fixture(dir: &Path) -> std::io::Result<()> {
         "actions.json",
         r#"[{"name":"打开终端","phrases":["打开终端"],"run":"open -a Terminal"},{"name":"翻译","phrases":["翻译"],"run":"pbpaste | trans","input":"selection"}]"#,
     )?;
-    write("settings.json", r#"{"llmEnabled":"1","llmModel":"deepseek-chat"}"#)?;
+    write(
+        "settings.json",
+        r#"{"llmEnabled":"1","llmModel":"deepseek-chat"}"#,
+    )?;
     Ok(())
 }

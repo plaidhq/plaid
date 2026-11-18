@@ -34,13 +34,19 @@ fn icon(name: &str) -> Option<String> {
         "xcircle" => {
             r##"<circle cx="8" cy="8" r="7" fill="#000" stroke="none"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="#fff" stroke-width="1.6"/>"##
         }
-        "search" => r##"<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2l3.6 3.6" stroke-width="1.8"/>"##,
-        "pencil" => r##"<path d="M3 13l.7-3L11 2.7l2.3 2.3L6 12.3z"/><path d="M9.5 4.2l2.3 2.3"/>"##,
+        "search" => {
+            r##"<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2l3.6 3.6" stroke-width="1.8"/>"##
+        }
+        "pencil" => {
+            r##"<path d="M3 13l.7-3L11 2.7l2.3 2.3L6 12.3z"/><path d="M9.5 4.2l2.3 2.3"/>"##
+        }
         "trash" => {
             r##"<path d="M2.8 4.2h10.4M6.2 4.2V2.6h3.6v1.6M4.2 4.2l.7 9.2h6.2l.7-9.2M6.7 6.5v4.8M9.3 6.5v4.8"/>"##
         }
         "folder" => r##"<path d="M2 4.2h4.2l1.4 1.5H14v7.5H2z"/>"##,
-        "action" => r##"<circle cx="3.5" cy="8" r="1.3" fill="#000" stroke="none"/><circle cx="8" cy="8" r="1.3" fill="#000" stroke="none"/><circle cx="12.5" cy="8" r="1.3" fill="#000" stroke="none"/>"##,
+        "action" => {
+            r##"<circle cx="3.5" cy="8" r="1.3" fill="#000" stroke="none"/><circle cx="8" cy="8" r="1.3" fill="#000" stroke="none"/><circle cx="12.5" cy="8" r="1.3" fill="#000" stroke="none"/>"##
+        }
         "mic" => {
             r##"<rect x="5.6" y="1.8" width="4.8" height="8" rx="2.4" fill="#000" stroke="none"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.3M5.6 14.3h4.8"/>"##
         }
@@ -48,7 +54,9 @@ fn icon(name: &str) -> Option<String> {
         "flame" => {
             r##"<path d="M8 1.8c.4 2.4 3.9 3.8 3.9 7.4A3.9 3.9 0 0 1 4.1 9.2c0-1.6.8-2.6 1.6-3.3 0 1.3.7 2.1 1.4 2.3C7 5.9 7.1 3.6 8 1.8z" fill="#000" stroke="none"/>"##
         }
-        "cloud" => r##"<path d="M4.5 12.5h7.2a2.8 2.8 0 0 0 .3-5.6 4 4 0 0 0-7.7 1A2.3 2.3 0 0 0 4.5 12.5z"/>"##,
+        "cloud" => {
+            r##"<path d="M4.5 12.5h7.2a2.8 2.8 0 0 0 .3-5.6 4 4 0 0 0-7.7 1A2.3 2.3 0 0 0 4.5 12.5z"/>"##
+        }
         _ => return None,
     };
     Some(format!("{S}{body}</svg>"))

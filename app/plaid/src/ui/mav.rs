@@ -418,7 +418,11 @@ pub fn disabled(el: Stateful<Div>) -> Stateful<Div> {
 }
 
 /// NSPopUpButton face: current value and the blue double-arrow cap. The menu is drawn by the caller.
-pub fn popup(id: impl Into<ElementId>, label: impl Into<SharedString>, width: f32) -> Stateful<Div> {
+pub fn popup(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    width: f32,
+) -> Stateful<Div> {
     div()
         .id(id)
         .flex()
@@ -665,13 +669,30 @@ pub fn tabs(
                 .whitespace_nowrap()
                 .when(i > 0, |d| d.border_l_1().border_color(hex(0x9a9a9a))));
             let s = if i == selected {
-                s.text_color(hex(0xffffff))
-                    .children(bands(&TAB_FILL, 0.).into_iter().enumerate().map(|(k, b)| {
-                        let b = if i == 0 && k == 0 { b.rounded_tl(px(3.)) } else { b };
-                        let b = if i == 0 && k == 2 { b.rounded_bl(px(3.)) } else { b };
-                        let b = if i == n - 1 && k == 0 { b.rounded_tr(px(3.)) } else { b };
-                        if i == n - 1 && k == 2 { b.rounded_br(px(3.)) } else { b }
-                    }))
+                s.text_color(hex(0xffffff)).children(
+                    bands(&TAB_FILL, 0.).into_iter().enumerate().map(|(k, b)| {
+                        let b = if i == 0 && k == 0 {
+                            b.rounded_tl(px(3.))
+                        } else {
+                            b
+                        };
+                        let b = if i == 0 && k == 2 {
+                            b.rounded_bl(px(3.))
+                        } else {
+                            b
+                        };
+                        let b = if i == n - 1 && k == 0 {
+                            b.rounded_tr(px(3.))
+                        } else {
+                            b
+                        };
+                        if i == n - 1 && k == 2 {
+                            b.rounded_br(px(3.))
+                        } else {
+                            b
+                        }
+                    }),
+                )
             } else {
                 s.bg(vgrad(0xffffff, 0xf0f0f0))
             };
@@ -709,7 +730,11 @@ pub fn disclosure(
         .gap(px(6.))
         .text_color(hex(0x1a1a1a))
         .child(icon(
-            if open { "plaid/tri-down.svg" } else { "plaid/tri-right.svg" },
+            if open {
+                "plaid/tri-down.svg"
+            } else {
+                "plaid/tri-right.svg"
+            },
             9.,
             hex(0x6b6b6b),
         ))

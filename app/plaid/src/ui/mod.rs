@@ -133,7 +133,8 @@ fn mics() -> (Vec<Mic>, Option<String>) {
         .map(|ds| {
             ds.filter_map(|d| Some((d.id().ok()?.id().to_string(), name(&d)?)))
                 .filter(|(_, n)| {
-                    !n.starts_with("CADefaultDeviceAggregate") && !n.starts_with("VPAUAggregateAudioDevice")
+                    !n.starts_with("CADefaultDeviceAggregate")
+                        && !n.starts_with("VPAUAggregateAudioDevice")
                 })
                 .collect()
         })
@@ -207,7 +208,10 @@ pub fn send(m: Msg, cx: &App) {
 /// Reveals a path in Finder / Explorer.
 pub fn reveal(path: &std::path::Path) {
     #[cfg(target_os = "macos")]
-    let r = std::process::Command::new("open").arg("-R").arg(path).spawn();
+    let r = std::process::Command::new("open")
+        .arg("-R")
+        .arg(path)
+        .spawn();
     #[cfg(windows)]
     let r = std::process::Command::new("explorer")
         .arg(format!("/select,{}", path.display()))
@@ -273,9 +277,15 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn new(page: Page, model: Entity<Model>, window: &mut Window, cx: &mut Context<Self>) -> Settings {
+    pub fn new(
+        page: Page,
+        model: Entity<Model>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Settings {
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
-        cx.observe_window_activation(window, |_, _, cx| cx.notify()).detach();
+        cx.observe_window_activation(window, |_, _, cx| cx.notify())
+            .detach();
         Settings {
             page,
             model,
@@ -303,10 +313,12 @@ impl Settings {
 
     fn sidebar(&self, cx: &mut Context<Self>) -> Div {
         let group = |label: &'static str, pages: &[Page], cx: &mut Context<Self>| {
-            div().child(source_header(label)).children(pages.iter().map(|&p| {
-                source_row(p.slug(), p.icon(), p.title(), p == self.page)
-                    .on_click(cx.listener(move |this, _, _, cx| this.show(p, cx)))
-            }))
+            div()
+                .child(source_header(label))
+                .children(pages.iter().map(|&p| {
+                    source_row(p.slug(), p.icon(), p.title(), p == self.page)
+                        .on_click(cx.listener(move |this, _, _, cx| this.show(p, cx)))
+                }))
         };
         let facts = &self.model.read(cx).facts;
         let (status, text) = if !facts.volc_key {
@@ -325,11 +337,7 @@ impl Settings {
             .bg(hex(SIDEBAR))
             .border_r_1()
             .border_color(hex(SIDEBAR_EDGE))
-            .child(group(
-                "听写",
-                &[Page::Overview, Page::History],
-                cx,
-            ))
+            .child(group("听写", &[Page::Overview, Page::History], cx))
             .child(group(
                 "个性化",
                 &[Page::Dictionary, Page::Refine, Page::Commands],
@@ -380,7 +388,9 @@ struct Todo(Page);
 
 impl Render for Todo {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().p(px(22.)).child(hint(format!("{}：尚未完成", self.0.title())))
+        div()
+            .p(px(22.))
+            .child(hint(format!("{}：尚未完成", self.0.title())))
     }
 }
 
@@ -519,8 +529,12 @@ fn native_chrome(window: &Window) {
     {
         use objc2_app_kit::{NSView, NSWindowButton};
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        let Ok(h) = HasWindowHandle::window_handle(window) else { return };
-        let RawWindowHandle::AppKit(h) = h.as_raw() else { return };
+        let Ok(h) = HasWindowHandle::window_handle(window) else {
+            return;
+        };
+        let RawWindowHandle::AppKit(h) = h.as_raw() else {
+            return;
+        };
         // SAFETY: GPUI's live NSView for this window; main thread.
         let view: &NSView = unsafe { h.ns_view.cast().as_ref() };
         let Some(w) = view.window() else { return };

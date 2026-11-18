@@ -109,8 +109,15 @@ const CHARS: [(i32, &str); 47] = [
 
 /// Display name of a macOS key code, with Windows names for the modifiers on Windows.
 pub fn key_name(code: i32) -> String {
-    let find = |t: &[(i32, &str)]| t.iter().find(|(c, _)| *c == code).map(|(_, n)| n.to_string());
-    let Some(name) = find(&MODIFIERS).or_else(|| find(&NAMED)).or_else(|| find(&CHARS)) else {
+    let find = |t: &[(i32, &str)]| {
+        t.iter()
+            .find(|(c, _)| *c == code)
+            .map(|(_, n)| n.to_string())
+    };
+    let Some(name) = find(&MODIFIERS)
+        .or_else(|| find(&NAMED))
+        .or_else(|| find(&CHARS))
+    else {
         return format!("Key {code}");
     };
     if cfg!(windows) {
@@ -236,23 +243,44 @@ impl General {
         };
         let v = n.value().to_string();
         n.input.update(cx, |i, cx| i.set_value(v, window, cx));
-        cx.subscribe_in(&n.input, window, move |this, _, e: &InputEvent, window, cx| {
-            if matches!(e, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                this.commit(key, None, window, cx);
-            }
-        })
+        cx.subscribe_in(
+            &n.input,
+            window,
+            move |this, _, e: &InputEvent, window, cx| {
+                if matches!(e, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                    this.commit(key, None, window, cx);
+                }
+            },
+        )
         .detach();
         n
     }
 
     fn numbers(&self, key: &str) -> &Number {
-        if key == self.silence.key { &self.silence } else { &self.tail }
+        if key == self.silence.key {
+            &self.silence
+        } else {
+            &self.tail
+        }
     }
 
     /// Stores the typed value (or the current one moved by `step` × 10), clamped and rounded, and shows it.
-    fn commit(&mut self, key: &str, step: Option<i64>, window: &mut Window, cx: &mut Context<Self>) {
+    fn commit(
+        &mut self,
+        key: &str,
+        step: Option<i64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let n = self.numbers(key);
-        let typed = n.input.read(cx).value().trim().parse::<f64>().ok().map(|v| v as i64);
+        let typed = n
+            .input
+            .read(cx)
+            .value()
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|v| v as i64);
         let v = match step {
             Some(s) => n.clamp(n.value() + s * 10),
             None => typed.map(|v| n.clamp(v)).unwrap_or_else(|| n.value()),
@@ -370,7 +398,12 @@ impl General {
         };
         row(
             label,
-            div().flex().items_center().gap(px(8.)).child(list).child(rec),
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(list)
+                .child(rec),
         )
         .into_any_element()
     }
@@ -436,7 +469,8 @@ impl General {
                     let id = ids.get(i).cloned().flatten();
                     let _ = t3.update(cx, |this, cx| {
                         this.menu = None;
-                        this.model.update(cx, |m, cx| m.set("micDevice", id.unwrap_or_default(), cx));
+                        this.model
+                            .update(cx, |m, cx| m.set("micDevice", id.unwrap_or_default(), cx));
                     });
                 },
             ),
@@ -447,12 +481,7 @@ impl General {
     /// The last utterance's levels: a 16-cell meter of the speech level and what the numbers mean.
     fn level_rows(&self, cx: &App) -> Vec<AnyElement> {
         let m = self.model.read(cx);
-        let last = m
-            .store
-            .all
-            .iter()
-            .rev()
-            .find(|r| r.speech_rms.is_some());
+        let last = m.store.all.iter().rev().find(|r| r.speech_rms.is_some());
         let Some(r) = last else {
             return vec![
                 row("输入电平：", meter(0, 16)).into_any_element(),
@@ -496,7 +525,14 @@ impl General {
         rows
     }
 
-    fn number_row(&self, label: &'static str, n: &Number, unit: &'static str, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    fn number_row(
+        &self,
+        label: &'static str,
+        n: &Number,
+        unit: &'static str,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let key = n.key;
         let this = cx.entity().downgrade();
         row(
@@ -543,27 +579,25 @@ impl Render for General {
         let mut asr = vec![
             row("API Key：", self.key.clone()).into_any_element(),
             self.check("asrContext", "发送上下文（前台应用和输入框里光标前的文字）"),
-            self.check("nonstream", "二遍识别（松键后用整段音频再识别一次，约慢 300 ms）"),
+            self.check(
+                "nonstream",
+                "二遍识别（松键后用整段音频再识别一次，约慢 300 ms）",
+            ),
             row(
                 "",
                 div()
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .child(disclosure(
-                        "advanced",
-                        self.advanced,
-                        "高级设置",
-                        {
-                            let this = cx.entity().downgrade();
-                            move |_, cx| {
-                                let _ = this.update(cx, |this, cx| {
-                                    this.advanced = !this.advanced;
-                                    cx.notify();
-                                });
-                            }
-                        },
-                    ))
+                    .child(disclosure("advanced", self.advanced, "高级设置", {
+                        let this = cx.entity().downgrade();
+                        move |_, cx| {
+                            let _ = this.update(cx, |this, cx| {
+                                this.advanced = !this.advanced;
+                                cx.notify();
+                            });
+                        }
+                    }))
                     .child(hint("静音阈值、松键收尾")),
             )
             .into_any_element(),
