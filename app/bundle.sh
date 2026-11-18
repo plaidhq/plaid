@@ -1,12 +1,12 @@
 #!/bin/sh
-# Builds the macOS app bundle: ./bundle.sh [dev|release]  (default dev → "Plaid Dev.app", dev.neo.plaid.dev).
+# Builds the macOS app bundle: ./bundle.sh [dev|release]  (default dev → "Plaid Dev.app", com.neospaceindustries.plaid.dev).
 # No hardened runtime: ad-hoc and Apple Development signatures both work without the audio-input entitlement.
 # A stable signing identity keeps Microphone/Accessibility grants across rebuilds; ad-hoc builds lose them.
 set -e
 cd "$(dirname "$0")"
 export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
 MODE=${1:-dev}
-if [ "$MODE" = release ]; then NAME=Plaid; ID=dev.neo.plaid.volc; else NAME="Plaid Dev"; ID=dev.neo.plaid.dev; fi
+if [ "$MODE" = release ]; then NAME=Plaid; ID=com.neospaceindustries.plaid; else NAME="Plaid Dev"; ID=com.neospaceindustries.plaid.dev; fi
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 BUILD=${BUILD:-$(date +%Y%m%d%H%M)}
 

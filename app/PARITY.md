@@ -1,7 +1,8 @@
-# Parity with the Swift app (Sources/Plaid)
+# Parity with the Swift app
 
-State of the GPUI port against the Swift Volc-only app (v0.10.0 build 31). The Swift app stays the daily driver
-until cutover.
+State of the GPUI app against the Swift Volc-only app it replaced (v0.10.0 build 31, bundle id dev.neo.plaid.volc).
+The Swift sources were removed after commit 71d69dc; read them there. Bundle ids are now com.neospaceindustries.plaid
+(release) and com.neospaceindustries.plaid.dev.
 
 ## Ported
 
@@ -18,6 +19,7 @@ until cutover.
 | Paste.swift | plaid/paste.rs, paste_win.rs, driver `verify_target` | The clipboard is restored on quit as well. |
 | Mic.swift `micDevice` | audio.rs `input_device`, 设置 page picker | Same Core Audio UID; falls back to the default input. |
 | Recovery.swift | controller `recover`, driver `recognize`, 历史 重试 | Also `plaid --recover [at]`; status goes to the HUD. |
+| UserDefaults, Keychain (dev.neo.plaid.volc) | migrate.rs | Release first launch, while settings.json is missing: defaults → settings.json, Keychain accounts copied (one system dialog per key). |
 | Settings.swift and its pages | plaid/ui/*.rs | Mac OS X 10.9 look drawn in GPUI (ui/mav.rs); see **Settings window** below. |
 | HUD | plaid/hud | Same states; restyled as a 10.9 HUD panel. |
 | Onboarding | ui/onboarding.rs | Opens at launch until a Volc key is saved and accessibility is granted. |
@@ -51,7 +53,6 @@ until cutover.
 
 ## Not ported
 
-- Settings import from the Swift app's UserDefaults and Keychain (`dev.neo.plaid.volc`) at cutover.
 - Opus upload (Volc.swift `codec`, Swift default `opus`, 32 kbps). The port always streams PCM, about 8x the
   traffic; 设置 has no 上传格式 picker.
 - `--export` CLI flag (历史 导出 writes the same feedback bundle) and `--ogg` (debug only).

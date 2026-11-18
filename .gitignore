@@ -1,7 +1,2 @@
-.build/
-build/
-spike/src-tauri/target/
-spike/src-tauri/gen/
-spike/node_modules/
 app/target/
 *.private.jsonl

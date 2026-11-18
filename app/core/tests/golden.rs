@@ -1,4 +1,5 @@
-//! Parity with the Swift app: fixtures produced by scripts/golden.sh from the original sources.
+//! Parity with the retired Swift app: fixtures produced from its sources by scripts/golden.sh (removed with the
+//! Swift code; see git history).
 //! `records.private.jsonl` (real utterances, gitignored) is used when present.
 use plaid_core::{actions, diff, hotwords::Snapshot, phonetic, records, volc};
 use serde_json::{Value, json};

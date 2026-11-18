@@ -1,5 +1,5 @@
-//! API keys in the OS credential store: macOS Keychain generic passwords under the bundle id (the release id
-//! dev.neo.plaid.volc is the Swift app's service, so its key carries over), Windows Credential Manager otherwise.
+//! API keys in the OS credential store: macOS Keychain generic passwords under the bundle id (migrate.rs copies the
+//! Swift app's keys once), Windows Credential Manager otherwise.
 //! Accounts: "apiKey" is the Volcengine key, "llm:<host>" the LLM keys.
 
 /// An LLM endpoint's key: PLAID_LLM_KEY, else the credential stored for its host.
@@ -23,7 +23,7 @@ fn service() -> String {
     objc2_foundation::NSBundle::mainBundle()
         .bundleIdentifier()
         .map(|s| s.to_string())
-        .unwrap_or_else(|| "dev.neo.plaid.dev".into())
+        .unwrap_or_else(|| "com.neospaceindustries.plaid.dev".into())
 }
 
 /// Never shows a Keychain dialog: an ACL mismatch fails instead (the user then re-enters the key in Settings).

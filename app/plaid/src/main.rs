@@ -17,6 +17,8 @@ mod hud;
 #[cfg(target_os = "macos")]
 mod mac;
 #[cfg(target_os = "macos")]
+mod migrate;
+#[cfg(target_os = "macos")]
 mod paste;
 #[cfg(windows)]
 #[path = "paste_win.rs"]
@@ -86,6 +88,8 @@ fn main() {
 /// The dictation loop: hotkey, mic and ASR threads post to one channel; the controller handles each message on
 /// the main thread, then the HUD and the hotkey's view of the controller are updated.
 fn run(hud: WindowHandle<hud::Hud>, cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    migrate::run();
     let (tx, rx) = async_channel::unbounded::<Msg>();
     let state = std::sync::Arc::new(hotkey::State::default());
     install_hotkey(tx.clone(), state.clone());

@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn restores_unless_user_copied() {
         let board = NSPasteboard::pasteboardWithUniqueName();
-        let custom = NSString::from_str("dev.neo.plaid.test.custom");
+        let custom = NSString::from_str("com.neospaceindustries.plaid.test.custom");
         let item = NSPasteboardItem::new();
         item.setString_forType(&NSString::from_str("original"), unsafe {
             NSPasteboardTypeString

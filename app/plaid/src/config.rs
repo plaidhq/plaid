@@ -3,7 +3,7 @@
 use plaid_core::hotwords::{self, Snapshot};
 use std::path::PathBuf;
 
-/// ~/Library/Application Support/Plaid (release, shared with the Swift app's data) or "Plaid Dev" (dev bundle and
+/// ~/Library/Application Support/Plaid (release; the retired Swift app's data dir too) or "Plaid Dev" (dev bundle and
 /// unbundled runs); %APPDATA%\Plaid on Windows. PLAID_DATA_DIR overrides.
 pub fn data_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("PLAID_DATA_DIR") {
@@ -18,13 +18,13 @@ pub fn data_dir() -> PathBuf {
         .join(if release() { "Plaid" } else { "Plaid Dev" })
 }
 
-/// Release bundle (dev.neo.plaid.volc) or the Windows build.
+/// Release bundle (com.neospaceindustries.plaid) or the Windows build.
 pub fn release() -> bool {
     #[cfg(target_os = "macos")]
     {
         objc2_foundation::NSBundle::mainBundle()
             .bundleIdentifier()
-            .is_some_and(|s| s.to_string() == "dev.neo.plaid.volc")
+            .is_some_and(|s| s.to_string() == "com.neospaceindustries.plaid")
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -137,7 +137,8 @@ pub fn actions() -> (Vec<plaid_core::actions::Action>, String) {
 }
 
 /// Hold and tap key codes (macOS codes on every platform); -1 disables. Right ⌥ / right Alt (61) is the default,
-/// except for macOS dev builds: there it belongs to the installed Swift Plaid, so they use right ⌘ (54) and refuse 61.
+/// except for macOS dev builds: there it belongs to the installed release Plaid, so they use right ⌘ (54) and refuse
+/// 61.
 pub fn hotkeys() -> (i32, i32) {
     let dev_mac = cfg!(target_os = "macos") && !release();
     let default = if dev_mac { 54 } else { 61 };
