@@ -1572,14 +1572,3 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     // Later checks expect the fixture history.
     super::snapshot::fixture(&dir).map_err(|e| format!("fixture: {e}"))
 }
-
-/// Copy of mav's private `shadow` (box shadow from px values and 0xRRGGBBAA).
-fn shadow(x: f32, y: f32, blur: f32, spread: f32, color: u32, inset: bool) -> BoxShadow {
-    BoxShadow {
-        color: hexa(color),
-        offset: point(px(x), px(y)),
-        blur_radius: px(blur),
-        spread_radius: px(spread),
-        inset,
-    }
-}
