@@ -4,6 +4,7 @@
 //   plaid --file a.wav    one utterance through the controller with the WAV as the mic; prints partials and the paste
 //   plaid --recover [at]  recognize a record's saved audio again (default: newest with audio), save in place
 //   plaid --store-key     read the API key from stdin into this app's credential store
+//   plaid --snapshot <dir> [page]  (feature `snapshot`) render settings pages offscreen to PNGs with fixture data
 // Windows release builds are GUI-subsystem (no console window); redirected stdin/stdout still work.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 mod audio;
@@ -23,6 +24,7 @@ mod run;
 mod secret;
 mod trace;
 mod tray;
+mod ui;
 #[cfg(windows)]
 mod win;
 
@@ -32,7 +34,7 @@ use mac as os;
 use win as os;
 
 use gpui_kit::*;
-use plaid_core::dictation::{Controller, Keys, Msg};
+use plaid_core::dictation::{Controller, Msg};
 use plaid_core::store::Store;
 
 fn main() {
@@ -41,6 +43,8 @@ fn main() {
         Some("--file") => Some(cli::replay(args.get(2).map_or("", String::as_str))),
         Some("--recover") => Some(cli::recover(args.get(2).map(String::as_str))),
         Some("--store-key") => Some(cli::store_key()),
+        #[cfg(all(feature = "snapshot", any(target_os = "macos", target_os = "linux")))]
+        Some("--snapshot") => Some(ui::snapshot::run(&args[2..])),
         _ => None,
     };
     if let Some(r) = headless {
@@ -51,7 +55,7 @@ fn main() {
         return;
     }
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(ui::assets::Assets)
         .with_quit_mode(QuitMode::Explicit)
         .with_windowing(WindowingRequest::Headless)
         .run(move |cx| {
@@ -59,9 +63,8 @@ fn main() {
             let hud = hud::open(cx).expect("hud window");
             if let Err(e) = tray::install(cx, |c, cx| match c {
                 tray::Command::Quit => cx.quit(),
-                tray::Command::History | tray::Command::Settings => {
-                    eprintln!("tray: {c:?} (not built yet)")
-                }
+                tray::Command::History => ui::open(ui::Page::History, cx),
+                tray::Command::Settings => ui::open(ui::Page::General, cx),
             }) {
                 eprintln!("tray: {e}");
             }
@@ -77,7 +80,12 @@ fn main() {
 /// the main thread, then the HUD and the hotkey's view of the controller are updated.
 fn run(hud: WindowHandle<hud::Hud>, cx: &mut App) {
     let (tx, rx) = async_channel::unbounded::<Msg>();
-    let keys = install_hotkey(tx.clone());
+    let state = std::sync::Arc::new(hotkey::State::default());
+    install_hotkey(tx.clone(), state.clone());
+    cx.set_global(ui::Live {
+        tx: tx.clone(),
+        keys: state.clone(),
+    });
     let mut driver = driver::Driver::live(
         tx,
         cx.foreground_executor().clone(),
@@ -96,7 +104,7 @@ fn run(hud: WindowHandle<hud::Hud>, cx: &mut App) {
     cx.spawn(async move |cx| {
         while let Ok(m) = rx.recv().await {
             ctl.handle(m, &mut driver);
-            keys(ctl.keys());
+            state.set(ctl.keys());
             let changes = std::mem::take(&mut driver.hud);
             let _ = cx.update(|cx| changes.into_iter().for_each(|h| hud::apply(&hud, h, cx)));
         }
@@ -105,11 +113,7 @@ fn run(hud: WindowHandle<hud::Hud>, cx: &mut App) {
 }
 
 /// Starts the key hook. macOS: once Accessibility is granted (asks once at launch, then polls without prompting).
-/// Returns the sink for the controller facts the hook needs.
-fn install_hotkey(tx: async_channel::Sender<Msg>) -> impl Fn(Keys) {
-    let state = std::sync::Arc::new(hotkey::State::default());
-    let (hold, tap) = config::hotkeys();
-    let s = state.clone();
+fn install_hotkey(tx: async_channel::Sender<Msg>, state: std::sync::Arc<hotkey::State>) {
     #[cfg(target_os = "macos")]
     let trusted = mac::request_trust();
     std::thread::spawn(move || {
@@ -120,12 +124,12 @@ fn install_hotkey(tx: async_channel::Sender<Msg>) -> impl Fn(Keys) {
                 std::thread::sleep(std::time::Duration::from_secs(2));
             }
         }
-        match hotkey::spawn(hold, tap, tx, s) {
+        let (hold, tap) = config::hotkeys();
+        match hotkey::spawn(tx, state) {
             Ok(()) => trace::log(&format!("hotkey hold={hold} tap={tap}")),
             Err(e) => trace::log(&format!("hotkey: {e}")),
         }
     });
-    move |k| state.set(k)
 }
 
 #[cfg(target_os = "macos")]

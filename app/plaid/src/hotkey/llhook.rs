@@ -49,7 +49,7 @@ impl Hook {
         let swallow = t.key(code, down, win::event_time(k.time), repeat, &other);
         // Whether injected input lands before or after the event being hooked is not documented, so the mask goes
         // out on both edges: one of them always falls between the bound key's down and up.
-        let bound = code == t.hold || code == t.tap;
+        let bound = code == t.hold() || code == t.tap();
         (swallow, bound && !repeat && vk::needs_mask(code))
     }
 }

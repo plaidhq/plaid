@@ -64,6 +64,24 @@ pub fn raw(key: &str) -> Option<String> {
     })
 }
 
+/// Writes one setting into settings.json (read-modify-write, unknown keys kept); `Null` removes it.
+pub fn set(key: &str, v: serde_json::Value) -> std::io::Result<()> {
+    let path = data_dir().join("settings.json");
+    let mut map = std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(&b).ok())
+        .unwrap_or_default();
+    if v.is_null() {
+        map.remove(key);
+    } else {
+        map.insert(key.into(), v);
+    }
+    std::fs::create_dir_all(data_dir())?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(&map)?)?;
+    std::fs::rename(tmp, path)
+}
+
 pub fn session_options(key: String) -> plaid_core::session::Options {
     let mut o = plaid_core::session::Options::new(key);
     if let Some(u) = value("url") {

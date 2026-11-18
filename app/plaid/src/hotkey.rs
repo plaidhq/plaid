@@ -6,7 +6,7 @@ use crate::os;
 use async_channel::Sender;
 use plaid_core::dictation::{Keys, Msg};
 use plaid_core::gesture::{Gesture, HOLD_DELAY, KeyEvent, Press};
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -28,12 +28,18 @@ const RETURN: i32 = 36;
 const ENTER: i32 = 76;
 const ESCAPE: i32 = 53;
 
-/// Controller facts the hook reads.
+const CAPS_LOCK: i32 = 57;
+
+/// Controller facts the hook reads, the bindings (changed live from settings) and the shortcut recorder.
 #[derive(Default)]
 pub struct State {
     toggled: AtomicBool,
     escape: AtomicBool,
     enter: AtomicBool,
+    hold: AtomicI32,
+    tap: AtomicI32,
+    /// While set, the next key press goes here instead of the gesture (-1: esc cancelled).
+    recorder: Mutex<Option<Sender<i32>>>,
 }
 
 impl State {
@@ -42,11 +48,41 @@ impl State {
         self.escape.store(k.escape, Relaxed);
         self.enter.store(k.enter, Relaxed);
     }
+
+    /// Re-reads the bindings from settings.
+    pub fn rebind(&self) {
+        let (hold, tap) = crate::config::hotkeys();
+        self.hold.store(hold, Relaxed);
+        self.tap.store(tap, Relaxed);
+    }
+
+    /// Starts recording; the previous recorder, if any, is dropped (its receiver sees the channel close).
+    pub fn record(&self, to: Sender<i32>) {
+        *self.recorder.lock().unwrap() = Some(to);
+    }
+
+    pub fn stop_recording(&self) {
+        self.recorder.lock().unwrap().take();
+    }
+
+    pub fn recording(&self) -> bool {
+        self.recorder.lock().unwrap().is_some()
+    }
+
+    /// Recorder rules (as the Swift app): esc cancels, ⏎/enter/caps lock are ignored, anything else is taken.
+    /// Returns whether the event was consumed.
+    fn recorded(&self, code: i32, down: bool, repeat: bool) -> bool {
+        let mut r = self.recorder.lock().unwrap();
+        let Some(to) = r.as_ref() else { return false };
+        if down && !repeat && ![RETURN, ENTER, CAPS_LOCK].contains(&code) {
+            let _ = to.try_send(if code == ESCAPE { -1 } else { code });
+            r.take();
+        }
+        true
+    }
 }
 
 struct Tap {
-    hold: i32,
-    tap: i32,
     gesture: Mutex<Gesture>,
     state: Arc<State>,
     tx: Sender<Msg>,
@@ -58,6 +94,14 @@ fn trigger_ms(at: f64) -> Option<i64> {
 }
 
 impl Tap {
+    fn hold(&self) -> i32 {
+        self.state.hold.load(Relaxed)
+    }
+
+    fn tap(&self) -> i32 {
+        self.state.tap.load(Relaxed)
+    }
+
     fn send(&self, m: Msg) {
         let _ = self.tx.try_send(m);
     }
@@ -72,6 +116,10 @@ impl Tap {
         repeat: bool,
         other: &dyn Fn(i32) -> bool,
     ) -> bool {
+        if self.state.recorded(code, down, repeat) {
+            return true;
+        }
+        let (hold, tap) = (self.hold(), self.tap());
         let mut g = self.gesture.lock().unwrap();
         let previous = g.press();
         let e = KeyEvent {
@@ -82,7 +130,7 @@ impl Tap {
             repeat,
             other,
         };
-        let (swallow, actions) = g.key(&e, self.hold, self.tap, self.state.toggled.load(Relaxed));
+        let (swallow, actions) = g.key(&e, hold, tap, self.state.toggled.load(Relaxed));
         let triggered = g.press().or(previous).map(|p| p.at);
         for action in actions {
             self.send(Msg::Key {
@@ -92,7 +140,7 @@ impl Tap {
         }
         if let Some(p) = g
             .press()
-            .filter(|p| !p.other_key && p.code == self.hold && !same(Some(*p), previous))
+            .filter(|p| !p.other_key && p.code == hold && !same(Some(*p), previous))
         {
             let me = self.clone();
             std::thread::spawn(move || {
@@ -103,7 +151,7 @@ impl Tap {
                 if !same(g.press(), Some(p)) {
                     return;
                 }
-                for action in g.advance(os::now(), me.hold) {
+                for action in g.advance(os::now(), me.hold()) {
                     me.send(Msg::Key {
                         action,
                         trigger_ms: trigger_ms(p.at),
@@ -116,6 +164,9 @@ impl Tap {
 
     /// Only unmodified ⏎/esc belong to Plaid, and only while the controller says so. Key-down only.
     fn command_key(&self, code: i32) -> bool {
+        if self.state.recording() {
+            return false;
+        }
         let msg = match code {
             ESCAPE if self.state.escape.load(Relaxed) => Msg::Escape,
             RETURN | ENTER if self.state.enter.load(Relaxed) => Msg::Return,
@@ -134,12 +185,11 @@ fn same(a: Option<Press>, b: Option<Press>) -> bool {
     }
 }
 
-/// Installs the hook on its own thread. macOS callers check `mac::trusted()` first (an active tap needs
-/// Accessibility). -1 disables a binding.
-pub fn spawn(hold: i32, tap: i32, tx: Sender<Msg>, state: Arc<State>) -> Result<(), String> {
+/// Installs the hook on its own thread with the bindings from settings. macOS callers check `mac::trusted()`
+/// first (an active tap needs Accessibility).
+pub fn spawn(tx: Sender<Msg>, state: Arc<State>) -> Result<(), String> {
+    state.rebind();
     hook::install(Arc::new(Tap {
-        hold,
-        tap,
         gesture: Default::default(),
         state,
         tx,
