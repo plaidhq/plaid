@@ -91,7 +91,7 @@ pub fn bold() -> FontWeight {
     FontWeight::BOLD
 }
 
-fn shadow(x: f32, y: f32, blur: f32, spread: f32, color: u32, inset: bool) -> BoxShadow {
+pub fn shadow(x: f32, y: f32, blur: f32, spread: f32, color: u32, inset: bool) -> BoxShadow {
     BoxShadow {
         color: hexa(color),
         offset: point(px(x), px(y)),
@@ -981,35 +981,20 @@ pub fn bar_button(
 
 /// Twelve-spoke progress indicator; `phase` rotates the bright spoke.
 pub fn spinner(size: f32, color: u32, phase: usize) -> Div {
-    let r = size / 2.;
     div()
         .relative()
         .size(px(size))
         .flex_none()
         .children((0..12).map(|i| {
-            let a = (i as f32) * std::f32::consts::TAU / 12.;
-            let (dx, dy) = (a.sin(), -a.cos());
             let o = 0.2 + 0.8 * (((12 + phase - i) % 12) as f32 / 11.);
-            let len = size * 0.28;
-            let mid = r - len / 2. - 0.5;
-            let w = (size / 9.).max(1.5);
-            let (cx, cy) = (r + dx * mid, r + dy * mid);
-            // Spokes as small round dots stretched along the radius are hard without transforms; use short capsules
-            // oriented by quadrant: vertical near 12/6 o'clock, horizontal near 3/9, square dots between.
-            let (sw, sh) = if dy.abs() > 0.8 {
-                (w, len)
-            } else if dx.abs() > 0.8 {
-                (len, w)
-            } else {
-                (w * 1.6, w * 1.6)
-            };
-            div()
+            svg()
+                .path("plaid/spoke.svg")
                 .absolute()
-                .left(px(cx - sw / 2.))
-                .top(px(cy - sh / 2.))
-                .w(px(sw))
-                .h(px(sh))
-                .rounded(px(w))
-                .bg(hexa((color << 8) | ((o * 255.) as u32)))
+                .inset_0()
+                .size(px(size))
+                .text_color(hexa((color << 8) | ((o * 255.) as u32)))
+                .with_transformation(Transformation::rotate(radians(
+                    i as f32 * std::f32::consts::TAU / 12.,
+                )))
         }))
 }

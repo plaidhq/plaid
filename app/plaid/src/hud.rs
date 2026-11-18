@@ -1,78 +1,454 @@
 // Recording HUD: a small always-on-top window that never takes focus and lets the mouse through.
 // GPUI's PopUp kind gives a non-activating NSPanel at NSPopUpWindowLevel on macOS and a
 // WS_EX_TOOLWINDOW | WS_EX_TOPMOST window on Windows; the rest is patched through the native handle.
+use crate::ui::mav::{self, Status};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+use plaid_core::dictation::Hud as Msg;
+use std::time::Instant;
 
-const W: f32 = 420.;
-const H: f32 = 56.;
+/// The panel per the design; the window adds room around it for the drop shadow.
+const PANEL_W: f32 = 440.;
+const PANEL_H: f32 = 54.;
+const PAD_TOP: f32 = 14.;
+const PAD_BOTTOM: f32 = 34.;
+const W: f32 = PANEL_W + 40.;
+const H: f32 = PAD_TOP + PANEL_H + PAD_BOTTOM;
+/// Gap between the panel and the bottom of the visible screen area.
+const LIFT: f32 = 40.;
+const BARS: usize = 6;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Phase {
-    Listening,
+enum State {
+    Listen,
+    Quiet,
     Finishing,
+    Refining,
     Done,
-    Error,
+    Saved,
+    Flash,
+    Failed,
+    Ask,
+    Running,
+    Note,
+}
+
+/// What the window has to do after a message.
+#[derive(PartialEq, Debug)]
+pub enum Effect {
+    Ignore,
+    Redraw,
+    Hide,
+    /// Show, then hide after this many seconds unless something newer arrives.
+    Show(Option<f32>),
 }
 
 pub struct Hud {
-    phase: Phase,
+    state: State,
     text: SharedString,
-    /// The text is a low-input note that the next loud buffer clears.
-    quiet: bool,
-    /// Bumped on every change; a pending auto-hide only fires if nothing changed since.
+    /// The live text parses as a voice command.
+    command: bool,
+    /// Tap-started dictation that keeps going after key-up.
+    continuous: bool,
+    /// The previous state was a command run, so `Done` reports the command, not a paste.
+    ran: bool,
+    /// Recent input levels in 0...1, oldest first.
+    levels: [f32; BARS],
+    started: Option<Instant>,
+    spin: usize,
+    visible: bool,
+    /// Bumped on every shown change; a pending auto-hide only fires if nothing changed since.
     epoch: u64,
 }
 
 impl Hud {
-    pub fn set(&mut self, phase: Phase, text: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.phase = phase;
-        self.text = text.into();
-        cx.notify();
+    pub fn new() -> Hud {
+        Hud {
+            state: State::Listen,
+            text: "".into(),
+            command: false,
+            continuous: false,
+            ran: false,
+            levels: [0.; BARS],
+            started: None,
+            spin: 0,
+            visible: false,
+            epoch: 0,
+        }
     }
+
+    /// Updates the state for one controller message.
+    pub fn apply(&mut self, m: Msg) -> Effect {
+        let prev = self.state;
+        let (state, hide_after) = match m {
+            Msg::Level(r) => {
+                if !matches!(self.state, State::Listen | State::Quiet) {
+                    return Effect::Ignore;
+                }
+                self.levels.rotate_left(1);
+                self.levels[BARS - 1] = level(r);
+                return Effect::Redraw;
+            }
+            Msg::Hide => return Effect::Hide,
+            Msg::Unquiet if self.state != State::Quiet => return Effect::Ignore,
+            Msg::Listen => {
+                self.text = "".into();
+                self.command = false;
+                self.continuous = false;
+                self.levels = [0.; BARS];
+                self.started = Some(Instant::now());
+                (State::Listen, None)
+            }
+            Msg::Unquiet => (State::Listen, None),
+            Msg::Quiet(s) => {
+                self.text = s.into();
+                (State::Quiet, None)
+            }
+            Msg::Text { text, command } => {
+                self.text = text.into();
+                self.command = command;
+                (State::Listen, None)
+            }
+            Msg::Continuous => {
+                self.continuous = true;
+                (self.state, None)
+            }
+            Msg::Finishing => {
+                if self.state == State::Quiet {
+                    self.text = "".into();
+                }
+                (State::Finishing, None)
+            }
+            Msg::Refining(t) => self.with(t, State::Refining, None),
+            Msg::Done(t) => {
+                self.ran = prev == State::Running;
+                self.with(t, State::Done, Some(0.5))
+            }
+            Msg::Saved(t) => self.with(t, State::Saved, Some(8.)),
+            Msg::Flash(t) => self.with(t, State::Flash, Some(5.)),
+            Msg::Failed(t) => self.with(t, State::Failed, Some(5.)),
+            Msg::Ask(t) => self.with(t, State::Ask, Some(8.)),
+            Msg::Running(t) => self.with(t, State::Running, None),
+            Msg::Note(t) => self.with(t, State::Note, Some(4.)),
+        };
+        self.state = state;
+        if !matches!(state, State::Listen | State::Quiet | State::Finishing) {
+            self.command = false;
+        }
+        Effect::Show(hide_after)
+    }
+
+    fn with(&mut self, t: String, s: State, hide_after: Option<f32>) -> (State, Option<f32>) {
+        self.text = t.into();
+        (s, hide_after)
+    }
+
+    fn spins(&self) -> bool {
+        self.visible && matches!(self.state, State::Finishing | State::Running)
+    }
+
+    fn elapsed(&self) -> Option<String> {
+        let s = self.started?.elapsed().as_secs();
+        Some(format!("{}:{:02}", s / 60, s % 60))
+    }
+}
+
+/// Buffer RMS (Int16 scale) to bar height: log scale between 60 (silence) and 3000 (loud speech).
+fn level(rms: f64) -> f32 {
+    let (lo, hi) = (60f64.ln(), 3000f64.ln());
+    ((rms.max(1.).ln() - lo) / (hi - lo)).clamp(0., 1.) as f32
+}
+
+const WHITE: u32 = 0xffffff;
+const AMBER: u32 = 0xffc65a;
+const CYAN: u32 = 0x7fd8ff;
+
+fn bars(levels: &[f32; BARS]) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(2.))
+        .h(px(22.))
+        .children(levels.iter().map(|v| {
+            div()
+                .w(px(3.))
+                .h(px(3. + 19. * v))
+                .rounded(px(2.))
+                .bg(mav::vgrad(0xffffff, 0xcfd8e3))
+        }))
+}
+
+/// Jewel with a glossy top and a white glyph.
+fn gem(s: Status, glyph: &'static str, size: f32) -> Div {
+    mav::dot(s, 22.)
+        .relative()
+        .flex()
+        .items_center()
+        .justify_center()
+        .shadow(vec![
+            mav::shadow(0., 0., 0., 1., 0x00000066, true),
+            mav::shadow(0., 1., 0., 0., 0xffffff1f, false),
+        ])
+        .child(
+            div()
+                .absolute()
+                .top(px(1.5))
+                .left(px(4.))
+                .w(px(14.))
+                .h(px(8.))
+                .rounded_full()
+                .bg(linear_gradient(
+                    180.,
+                    linear_color_stop(mav::hexa(0xffffffb0), 0.),
+                    linear_color_stop(mav::hexa(0xffffff00), 1.),
+                )),
+        )
+        .child(mav::icon(glyph, size, mav::hex(WHITE)))
+}
+
+/// Translucent key cap for the dark panel.
+fn key(text: &'static str) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .min_w(px(22.))
+        .h(px(18.))
+        .px(px(5.))
+        .rounded(px(4.))
+        .bg(linear_gradient(
+            180.,
+            linear_color_stop(mav::hexa(0xffffff3d), 0.),
+            linear_color_stop(mav::hexa(0xffffff1a), 1.),
+        ))
+        .border_1()
+        .border_color(mav::hexa(0xffffff4d))
+        .text_color(mav::hex(WHITE))
+        .child(text)
+}
+
+enum Hint {
+    Key(&'static str),
+    Text(&'static str),
 }
 
 impl Render for Hud {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let dot = match self.phase {
-            Phase::Listening => rgb(0xff453a),
-            Phase::Finishing => rgb(0xffd60a),
-            Phase::Done => rgb(0x30d158),
-            Phase::Error => rgb(0xff9f0a),
+        use Hint::*;
+        let glyph = |path, size| mav::icon(path, size, mav::hex(WHITE)).into_any_element();
+        let (icon, label, label_color, hints, meta): (AnyElement, &str, u32, Vec<Hint>, bool) =
+            match self.state {
+                State::Listen => (
+                    bars(&self.levels).into_any_element(),
+                    match (self.command, self.continuous) {
+                        (true, _) => "命令",
+                        (false, true) => "连续听写",
+                        (false, false) => "正在听",
+                    },
+                    0,
+                    if self.continuous {
+                        vec![Key("⏎"), Text("结束")]
+                    } else {
+                        vec![]
+                    },
+                    true,
+                ),
+                State::Quiet => (
+                    mav::icon("plaid/mic.svg", 20., mav::hex(AMBER)).into_any_element(),
+                    "电平过低",
+                    AMBER,
+                    vec![],
+                    true,
+                ),
+                State::Finishing | State::Running => (
+                    mav::spinner(18., WHITE, self.spin).into_any_element(),
+                    if self.state == State::Finishing {
+                        "收尾"
+                    } else {
+                        "处理中"
+                    },
+                    0,
+                    vec![],
+                    false,
+                ),
+                State::Refining => (
+                    glyph("plaid/refine.svg", 22.),
+                    "优化中",
+                    0,
+                    vec![Key("esc"), Text("用原文")],
+                    false,
+                ),
+                State::Done => (
+                    gem(Status::Ok, "plaid/check.svg", 11.).into_any_element(),
+                    if self.ran { "已执行" } else { "已粘贴" },
+                    0,
+                    vec![],
+                    false,
+                ),
+                State::Note => (
+                    gem(Status::Ok, "plaid/check.svg", 11.).into_any_element(),
+                    "完成",
+                    0,
+                    vec![],
+                    false,
+                ),
+                State::Saved => (
+                    gem(Status::Warn, "plaid/exclaim.svg", 12.).into_any_element(),
+                    "已保存，未粘贴",
+                    0,
+                    vec![Text("在历史中查看")],
+                    false,
+                ),
+                State::Flash => (
+                    gem(Status::Warn, "plaid/exclaim.svg", 12.).into_any_element(),
+                    "提示",
+                    0,
+                    vec![],
+                    false,
+                ),
+                State::Failed => (
+                    gem(Status::Err, "plaid/xmark.svg", 10.).into_any_element(),
+                    "失败",
+                    0,
+                    vec![],
+                    false,
+                ),
+                State::Ask => (
+                    glyph("plaid/commands.svg", 22.),
+                    "执行命令？",
+                    0,
+                    vec![Key("⏎"), Text("执行"), Key("esc"), Text("取消")],
+                    false,
+                ),
+            };
+        let live = matches!(self.state, State::Listen | State::Finishing);
+        let dim = matches!(self.state, State::Finishing | State::Refining);
+        let (text, placeholder) = if self.text.is_empty() {
+            let p = match self.state {
+                State::Listen if self.continuous => "再按一次快捷键或 ⏎ 结束",
+                State::Listen => "请说话…",
+                _ => "等待最终结果…",
+            };
+            (SharedString::from(p), true)
+        } else {
+            (self.text.clone(), false)
+        };
+        let text_color = if self.command && live && !dim {
+            mav::hex(CYAN)
+        } else if dim || placeholder {
+            mav::hexa(0xffffff9e)
+        } else {
+            mav::hex(WHITE)
+        };
+        let line = div()
+            .text_size(px(14.))
+            .line_height(px(19.))
+            .text_color(text_color)
+            .overflow_hidden()
+            .whitespace_nowrap();
+        // Live partials keep their newest words; everything else keeps its start.
+        let line = if live {
+            line.text_ellipsis_start()
+        } else {
+            line.text_ellipsis()
         };
         div()
             .size_full()
             .flex()
-            .items_center()
             .justify_center()
+            .pt(px(PAD_TOP))
             .child(
                 div()
+                    .w(px(PANEL_W))
+                    .h(px(PANEL_H))
+                    .px(px(14.))
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .px_4()
-                    .py_2()
-                    .max_w_full()
-                    .rounded_full()
-                    .bg(rgba(0x1c1c1ee6))
-                    .text_color(rgb(0xf5f5f7))
-                    .text_sm()
-                    .child(div().size_2().flex_none().rounded_full().bg(dot))
-                    .child(div().truncate().child(self.text.clone())),
+                    .gap(px(12.))
+                    .rounded(px(9.))
+                    .bg(mav::hexa(0x181818d1))
+                    .shadow(vec![
+                        mav::shadow(0., 0., 0., 1., 0x0000008c, false),
+                        mav::shadow(0., 1., 0., 0., 0xffffff24, true),
+                        mav::shadow(0., 8., 24., 0., 0x00000059, false),
+                    ])
+                    .font(mav::font())
+                    .text_color(mav::hex(WHITE))
+                    .child(
+                        div()
+                            .size(px(28.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(icon),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .line_height(px(13.))
+                                    .font_weight(mav::bold())
+                                    .text_color(if label_color == 0 {
+                                        mav::hexa(0xffffff94)
+                                    } else {
+                                        mav::hex(label_color)
+                                    })
+                                    .child(SharedString::from(label)),
+                            )
+                            .child(line.child(text)),
+                    )
+                    .when(!hints.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .text_size(px(11.))
+                                .text_color(mav::hexa(0xffffffbf))
+                                .children(hints.into_iter().map(|h| match h {
+                                    Key(k) => key(k).into_any_element(),
+                                    Text(t) => div().child(t).into_any_element(),
+                                })),
+                        )
+                    })
+                    .when_some(meta.then(|| self.elapsed()).flatten(), |d, m| {
+                        d.child(
+                            div()
+                                .flex_none()
+                                .text_size(px(11.))
+                                .text_color(mav::hexa(0xffffff8c))
+                                .child(m),
+                        )
+                    }),
             )
     }
 }
 
-/// Opens the HUD hidden. Show and hide go through `show`/`hide`, which order the native window
-/// without activating the app.
+/// Opens the HUD hidden, bottom center of the primary display. Show and hide go through `apply`/`hide`, which
+/// order the native window without activating the app.
 pub fn open(cx: &mut App) -> Result<WindowHandle<Hud>> {
-    let display = cx.primary_display().map(|d| d.bounds());
+    let display = cx.primary_display().map(|d| d.visible_bounds());
     let origin = display.map_or(point(px(200.), px(200.)), |b| {
         point(
             b.origin.x + (b.size.width - px(W)) / 2.,
-            b.origin.y + b.size.height - px(H + 96.),
+            b.origin.y + b.size.height - px(LIFT + PANEL_H + PAD_TOP),
         )
     });
-    let opts = WindowOptions {
+    let handle = cx.open_window(options(origin), |_, cx| cx.new(|_| Hud::new()))?;
+    handle.update(cx, |_, window, _| native::configure(window))?;
+    Ok(handle)
+}
+
+pub fn options(origin: Point<Pixels>) -> WindowOptions {
+    WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds {
             origin,
             size: size(px(W), px(H)),
@@ -86,105 +462,79 @@ pub fn open(cx: &mut App) -> Result<WindowHandle<Hud>> {
         is_minimizable: false,
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
-    };
-    let handle = cx.open_window(opts, |_, cx| {
-        cx.new(|_| Hud {
-            phase: Phase::Listening,
-            text: "".into(),
-            quiet: false,
-            epoch: 0,
-        })
-    })?;
-    handle.update(cx, |_, window, _| native::configure(window))?;
-    Ok(handle)
-}
-
-/// Only the HUD test sets a phase directly; the dictation loop goes through `apply`.
-#[cfg(target_os = "macos")]
-pub fn show(handle: &WindowHandle<Hud>, phase: Phase, text: impl Into<SharedString>, cx: &mut App) {
-    let text = text.into();
-    let _ = handle.update(cx, |hud, window, cx| {
-        hud.set(phase, text, cx);
-        native::set_visible(window, true);
-    });
+    }
 }
 
 pub fn hide(handle: &WindowHandle<Hud>, cx: &mut App) {
     let _ = handle.update(cx, |hud, window, _| {
         hud.epoch += 1;
+        hud.visible = false;
         native::set_visible(window, false);
     });
 }
 
-const LISTENING: &str = "正在听…";
-
-/// Applies one controller HUD change. Placeholder presentation until the HUD is redesigned.
-pub fn apply(handle: &WindowHandle<Hud>, h: plaid_core::dictation::Hud, cx: &mut App) {
-    use plaid_core::dictation::Hud as H;
-    let Ok((text, quiet)) = handle.read_with(cx, |hud, _| (hud.text.clone(), hud.quiet)) else {
+/// Applies one controller HUD change to the window: show, hide, schedule the auto-hide, run the spinner.
+pub fn apply(handle: &WindowHandle<Hud>, m: Msg, cx: &mut App) {
+    let Ok((effect, spin_started, epoch)) = handle.update(cx, |hud, window, cx| {
+        let was_spinning = hud.spins();
+        let effect = hud.apply(m);
+        match effect {
+            Effect::Ignore | Effect::Hide => {}
+            Effect::Redraw => cx.notify(),
+            Effect::Show(_) => {
+                hud.epoch += 1;
+                hud.visible = true;
+                native::set_visible(window, true);
+                cx.notify();
+            }
+        }
+        (effect, !was_spinning && hud.spins(), hud.epoch)
+    }) else {
         return;
     };
-    let (next, hide_after): ((Phase, SharedString), Option<f32>) = match h {
-        H::Level(_) => return,
-        H::Hide => return hide(handle, cx),
-        H::Unquiet if !quiet => return,
-        H::Listen | H::Unquiet => ((Phase::Listening, LISTENING.into()), None),
-        H::Quiet(s) => ((Phase::Error, s.into()), None),
-        H::Text { text, command } => (
-            (
-                Phase::Listening,
-                if command {
-                    format!("命令 · {text}")
-                } else {
-                    text
-                }
-                .into(),
-            ),
-            None,
-        ),
-        H::Continuous => (
-            (
-                Phase::Listening,
-                if text == LISTENING {
-                    "连续听写 · 再按一次或 ⏎ 结束".into()
-                } else {
-                    text
-                },
-            ),
-            None,
-        ),
-        H::Finishing => ((Phase::Finishing, text), None),
-        H::Refining(t) => ((Phase::Finishing, t.into()), None),
-        H::Done(t) => ((Phase::Done, t.into()), Some(0.5)),
-        H::Saved(s) => ((Phase::Error, s.into()), Some(8.)),
-        H::Flash(s) => ((Phase::Error, s.into()), Some(5.)),
-        H::Ask(s) => ((Phase::Finishing, s.into()), Some(8.)),
-        H::Running(s) => ((Phase::Finishing, s.into()), None),
-        H::Note(s) => ((Phase::Done, s.into()), Some(4.)),
-    };
-    let quiet = matches!(next.0, Phase::Error) && hide_after.is_none();
-    let mut epoch = 0;
-    let _ = handle.update(cx, |hud, window, cx| {
-        hud.quiet = quiet;
-        hud.epoch += 1;
-        epoch = hud.epoch;
-        hud.set(next.0, next.1, cx);
-        native::set_visible(window, true);
-    });
-    if let Some(secs) = hide_after {
-        let handle = *handle;
+    let handle = *handle;
+    match effect {
+        Effect::Hide => hide(&handle, cx),
+        Effect::Show(Some(secs)) => {
+            cx.spawn(async move |cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs_f32(secs))
+                    .await;
+                cx.update(|cx| {
+                    if handle
+                        .read_with(cx, |hud, _| hud.epoch == epoch)
+                        .unwrap_or(false)
+                    {
+                        hide(&handle, cx);
+                    }
+                });
+            })
+            .detach();
+        }
+        _ => {}
+    }
+    if spin_started {
         cx.spawn(async move |cx| {
-            cx.background_executor()
-                .timer(std::time::Duration::from_secs_f32(secs))
-                .await;
-            let _ = cx.update(|cx| {
-                if handle
-                    .read_with(cx, |hud, _| hud.epoch == epoch)
-                    .unwrap_or(false)
-                {
-                    hide(&handle, cx);
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(83))
+                    .await;
+                let go = cx.update(|cx| {
+                    handle
+                        .update(cx, |hud, _, cx| {
+                            let go = hud.spins();
+                            if go {
+                                hud.spin += 1;
+                                cx.notify();
+                            }
+                            go
+                        })
+                        .unwrap_or(false)
+                });
+                if !go {
+                    break;
                 }
-            });
+            }
         })
         .detach();
     }
@@ -263,4 +613,46 @@ pub mod native {
 
     pub fn configure(_: &Window) {}
     pub fn set_visible(_: &Window, _: bool) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BARS, Effect, Hud, Msg, State, level};
+
+    #[test]
+    fn transitions() {
+        let mut h = Hud::new();
+        assert_eq!(h.apply(Msg::Listen), Effect::Show(None));
+        assert_eq!(h.apply(Msg::Unquiet), Effect::Ignore);
+        assert_eq!(h.apply(Msg::Level(3000.)), Effect::Redraw);
+        assert_eq!(h.levels[BARS - 1], 1.);
+        h.apply(Msg::Quiet("low".into()));
+        assert_eq!(h.state, State::Quiet);
+        assert_eq!(h.apply(Msg::Unquiet), Effect::Show(None));
+        assert_eq!(h.state, State::Listen);
+        h.apply(Msg::Text {
+            text: "Plaid 天气".into(),
+            command: true,
+        });
+        h.apply(Msg::Finishing);
+        assert!(h.command && h.text == "Plaid 天气");
+        assert_eq!(h.apply(Msg::Level(100.)), Effect::Ignore);
+        h.apply(Msg::Running("天气".into()));
+        assert!(!h.command);
+        assert_eq!(h.apply(Msg::Done("天气".into())), Effect::Show(Some(0.5)));
+        assert!(h.ran);
+        h.apply(Msg::Listen);
+        assert_eq!(h.apply(Msg::Done("text".into())), Effect::Show(Some(0.5)));
+        assert!(!h.ran);
+        assert_eq!(h.apply(Msg::Failed("x".into())), Effect::Show(Some(5.)));
+        assert_eq!(h.apply(Msg::Hide), Effect::Hide);
+    }
+
+    #[test]
+    fn level_scale() {
+        assert_eq!(level(0.), 0.);
+        assert_eq!(level(60.), 0.);
+        assert_eq!(level(10_000.), 1.);
+        assert!((level(424.26) - 0.5).abs() < 0.01);
+    }
 }

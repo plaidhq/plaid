@@ -13,6 +13,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let Some(out) = args.first() else {
         return Err("usage: plaid --snapshot <outdir> [page…]".into());
     };
+    if args.get(1).map(String::as_str) == Some("hud") {
+        return hud(out);
+    }
     let pages: Vec<Page> = if args.len() > 1 {
         args[1..]
             .iter()
@@ -30,6 +33,103 @@ pub fn run(args: &[String]) -> Result<(), String> {
     for page in pages {
         ui.open(page, facts())?;
         ui.shot(page.slug())?;
+        ui.close()?;
+    }
+    Ok(())
+}
+
+/// `plaid --snapshot <outdir> hud`: each HUD state over a desktop-like backdrop, one PNG per state.
+fn hud(out: &str) -> Result<(), String> {
+    use plaid_core::dictation::Hud as H;
+    struct Backdrop(Entity<crate::hud::Hud>);
+    impl Render for Backdrop {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .bg(linear_gradient(
+                    165.,
+                    linear_color_stop(mav::hex(0x7f9aba), 0.),
+                    linear_color_stop(mav::hex(0x1f334d), 1.),
+                ))
+                .child(self.0.clone())
+        }
+    }
+    let partial =
+        "好的，那我们周四下午三点在公司楼下见，记得带上那份合同，还有上次说的报价单也一起带过来";
+    let text = |t: &str, command| H::Text {
+        text: t.into(),
+        command,
+    };
+    let levels = [400., 1500., 3000., 800., 2000., 300.].map(H::Level);
+    let states: Vec<(&str, Vec<H>)> = vec![
+        ("hud-listen-empty", vec![H::Listen]),
+        (
+            "hud-listen",
+            [vec![H::Listen], levels.to_vec(), vec![text(partial, false)]].concat(),
+        ),
+        (
+            "hud-continuous",
+            [
+                vec![H::Listen, H::Continuous],
+                levels.to_vec(),
+                vec![text("周四下午三点", false)],
+            ]
+            .concat(),
+        ),
+        ("hud-command", vec![H::Listen, text("Plaid 打开日历", true)]),
+        (
+            "hud-quiet",
+            vec![
+                H::Listen,
+                H::Level(20.),
+                H::Quiet("几乎没有声音 · MacBook Pro 麦克风".into()),
+            ],
+        ),
+        (
+            "hud-finishing",
+            vec![H::Listen, text(partial, false), H::Finishing],
+        ),
+        ("hud-refining", vec![H::Refining(partial.into())]),
+        ("hud-done", vec![H::Done(partial.into())]),
+        (
+            "hud-saved",
+            vec![H::Saved(
+                "输入位置已变化或无法确认，本次结果没有自动粘贴。".into(),
+            )],
+        ),
+        ("hud-flash", vec![H::Flash("学会：克劳德 → Claude".into())]),
+        (
+            "hud-failed",
+            vec![H::Failed("HTTP 401；可在历史里查看".into())],
+        ),
+        ("hud-ask", vec![H::Ask("打开日历".into())]),
+        ("hud-running", vec![H::Running("打开日历".into())]),
+        (
+            "hud-ran",
+            vec![H::Running("天气".into()), H::Done("天气".into())],
+        ),
+        ("hud-note", vec![H::Note("识别结果已保存在原记录中".into())]),
+    ];
+    let mut ui = Ui::new(out)?;
+    for (name, msgs) in states {
+        let (handle, _) = ui
+            .cx
+            .update(|cx| {
+                let hud = cx.new(|_| {
+                    let mut h = crate::hud::Hud::new();
+                    for m in msgs {
+                        h.apply(m);
+                    }
+                    h
+                });
+                let mut opts = crate::hud::options(point(px(0.), px(0.)));
+                opts.window_background = WindowBackgroundAppearance::Opaque;
+                gpui_kit::open_window(opts, cx, |_, cx| cx.new(|_| Backdrop(hud)))
+            })
+            .map_err(|e| e.to_string())?;
+        ui.window = Some(handle.into());
+        ui.frame()?;
+        ui.shot(name)?;
         ui.close()?;
     }
     Ok(())

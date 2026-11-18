@@ -137,6 +137,7 @@ fn install_hotkey(tx: async_channel::Sender<Msg>, state: std::sync::Arc<hotkey::
 
 #[cfg(target_os = "macos")]
 fn hud_test(hud: WindowHandle<hud::Hud>, hold: u64, cx: &mut App) {
+    use plaid_core::dictation::Hud;
     cx.spawn(async move |cx| {
         let probe = |tag: &str, cx: &mut AsyncApp| {
             let p = cx.update(|cx| {
@@ -151,10 +152,13 @@ fn hud_test(hud: WindowHandle<hud::Hud>, hold: u64, cx: &mut App) {
         let sleep = |ms| exec.timer(std::time::Duration::from_millis(ms));
         let before = probe("before show", cx);
         cx.update(|cx| {
-            hud::show(
+            hud::apply(&hud, Hud::Listen, cx);
+            hud::apply(
                 &hud,
-                hud::Phase::Listening,
-                "测试 HUD：不应抢走焦点 — focus must stay where it was",
+                Hud::Text {
+                    text: "测试 HUD：不应抢走焦点 — focus must stay where it was".into(),
+                    command: false,
+                },
                 cx,
             )
         });
@@ -162,7 +166,7 @@ fn hud_test(hud: WindowHandle<hud::Hud>, hold: u64, cx: &mut App) {
         let after = probe("300 ms after show", cx);
         sleep(700).await;
         let late = probe("1 s after show", cx);
-        cx.update(|cx| hud::show(&hud, hud::Phase::Finishing, "收尾状态 finishing", cx));
+        cx.update(|cx| hud::apply(&hud, Hud::Finishing, cx));
         sleep(hold * 1000).await;
         let end = probe("end of hold", cx);
         cx.update(|cx| hud::hide(&hud, cx));

@@ -31,6 +31,10 @@ fn icon(name: &str) -> Option<String> {
         "plus" => r##"<path d="M8 2.5v11M2.5 8h11" stroke-width="2"/>"##,
         "minus" => r##"<path d="M2.5 8h11" stroke-width="2"/>"##,
         "xmark" => r##"<path d="M4 4l8 8M12 4l-8 8" stroke-width="1.8"/>"##,
+        "spoke" => r##"<path d="M8 1v4.4" stroke-width="1.8"/>"##,
+        "exclaim" => {
+            r##"<path d="M8 2.5v7" stroke-width="2.6"/><circle cx="8" cy="13" r="1.5" fill="#000" stroke="none"/>"##
+        }
         "xcircle" => {
             r##"<circle cx="8" cy="8" r="7" fill="#000" stroke="none"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="#fff" stroke-width="1.6"/>"##
         }

@@ -56,6 +56,7 @@ pub fn replay(path: &str) -> Result<(), String> {
                 h @ (Hud::Done(_)
                 | Hud::Saved(_)
                 | Hud::Flash(_)
+                | Hud::Failed(_)
                 | Hud::Note(_)
                 | Hud::Ask(_)
                 | Hud::Hide) => {

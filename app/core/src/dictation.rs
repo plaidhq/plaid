@@ -44,7 +44,10 @@ pub enum Hud {
     Refining(String),
     Done(String),
     Saved(String),
+    /// Information or a warning.
     Flash(String),
+    /// Recognition, microphone or command failure.
+    Failed(String),
     /// A voice command waiting for ⏎ / esc.
     Ask(String),
     /// A voice command in flight (no auto-hide).
@@ -604,7 +607,7 @@ impl Controller {
             Ok(s) => s,
             Err(e) => {
                 p.log(&format!("start failed: {e}"));
-                return p.hud(Hud::Flash(e));
+                return p.hud(Hud::Failed(e));
             }
         };
         p.hud(Hud::Listen);
@@ -675,7 +678,7 @@ impl Controller {
                 self.phase = Phase::Idle;
                 let msg = format!("麦克风：{e}");
                 self.preserve_failure(&msg, "", p);
-                p.hud(Hud::Flash(msg));
+                p.hud(Hud::Failed(msg));
             }
         }
     }
@@ -801,7 +804,7 @@ impl Controller {
             Ok(_) => {
                 if u.p90().unwrap_or(0) >= QUIET_RMS && u.audio.len() >= 16000 {
                     self.preserve_failure("未识别到文字", &partial, p);
-                    p.hud(Hud::Flash("未识别到文字，可在历史里重试".into()));
+                    p.hud(Hud::Failed("未识别到文字，可在历史里重试".into()));
                 } else if u.low_input() {
                     p.hud(Hud::Flash(u.low_note()));
                 } else {
@@ -811,7 +814,7 @@ impl Controller {
             }
             Err(e) => {
                 self.preserve_failure(&e, &partial, p);
-                p.hud(Hud::Flash(format!("{e}；可在历史里查看")));
+                p.hud(Hud::Failed(format!("{e}；可在历史里查看")));
             }
         }
     }
@@ -991,10 +994,7 @@ impl Controller {
         if !a.confirm {
             return self.launch(&a, &args, env, p);
         }
-        p.hud(Hud::Ask(format!(
-            "{}   ⏎ 执行 · esc 取消",
-            label(&a, &args)
-        )));
+        p.hud(Hud::Ask(label(&a, &args)));
         p.timer(
             CONFIRM_WAIT,
             Msg::Timer {
@@ -1015,7 +1015,7 @@ impl Controller {
         let mine = self.idle() && generation == self.generation;
         if !r.ok() {
             if mine {
-                p.hud(Hud::Flash(format!("{} 失败：{}", a.name, r.failure())));
+                p.hud(Hud::Failed(format!("{} 失败：{}", a.name, r.failure())));
             }
             return;
         }
@@ -1092,7 +1092,7 @@ impl Controller {
             }
             Err(e) => {
                 p.log(&format!("recover failed: {e}"));
-                Hud::Flash(format!("重新识别失败：{e}"))
+                Hud::Failed(format!("重新识别失败：{e}"))
             }
         };
         p.hud(hud);
@@ -1666,7 +1666,7 @@ mod tests {
         let mut t = T::new();
         t.p.key = false;
         let out = t.key(StartHold);
-        assert_eq!(out, vec!["hud Flash(\"未设置火山引擎 API Key\")"]);
+        assert_eq!(out, vec!["hud Failed(\"未设置火山引擎 API Key\")"]);
         assert!(t.c.idle());
         let mut t = T::new();
         t.p.mic_fails = true;
@@ -1974,7 +1974,7 @@ mod tests {
         let out = ran(&mut t, 1, "天气", Some(0), "a\n晴 12°\n", "");
         assert_eq!(out, vec!["hud Note(\"晴 12°\")"]);
         let out = ran(&mut t, 1, "天气", Some(1), "", "warn\ncurl: (6) no host\n");
-        assert_eq!(out, vec!["hud Flash(\"天气 失败：curl: (6) no host\")"]);
+        assert_eq!(out, vec!["hud Failed(\"天气 失败：curl: (6) no host\")"]);
         t.key(StartHold);
         assert!(ran(&mut t, 1, "日期", Some(0), "x", "").is_empty());
     }
@@ -1986,9 +1986,7 @@ mod tests {
         t.key(StartHold);
         let out = t.done(1, Ok("Plaid 删除"));
         assert!(
-            has(&out, "hud Ask(\"删除   ⏎ 执行 · esc 取消\")")
-                && has(&out, "Confirm")
-                && !has(&out, "run"),
+            has(&out, "hud Ask(\"删除\")") && has(&out, "Confirm") && !has(&out, "run"),
             "{out:?}"
         );
         assert!(t.c.idle() && t.c.keys().enter && t.c.keys().escape);
@@ -2028,7 +2026,7 @@ mod tests {
         t.quiet(1);
         t.flush();
         let out = t.done(1, Err("连接断开"));
-        assert!(has(&out, "Flash"), "{out:?}");
+        assert!(has(&out, "Failed"), "{out:?}");
         let id = t.c.store.all.last().unwrap().at;
         assert!(t.c.store.all.last().unwrap().is_failure());
         let usage_before: i64 = t.c.store.usage.values().map(|u| u.n).sum();
