@@ -1,0 +1,40 @@
+# GPUI app (app/): Windows build, tests (including the mock-endpoint replay) and an unsigned exe artifact.
+# macOS is built and tested locally.
+name: app
+
+on:
+  push:
+    branches: [main]
+    paths: [app/**, .github/workflows/app.yml]
+  pull_request:
+    paths: [app/**, .github/workflows/app.yml]
+  workflow_dispatch:
+
+concurrency:
+  group: app-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets
+      - run: cargo test --workspace
+      - run: cargo build --release -p plaid
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plaid-windows-x64
+          path: app/target/release/plaid.exe
+          if-no-files-found: error
