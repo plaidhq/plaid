@@ -1,5 +1,5 @@
-//! API keys in the OS credential store: macOS Keychain generic passwords under the bundle id (migrate.rs copies the
-//! Swift app's keys once), Windows Credential Manager otherwise.
+//! API keys in the OS credential store: on macOS one Keychain item under the bundle id holding all accounts
+//! (migrate.rs copies the Swift app's keys once), on Windows one Credential Manager entry per account.
 //! Accounts: "apiKey" is the Volcengine key, "llm:<host>" the LLM keys.
 
 /// An LLM endpoint's key: PLAID_LLM_KEY, else the credential stored for its host.
@@ -19,36 +19,72 @@ pub fn api_key() -> Result<String, String> {
 }
 
 #[cfg(target_os = "macos")]
-fn service() -> String {
+fn bundle_id() -> Option<String> {
     objc2_foundation::NSBundle::mainBundle()
         .bundleIdentifier()
         .map(|s| s.to_string())
-        .unwrap_or_else(|| "com.neospaceindustries.plaid.dev".into())
 }
 
-/// Never shows a Keychain dialog: an ACL mismatch fails instead (the user then re-enters the key in Settings).
 #[cfg(target_os = "macos")]
-pub fn get(account: &str) -> Result<Option<String>, String> {
+fn service() -> String {
+    bundle_id().unwrap_or_else(|| "com.neospaceindustries.plaid.dev".into())
+}
+
+/// macOS keeps every account in one generic password (account "secrets", a JSON object), so a rebuild whose
+/// signature no longer matches the item's ACL costs one Keychain dialog, not one per key. Loaded once per launch,
+/// failure included, so the dialog shows at most once.
+#[cfg(target_os = "macos")]
+static SECRETS: std::sync::Mutex<Option<Result<Secrets, String>>> = std::sync::Mutex::new(None);
+#[cfg(target_os = "macos")]
+type Secrets = std::collections::BTreeMap<String, String>;
+#[cfg(target_os = "macos")]
+const ACCOUNT: &str = "secrets";
+
+/// Only a bundled app may show the dialog; a bare binary (tests, snapshots, replays) fails instead.
+#[cfg(target_os = "macos")]
+fn load() -> Result<Secrets, String> {
     use security_framework::base::Error;
     use security_framework::os::macos::keychain::SecKeychain;
-    let _lock = SecKeychain::disable_user_interaction().map_err(|e| e.to_string())?;
-    match security_framework::passwords::get_generic_password(&service(), account) {
-        Ok(k) => String::from_utf8(k).map(Some).map_err(|e| e.to_string()),
-        Err(e) if e.code() == Error::from_code(-25300).code() => Ok(None), // errSecItemNotFound
+    let _lock = match bundle_id() {
+        Some(_) => None,
+        None => Some(SecKeychain::disable_user_interaction().map_err(|e| e.to_string())?),
+    };
+    match security_framework::passwords::get_generic_password(&service(), ACCOUNT) {
+        Ok(b) => serde_json::from_slice(&b).map_err(|e| format!("keychain: {e}")),
+        Err(e) if e.code() == Error::from_code(-25300).code() => Ok(Secrets::new()), // errSecItemNotFound
         Err(e) => Err(format!("keychain: {e}")),
     }
 }
 
-/// Empty value deletes the item.
+#[cfg(target_os = "macos")]
+pub fn get(account: &str) -> Result<Option<String>, String> {
+    let mut cache = SECRETS.lock().unwrap();
+    match cache.get_or_insert_with(load) {
+        Ok(m) => Ok(m.get(account).cloned()),
+        Err(e) => Err(e.clone()),
+    }
+}
+
+/// Empty value removes the account. When the item could not be read, the rewrite starts from an empty map and
+/// replaces it.
 #[cfg(target_os = "macos")]
 pub fn set(account: &str, value: &str) -> Result<(), String> {
-    let s = service();
-    let _ = security_framework::passwords::delete_generic_password(&s, account);
+    let mut cache = SECRETS.lock().unwrap();
+    let mut m = cache.get_or_insert_with(load).clone().unwrap_or_default();
     if value.is_empty() {
-        return Ok(());
+        m.remove(account);
+    } else {
+        m.insert(account.into(), value.into());
     }
-    security_framework::passwords::set_generic_password(&s, account, value.as_bytes())
-        .map_err(|e| format!("keychain: {e}"))
+    let s = service();
+    let _ = security_framework::passwords::delete_generic_password(&s, ACCOUNT);
+    if !m.is_empty() {
+        let json = serde_json::to_vec(&m).map_err(|e| e.to_string())?;
+        security_framework::passwords::set_generic_password(&s, ACCOUNT, &json)
+            .map_err(|e| format!("keychain: {e}"))?;
+    }
+    *cache = Some(Ok(m));
+    Ok(())
 }
 
 #[cfg(windows)]
