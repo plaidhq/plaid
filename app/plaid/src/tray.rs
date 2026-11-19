@@ -28,7 +28,12 @@ pub fn install(cx: &mut App, on_command: impl Fn(Command, &mut App) + 'static) -
         }
         menu.append(&MenuItem::with_id(*id, *title, true, None))?;
     }
-    let glyph = Icon::from_rgba(mic_glyph(), GLYPH, GLYPH)?;
+    // macOS tints the template image itself. Windows shows it as is: white on a dark taskbar.
+    #[cfg(windows)]
+    let ink = if crate::win::light_taskbar() { 0 } else { 255 };
+    #[cfg(not(windows))]
+    let ink = 0;
+    let glyph = Icon::from_rgba(mic_glyph(ink), GLYPH, GLYPH)?;
     #[cfg(target_os = "macos")]
     let builder = TrayIconBuilder::new().with_icon_templated(glyph);
     #[cfg(not(target_os = "macos"))]
@@ -56,9 +61,9 @@ pub fn install(cx: &mut App, on_command: impl Fn(Command, &mut App) + 'static) -
 
 const GLYPH: u32 = 36; // 18 pt at 2x
 
-/// Microphone outline as an alpha mask (black + alpha, used as a template image on macOS):
+/// Microphone outline as an alpha mask in gray level `ink` (black is the template image on macOS):
 /// a capsule, a U-shaped holder around its lower half, and a stem with a base.
-fn mic_glyph() -> Vec<u8> {
+fn mic_glyph(ink: u8) -> Vec<u8> {
     let n = GLYPH as f32;
     let mut out = Vec::with_capacity((GLYPH * GLYPH * 4) as usize);
     // Signed distance to a vertical segment from (cx, y0) to (cx, y1), minus radius.
@@ -83,7 +88,7 @@ fn mic_glyph() -> Vec<u8> {
             };
             let d = body.min(holder).min(stem).min(base);
             let a = (0.5 - d).clamp(0., 1.);
-            out.extend_from_slice(&[0, 0, 0, (a * 255.) as u8]);
+            out.extend_from_slice(&[ink, ink, ink, (a * 255.) as u8]);
         }
     }
     out

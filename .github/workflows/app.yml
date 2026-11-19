@@ -33,6 +33,21 @@ jobs:
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
       - run: cargo build --release -p plaid
+      # Launch the GUI exe for real: it must stay up, log its launch and not panic (a panic shows a message box
+      # and blocks, so liveness alone proves nothing).
+      - name: Launch smoke test
+        shell: pwsh
+        run: |
+          $env:PLAID_DATA_DIR = "$env:RUNNER_TEMP\plaid-smoke"
+          $p = Start-Process target\release\plaid.exe -PassThru
+          Start-Sleep -Seconds 8
+          $log = Get-Content "$env:PLAID_DATA_DIR\events.log" -Raw -ErrorAction SilentlyContinue
+          Write-Output $log
+          $alive = -not $p.HasExited
+          if ($alive) { Stop-Process -Id $p.Id -Force }
+          if (-not $alive) { throw "plaid.exe exited with $($p.ExitCode)" }
+          if ($log -notmatch 'launch ') { throw 'no launch line in events.log' }
+          if ($log -match 'panic:') { throw 'panicked' }
       - uses: actions/upload-artifact@v4
         with:
           name: plaid-windows-x64

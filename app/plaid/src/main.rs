@@ -61,27 +61,42 @@ fn main() {
         }
         return;
     }
-    gpui_kit::application()
+    install_panic_hook();
+    let app = gpui_kit::application()
         .with_assets(ui::assets::Assets)
-        .with_quit_mode(QuitMode::Explicit)
-        .with_windowing(WindowingRequest::Headless)
-        .run(move |cx| {
-            gpui_kit::init(cx);
-            ui::bind_keys(cx);
-            let hud = hud::open(cx).expect("hud window");
-            if let Err(e) = tray::install(cx, |c, cx| match c {
-                tray::Command::Quit => cx.quit(),
-                tray::Command::History => ui::open(ui::Page::History, cx),
-                tray::Command::Settings => ui::open(ui::Page::General, cx),
-            }) {
-                eprintln!("tray: {e}");
-            }
-            if args.get(1).map(String::as_str) == Some("--hud-test") {
-                let hold = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(2);
-                return hud_test(hud, hold, cx);
-            }
-            run(hud, cx);
-        });
+        .with_quit_mode(QuitMode::Explicit);
+    // Headless is macOS's Accessory activation policy (no Dock icon). On Windows it means no GPU and no windows.
+    #[cfg(target_os = "macos")]
+    let app = app.with_windowing(WindowingRequest::Headless);
+    app.run(move |cx| {
+        gpui_kit::init(cx);
+        ui::bind_keys(cx);
+        let hud = hud::open(cx).expect("hud window");
+        if let Err(e) = tray::install(cx, |c, cx| match c {
+            tray::Command::Quit => cx.quit(),
+            tray::Command::History => ui::open(ui::Page::History, cx),
+            tray::Command::Settings => ui::open(ui::Page::General, cx),
+        }) {
+            eprintln!("tray: {e}");
+        }
+        if args.get(1).map(String::as_str) == Some("--hud-test") {
+            let hold = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(2);
+            return hud_test(hud, hold, cx);
+        }
+        run(hud, cx);
+    });
+}
+
+/// Panics go to events.log; on Windows also to a message box, since a GUI-subsystem exe has no console.
+fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = format!("panic: {info}");
+        trace::log(&msg);
+        #[cfg(windows)]
+        win::alert("Plaid", &msg);
+        default(info);
+    }));
 }
 
 /// The dictation loop: hotkey, mic and ASR threads post to one channel; the controller handles each message on

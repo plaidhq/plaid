@@ -241,3 +241,39 @@ pub fn focus(pid: i32, _n: usize) -> (Target, Option<String>) {
     t.focus = focused_in(thread);
     (t, None)
 }
+
+/// Blocking error message box (the release exe has no console).
+pub fn alert(title: &str, text: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW,
+    };
+    let (t, m) = (to_wide(title), to_wide(text));
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            m.as_ptr(),
+            t.as_ptr(),
+            MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
+        )
+    };
+}
+
+/// Whether the taskbar uses the light theme (Personalize\SystemUsesLightTheme); dark when unreadable.
+pub fn light_taskbar() -> bool {
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+    let key = to_wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+    let name = to_wide("SystemUsesLightTheme");
+    let (mut v, mut n) = (0u32, 4u32);
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            name.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            (&mut v as *mut u32).cast(),
+            &mut n,
+        )
+    };
+    r == 0 && v != 0
+}
