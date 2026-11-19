@@ -62,8 +62,8 @@ fn host(url: &str) -> &str {
     auth.split(':').next().unwrap_or(auth)
 }
 
-/// Local model servers are reached directly even when a proxy is set in the environment.
-fn loopback(url: &str) -> bool {
+/// Local model servers are reached directly even when a proxy is set in the environment, and need no key.
+pub fn loopback(url: &str) -> bool {
     let h = host(url);
     h.eq_ignore_ascii_case("localhost")
         || h.parse::<std::net::IpAddr>()

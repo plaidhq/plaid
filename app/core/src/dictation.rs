@@ -1213,14 +1213,16 @@ impl Controller {
         }
     }
 
-    /// The learning endpoint: the refine settings when filled in, else DeepSeek when its key is stored.
+    /// The learning endpoint: the refine settings when filled in and usable (a stored key, or a local server),
+    /// else DeepSeek when its key is stored. Neither: no learning, rather than a failing request per dictation.
     fn learn_submit(&mut self, id: DateTime<Utc>, raw: String, p: &mut impl Platform) {
         if p.setting("autoLearn").as_deref() == Some("0") {
             return;
         }
         let fallback = || Endpoint::new("openai", llm::LEARNER_FALLBACK.0, llm::LEARNER_FALLBACK.1);
-        let Some(ep) =
-            Self::configured(p).or_else(|| p.llm_key(llm::LEARNER_FALLBACK.0).map(|_| fallback()))
+        let Some(ep) = Self::configured(p)
+            .filter(|ep| llm::loopback(&ep.base) || p.llm_key(&ep.base).is_some())
+            .or_else(|| p.llm_key(llm::LEARNER_FALLBACK.0).map(|_| fallback()))
         else {
             return;
         };
@@ -1813,6 +1815,24 @@ mod tests {
         });
         assert_eq!(out, vec!["hud Flash(\"学会：克劳德 → Claude\")"]);
         assert!(!t.c.learning());
+    }
+
+    #[test]
+    fn learner_needs_a_key_or_a_local_server() {
+        // Refine endpoint filled in, no key stored: no learning request.
+        let mut t = T::new();
+        t.p.settings = vec![("llmBaseUrl", "https://api.deepseek.com")];
+        t.key(StartHold);
+        t.done(1, Ok("问一下克劳德吧"));
+        let out = t.flush();
+        assert!(!has(&out, "llm"), "{out:?}");
+        // A local server needs none.
+        let mut t = T::new();
+        t.p.settings = vec![("llmBaseUrl", "http://localhost:11434/v1")];
+        t.key(StartHold);
+        t.done(1, Ok("问一下克劳德吧"));
+        let out = t.flush();
+        assert!(has(&out, "llm"), "{out:?}");
     }
 
     #[test]
