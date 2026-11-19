@@ -370,7 +370,7 @@ impl Render for Hud {
                     .shadow(vec![
                         mav::shadow(0., 0., 0., 1., 0x0000008c, false),
                         mav::shadow(0., 1., 0., 0., 0xffffff24, true),
-                        mav::shadow(0., 8., 24., 0., 0x00000059, false),
+                        mav::shadow(0., 4., 12., 0., 0x00000033, false),
                     ])
                     .font(mav::font())
                     .text_color(mav::hex(WHITE))
@@ -432,7 +432,7 @@ impl Render for Hud {
     }
 }
 
-/// Opens the HUD hidden, bottom center of the primary display. Show and hide go through `apply`/`hide`, which
+/// Opens the HUD hidden, bottom center of the primary display (macOS re-anchors on each show). Show and hide go through `apply`/`hide`, which
 /// order the native window without activating the app.
 pub fn open(cx: &mut App) -> Result<WindowHandle<Hud>> {
     let display = cx.primary_display().map(|d| d.visible_bounds());
@@ -484,7 +484,10 @@ pub fn apply(handle: &WindowHandle<Hud>, m: Msg, cx: &mut App) {
             Effect::Show(_) => {
                 hud.epoch += 1;
                 hud.visible = true;
-                native::set_visible(window, true);
+                if native::set_visible(window, true) {
+                    // GPUI's own move/resize callbacks can't update the window from inside this update.
+                    window.bounds_changed(cx);
+                }
                 cx.notify();
             }
         }
@@ -547,14 +550,18 @@ pub mod native {
     use objc2_app_kit::{NSApplication, NSView, NSWindow, NSWindowCollectionBehavior, NSWorkspace};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-    fn ns_window(window: &Window) -> Option<Retained<NSWindow>> {
+    /// The NSView GPUI created for this window (it handles the backing-scale callbacks, not the content view).
+    fn gpui_view(window: &Window) -> Option<&NSView> {
         let RawWindowHandle::AppKit(h) = HasWindowHandle::window_handle(window).ok()?.as_raw()
         else {
             return None;
         };
         // SAFETY: the handle points at the live NSView GPUI created for this window; we're on the main thread.
-        let view: &NSView = unsafe { h.ns_view.cast().as_ref() };
-        view.window()
+        Some(unsafe { h.ns_view.cast().as_ref() })
+    }
+
+    fn ns_window(window: &Window) -> Option<Retained<NSWindow>> {
+        gpui_view(window)?.window()
     }
 
     pub fn configure(window: &Window) {
@@ -569,14 +576,43 @@ pub mod native {
         );
     }
 
-    pub fn set_visible(window: &Window, visible: bool) {
-        let Some(w) = ns_window(window) else { return };
+    /// Returns whether the window moved (to the screen the user is on), in which case GPUI must re-read its bounds
+    /// and scale.
+    pub fn set_visible(window: &Window, visible: bool) -> bool {
+        let Some(w) = ns_window(window) else {
+            return false;
+        };
         if visible {
+            let appearing = !w.isVisible();
             // Unlike orderFront:, this works while another app is active and never makes the panel key.
             w.orderFrontRegardless();
+            // Same run loop turn as the order-in, so it never shows at the old spot.
+            if appearing && let Some(v) = gpui_view(window) {
+                anchor(&w, v);
+                return true;
+            }
         } else {
             w.orderOut(None);
         }
+        false
+    }
+
+    /// Bottom center of the screen with the key window (where the user is typing), set each time the HUD appears.
+    /// Cocoa coordinates: origin at the bottom left of the main screen, y up.
+    fn anchor(w: &NSWindow, view: &NSView) {
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return;
+        };
+        let Some(screen) = objc2_app_kit::NSScreen::mainScreen(mtm) else {
+            return;
+        };
+        let f = screen.visibleFrame();
+        let x = f.origin.x + (f.size.width - super::W as f64) / 2.;
+        let y = f.origin.y + (super::LIFT - super::PAD_BOTTOM) as f64;
+        w.setFrameOrigin(objc2_foundation::NSPoint::new(x.round(), y.round()));
+        // Moving onto a screen with another scale: the layer's contents scale and drawable size follow on this call
+        // (GPUI's view handles it); the caller then has GPUI's Window re-read the scale.
+        view.viewDidChangeBackingProperties();
     }
 
     /// Main-thread facts for the activation test.
@@ -612,7 +648,9 @@ pub mod native {
     use gpui_kit::Window;
 
     pub fn configure(_: &Window) {}
-    pub fn set_visible(_: &Window, _: bool) {}
+    pub fn set_visible(_: &Window, _: bool) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
