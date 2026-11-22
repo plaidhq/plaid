@@ -3,7 +3,7 @@
 //! audio devices, no window on screen). `plaid --ui-check <outdir>` also clicks through the pages (see `check`).
 use super::{Facts, Model, Page, Settings, mav};
 use crate::config;
-use chrono::{Duration, TimeZone, Utc};
+use chrono::{Duration, Timelike, Utc};
 use gpui_kit::*;
 use plaid_core::store::{Record, Store};
 use std::path::Path;
@@ -661,7 +661,8 @@ pub(super) fn fixture(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     if !dir.join("records.jsonl").exists() {
         let mut store = Store::load(dir);
-        let now = Utc.with_ymd_and_hms(2026, 11, 18, 9, 0, 0).unwrap();
+        // Relative to the run, so 概览's 今天 and 7 天 ranges always have records.
+        let now = Utc::now().with_nanosecond(0).unwrap_or_else(Utc::now);
         let mut seed: u64 = 7;
         let mut next = move |n: u64| {
             seed = seed
@@ -743,7 +744,7 @@ pub(super) fn fixture(dir: &Path) -> std::io::Result<()> {
         for r in records {
             store.add(r);
         }
-        // Usage outlives records.jsonl: half a year of daily totals for the 报告 heatmap.
+        // Usage outlives records.jsonl: half a year of daily totals for the 概览 calendar.
         for day in 40..182 {
             if next(5) == 0 {
                 continue;

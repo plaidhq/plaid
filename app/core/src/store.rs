@@ -1,7 +1,7 @@
 //! records.jsonl, usage.json and saved audio, file-compatible with the Swift app (Records.swift).
 //! Synchronous: files are small (≤ 1000 lines) and every caller is on one thread.
 use crate::records::chars;
-use chrono::{DateTime, Local, SubsecRound, Utc};
+use chrono::{DateTime, Local, SubsecRound, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
@@ -100,6 +100,10 @@ pub struct Usage {
     pub chars: i64,
     /// Characters per app.
     pub apps: BTreeMap<String, i64>,
+    /// (dictations, audio ms, characters) per local hour 0..24; empty for days recorded before it existed and
+    /// whose records were gone when it was backfilled.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hours: Vec<[i64; 3]>,
 }
 
 impl Usage {
@@ -115,6 +119,11 @@ impl Usage {
             .apps
             .entry(r.app.clone().unwrap_or_else(|| "未知应用".into()))
             .or_default() += c;
+        self.hours.resize(24, [0; 3]);
+        let h = &mut self.hours[r.at.with_timezone(&Local).hour() as usize];
+        h[0] += 1;
+        h[1] += r.audio_ms;
+        h[2] += c;
     }
 }
 
@@ -182,7 +191,12 @@ impl Store {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
         {
-            Some(u) => s.usage = u,
+            Some(u) => {
+                s.usage = u;
+                if s.backfill_hours(&parsed) {
+                    s.save_usage();
+                }
+            }
             None => {
                 // Backfill from the complete log before retention; existing totals are never rebuilt from the tail.
                 for r in &parsed {
@@ -197,6 +211,25 @@ impl Store {
             s.persist();
         }
         s
+    }
+
+    /// Per-hour counts for days that predate them, from whatever records of that day are left. Day totals are
+    /// left alone. Returns whether any day changed.
+    fn backfill_hours(&mut self, parsed: &[Record]) -> bool {
+        let mut rebuilt: BTreeMap<String, Usage> = BTreeMap::new();
+        for r in parsed {
+            let d = day(r.at);
+            if self.usage.get(&d).is_some_and(|u| u.hours.is_empty()) {
+                rebuilt.entry(d).or_default().add(r);
+            }
+        }
+        let changed = rebuilt.values().any(|u| !u.hours.is_empty());
+        for (d, u) in rebuilt {
+            if let Some(t) = self.usage.get_mut(&d) {
+                t.hours = u.hours;
+            }
+        }
+        changed
     }
 
     pub fn dir(&self) -> &Path {
@@ -580,6 +613,33 @@ mod tests {
         assert_eq!((u.n, u.chars, u.apps["A"]), (1, 3, 3));
         let name = s.save_audio(&[0u8; 3200], at).unwrap();
         assert!(dir.join("audio").join(&name).exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn old_usage_keeps_totals_and_gains_hours() {
+        let dir = std::env::temp_dir().join(format!("plaid-hours-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let at: DateTime<Utc> = "2026-10-28T08:45:32Z".parse().unwrap();
+        let d = day(at);
+        let line = r#"{"text":"你好","llm":"off","raw":"你好","at":"2026-10-28T08:45:32Z","audioMs":900,"asrMs":1,"totalMs":1}"#;
+        std::fs::write(dir.join("records.jsonl"), format!("{line}\n")).unwrap();
+        // Totals larger than the one kept record: they must survive, only the hours come from the record.
+        let old = format!(
+            r#"{{"{d}":{{"n":9,"ms":9000,"chars":90,"apps":{{"A":90}}}},"2026-01-01":{{"n":1,"ms":1,"chars":1,"apps":{{}}}}}}"#
+        );
+        std::fs::write(dir.join("usage.json"), &old).unwrap();
+        let s = Store::load(&dir);
+        let u = &s.usage[&d];
+        assert_eq!((u.n, u.ms, u.chars), (9, 9000, 90));
+        let h = at.with_timezone(&Local).hour() as usize;
+        assert_eq!((u.hours.len(), u.hours[h]), (24, [1, 900, 2]));
+        assert!(s.usage["2026-01-01"].hours.is_empty());
+        let saved = std::fs::read_to_string(dir.join("usage.json")).unwrap();
+        assert!(
+            saved.contains("hours")
+                && !saved.contains(r#""2026-01-01":{"n":1,"ms":1,"chars":1,"apps":{},"hours""#)
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

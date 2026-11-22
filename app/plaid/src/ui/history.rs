@@ -698,7 +698,7 @@ impl History {
         let exporting = self.exporting;
         let items: Vec<MenuEntry> = [
             ("显示延迟", on_if_one(LATENCY)),
-            ("性能统计…", false),
+            ("概览与性能…", false),
             ("导出最近 20 条…", false),
             ("显示数据文件夹", false),
             ("清空历史…", false),
@@ -741,7 +741,7 @@ impl History {
                                 0 => h.model.update(cx, |m, cx| {
                                     m.set(LATENCY, super::bool_str(!on_if_one(LATENCY)), cx)
                                 }),
-                                1 => go(Page::Perf, w, cx),
+                                1 => go(Page::Overview, w, cx),
                                 2 if !empty && !exporting => {
                                     let all = &h.model.read(cx).store.all;
                                     let ids = all[all.len().saturating_sub(20)..]
@@ -1554,7 +1554,7 @@ impl History {
             Sheet::Clear(n) => (
                 "history-clear",
                 format!("删除全部 {n} 条记录和录音？"),
-                "「今天」和「报告」里的用量统计会保留。",
+                "「概览」里的用量统计会保留。",
                 "删除",
             ),
             Sheet::Delete(ids) => (
@@ -1564,7 +1564,7 @@ impl History {
                 } else {
                     "删除这条记录和录音？".to_string()
                 },
-                "删除后无法恢复。「今天」和「报告」里的用量统计会保留。",
+                "删除后无法恢复。「概览」里的用量统计会保留。",
                 "删除",
             ),
             Sheet::Retry(_) => (

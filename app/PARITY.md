@@ -65,10 +65,10 @@ removed afterwards (migrate.rs, commit fa9d596).
 
 ## Settings window
 
-Top tabs 今天, 报告, 历史 | 设置. 设置 has a sidebar: 通用, 识别, 润色, 词典, 命令 | 数据; the 设置 tab reopens the last
+Top tabs 概览, 历史 | 设置. 设置 has a sidebar: 通用, 识别, 润色, 词典, 命令 | 数据; the 设置 tab reopens the last
 settings page and carries the 词典 pending count. Space Grotesk and JetBrains Mono are bundled
 (resources/fonts); CJK falls back to the system font. Tray 历史/设置 open the window on 历史 / 通用.
-今天/报告/历史/词典/命令 carry over the Swift pages (概览, 性能, 历史, 词典, 命令). 通用 holds the shortcut, HUD
+概览/历史/词典/命令 carry over the Swift pages (概览 and 性能 merged into 概览, 历史, 词典, 命令). 通用 holds the shortcut, HUD
 states and HUD options (text on/off, reveal speed 跟着说话/快/立即, linger 0.4/0.7/1.5 s, start/paste chime, follow
 the mouse screen; chime and mouse screen are macOS-only, no-ops on Windows); 识别 the Volc key, microphone list
 with a live meter and recognition options; 数据 the data folder, kept recordings and the privacy note.
@@ -94,9 +94,14 @@ key access) clicks through every page and writes PNGs. Differences from Swift:
   name); the letter mark stays when none is found and always on Windows. 设置 → 润色 → 按应用 rows do the same.
   重试 and 重新润色 cannot be cancelled and their failures show on the HUD only;
   export does not flush an unsaved 词典 draft first.
-- 报告: new summary cards above the Swift 性能 diagnostics: half a year of daily characters as a heatmap and
-  speaking speed (both from usage.json, so they survive 清空历史), a release → paste histogram split into direct and
-  LLM, and how many records the LLM (punctuation vs other characters) and each local rule changed.
+- 概览: one page for usage and diagnostics. A range tab (今天, 7 天, 30 天, 90 天, 全部; `overviewRange`) drives it:
+  duration, characters, speed and time saved against the previous equal period (今天: yesterday up to this hour),
+  characters per hour/day/7 days, a weekday × hour grid, top apps, speaking speed, what the LLM and local rules
+  changed, and under 全部 half a year of daily characters. Totals come from usage.json, so they survive 清空历史;
+  usage.json now also keeps per-hour counts per day (`hours`), backfilled from records for older days. The Swift
+  性能 diagnostics follow as a section at the bottom (release → paste histogram split into direct and LLM, latency,
+  stages, levels, raw records, events), filtered by the same range instead of the last N records; at most the
+  last 1000 records are loaded.
 - 词典: no tabs or table. Hotwords are a wall of pills sized by how often the last 30 days of records used them
   (tinted when a rewrite rule targets them); the field filters the wall and adds a word on ⏎; clicking a pill opens
   the edit sheet, which also deletes. Aliases and replacements list in 改写规则; learned rules in 最近学会 with 保留
@@ -104,7 +109,6 @@ key access) clicks through every page and writes PNGs. Differences from Swift:
 - 命令: each command folds to one row (「name」, aliases, first shell line, output, ⏎ when it confirms); clicking a
   row expands its editor, one at a time, and a newly added command opens. An actions.json parse error locks only
   the editors and the add menu (as in the Swift source).
-- 报告: the trend axis labels every second day.
 - No tooltips anywhere.
 
 ## Windows
@@ -164,4 +168,4 @@ Not yet exercised in a live run of the GPUI app:
 - onboarding accessibility prompt and its try-it paste; mic permission state;
 - history copy, audio playback, 重试 and 重新润色 round trips and the export save dialog; Finder reveal;
 - 优化 LLM test against a real endpoint (only the error path is snapshotted) and 命令 trial run of a real command;
-- 性能 memory figures on Windows; empty states with no records.
+- 概览 性能 memory figures on Windows; empty states with no records.

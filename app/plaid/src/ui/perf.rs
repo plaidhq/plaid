@@ -1,7 +1,8 @@
-//! 性能: latency, levels, LLM outcomes and the raw records, for chasing slow or dropped dictation (Perf.swift).
+//! 概览 → 性能: latency, levels, LLM outcomes and the raw records of the picked range, for chasing slow or dropped
+//! dictation (Perf.swift).
 use super::Model;
 use super::mav::*;
-use super::overview::{axis_label, boxed, grid, thousands, ticks, tile};
+use super::overview::{self, axis_label, boxed, grid, thousands, ticks, tile};
 use crate::config;
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use gpui_kit::base::input::{InputEvent, InputState};
@@ -14,7 +15,6 @@ use std::ops::Range;
 
 mod report;
 
-const RANGES: [i64; 3] = [50, 200, 0];
 const STAGES: usize = 60;
 const EVENTS: usize = 500;
 const ROW_H: f32 = 20.;
@@ -103,14 +103,6 @@ fn ok(r: &Record) -> bool {
 
 fn sample(r: &Record) -> bool {
     !r.is_failure() && r.outcome.as_deref() != Some("saved")
-}
-
-fn range() -> i64 {
-    config::value("perfRange")
-        .and_then(|s| s.parse::<f64>().ok())
-        .map(|v| v as i64)
-        .filter(|v| RANGES.contains(v))
-        .unwrap_or(200)
 }
 
 /// ByteCountFormatter-ish: memory counts in 1024s, files in 1000s.
@@ -339,8 +331,8 @@ pub struct Perf {
     hover_trend: Option<usize>,
     hover_stage: Option<usize>,
     report: report::Report,
-    hover_heat: Option<usize>,
-    hover_speed: Option<usize>,
+    /// Day of the oldest kept record, when the range reaches further back than the records do.
+    kept_from: Option<NaiveDate>,
     hover_hist: Option<usize>,
 }
 
@@ -395,8 +387,7 @@ impl Perf {
             hover_trend: None,
             hover_stage: None,
             report: Default::default(),
-            hover_heat: None,
-            hover_speed: None,
+            kept_from: None,
             hover_hist: None,
         };
         p.reload(cx);
@@ -406,16 +397,16 @@ impl Perf {
     fn reload(&mut self, cx: &App) {
         let store = &self.model.read(cx).store;
         let all = &store.all;
-        let n = range();
-        let cut = if n == 0 {
-            0
-        } else {
-            all.len().saturating_sub(n as usize)
-        };
+        let first = overview::first_day(overview::range());
+        let in_range = |day: NaiveDate| first.is_none_or(|f| day >= f);
+        let oldest = all.first().map(|r| r.at.with_timezone(&Local).date_naive());
+        self.kept_from = oldest
+            .filter(|o| all.len() >= plaid_core::store::LIMIT && first.is_none_or(|f| f < *o));
         self.has_both = all.iter().any(local) && all.iter().any(|r| !local(r));
         let engine = if self.has_both { self.engine } else { 0 };
-        self.rows = all[cut..]
+        self.rows = all
             .iter()
+            .filter(|r| in_range(r.at.with_timezone(&Local).date_naive()))
             .filter(|r| match engine {
                 1 => !local(r),
                 2 => local(r),
@@ -428,9 +419,9 @@ impl Perf {
             .map(|m| m.len())
             .unwrap_or(0);
         self.audio_size = dir_size(&store.audio_dir());
-        self.events = events();
+        self.events = events().into_iter().filter(|e| in_range(e.day)).collect();
         let samples: Vec<&Record> = self.rows.iter().filter(|r| sample(r)).collect();
-        self.report = report::Report::new(store, &self.rows, &samples);
+        self.report = report::Report::new(&samples);
         self.resort();
     }
 
@@ -463,42 +454,56 @@ impl Perf {
     }
 
     fn header(&self, cx: &mut Context<Self>) -> Div {
-        let m = self.model.clone();
-        let range = range();
+        let mut caption = format!(
+            "{} {} 句的粘贴延迟、改动、电平和原始数据，用来排查慢和漏字",
+            overview::range_label(overview::range()),
+            thousands(self.rows.len() as i64)
+        );
+        if let Some(d) = self.kept_from {
+            caption += &format!(
+                "。只保留最近 {} 句，最早一句在 {}月{}日",
+                plaid_core::store::LIMIT,
+                d.month(),
+                d.day()
+            );
+        }
         div()
             .flex()
             .flex_none()
-            .items_center()
+            .items_end()
             .justify_between()
             .gap(px(10.))
-            .child(div().text_color(hex(TEXT)).min_w_0().child(format!(
-                "以下是最近 {} 句的粘贴延迟、改动、电平和原始数据，用来排查慢和漏字",
-                self.rows.len()
-            )))
+            .mt(px(14.))
+            .pt(px(18.))
+            .border_t_1()
+            .border_color(hexa(LINE))
             .child(
                 div()
                     .flex()
-                    .flex_none()
-                    .gap(px(8.))
-                    .when(self.has_both, |d| {
-                        d.child(segmented(
-                            "perf-engine",
-                            &["全部引擎", "火山引擎", "本地"],
-                            self.engine,
-                            pick(cx, |this, i: &usize, cx| {
-                                this.engine = *i;
-                                this.reload(cx);
-                                cx.notify();
-                            }),
-                        ))
-                    })
-                    .child(segmented(
-                        "perf-range",
-                        &["最近 50 句", "最近 200 句", "全部"],
-                        RANGES.iter().position(|r| *r == range).unwrap_or(1),
-                        move |i, _, cx| m.update(cx, |m, cx| m.set("perfRange", RANGES[i], cx)),
-                    )),
+                    .flex_col()
+                    .gap(px(2.))
+                    .min_w_0()
+                    .child(
+                        div()
+                            .text_size(px(16.))
+                            .font_weight(medium())
+                            .text_color(hex(TEXT))
+                            .child("性能"),
+                    )
+                    .child(hint(caption).text_size(px(12.))),
             )
+            .when(self.has_both, |d| {
+                d.child(segmented(
+                    "perf-engine",
+                    &["全部引擎", "火山引擎", "本地"],
+                    self.engine,
+                    pick(cx, |this, i: &usize, cx| {
+                        this.engine = *i;
+                        this.reload(cx);
+                        cx.notify();
+                    }),
+                ))
+            })
     }
 
     fn status(&self) -> Div {
@@ -1675,22 +1680,32 @@ fn pick(
 
 impl Render for Perf {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let page = super::page_body("perf")
-            .child(self.report_usage(cx))
+        // A section of the 概览 page: no scroller of its own.
+        let page = div()
+            .id("perf")
+            .flex()
+            .flex_col()
+            .flex_none()
+            .gap(px(14.))
             .child(self.header(cx));
-        if self.total == 0 {
+        if self.rows.is_empty() {
             let (_, body) = boxed("", None);
+            let (title, sub) = if self.total == 0 {
+                (
+                    "还没有听写记录",
+                    "说几句之后，这里会显示每句的延迟、电平和原始记录。",
+                )
+            } else {
+                ("这段时间没有听写记录", "换一个时间范围，或者说几句再来看。")
+            };
             return page
                 .child(
                     body.flex_none()
-                        .h(px(180.))
+                        .h(px(140.))
                         .items_center()
                         .justify_center()
-                        .child(div().font_weight(bold()).child("还没有听写记录"))
-                        .child(
-                            hint("说几句之后，这里会显示每句的延迟、电平和原始记录。")
-                                .text_size(px(12.)),
-                        ),
+                        .child(div().font_weight(bold()).child(title))
+                        .child(hint(sub).text_size(px(12.))),
                 )
                 .child(self.status())
                 .child(self.events_card(window, cx));
@@ -1704,7 +1719,7 @@ impl Render for Perf {
         let groups = self.groups(&samples);
         let levels = self.levels(&samples);
         let raw = self.raw(cx);
-        page.when(!samples.is_empty(), |d| d.child(self.report_records(cx)))
+        page.when(!samples.is_empty(), |d| d.child(self.histogram(cx)))
             .child(latency)
             .children(trend)
             .child(stages)
@@ -1725,41 +1740,25 @@ impl Render for Perf {
 pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     use super::Page;
     use super::snapshot::expect;
-    let before = config::value("perfRange");
+    ui.open(Page::Overview, super::overview::fixture_facts())?;
+    // 今天 first: the section follows the range, so the fixture's older records drop out of the table.
+    ui.click("overview-range-0")?;
+    let today = (0..400)
+        .filter(|i| ui.has(&format!("perf-row-{i}")))
+        .count();
+    ui.click("overview-range-4")?;
+    let all = (0..400)
+        .filter(|i| ui.has(&format!("perf-row-{i}")))
+        .count();
     expect(
-        "perfRange unset in a fresh folder",
-        before.is_none(),
-        &before,
+        "the raw table follows the range",
+        all > 0 && today < all,
+        &Some(format!("今天 {today}, 全部 {all}")),
     )?;
-    ui.open(Page::Perf, super::overview::fixture_facts())?;
-    expect(
-        "default range: last 200 records in the table, inspector closed",
-        ui.has("perf-range-1") && !ui.has("perf-inspector"),
-        &before,
-    )?;
-    ui.shot("perf")?;
-    // Report cards: a heatmap day (the fixture's newest usage), the speed line and a histogram bin.
-    let day = (0..182)
-        .rev()
-        .map(|i| format!("perf-heat-{i}"))
-        .find(|id| ui.has(id))
-        .ok_or("FAIL no heatmap cells")?;
-    ui.scroll(&day, 0.)?;
-    ui.shot("perf-heat-hover")?;
-    ui.scroll("perf-speed-29", 0.)?;
-    ui.shot("perf-speed-hover")?;
+    expect("inspector closed", !ui.has("perf-inspector"), &None)?;
     bring(ui, "perf-hist-4")?;
     ui.scroll("perf-hist-4", 0.)?;
-    ui.shot("perf-report")?;
-    for (id, want) in [
-        ("perf-range-0", "50"),
-        ("perf-range-2", "0"),
-        ("perf-range-1", "200"),
-    ] {
-        ui.click(id)?;
-        let v = config::value("perfRange");
-        expect(&format!("perfRange {want}"), v.as_deref() == Some(want), &v)?;
-    }
+    ui.shot("perf")?;
     if ui.has("perf-engine-2") {
         ui.click("perf-engine-2")?;
         expect(
@@ -1860,7 +1859,7 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
 /// Scrolls the page until the control is inside the window, using whichever known control is on screen as the
 /// place to scroll over.
 #[cfg(feature = "snapshot")]
-fn bring(ui: &mut super::snapshot::Ui, id: &str) -> Result<(), String> {
+pub(super) fn bring(ui: &mut super::snapshot::Ui, id: &str) -> Result<(), String> {
     let visible = |b: Bounds<Pixels>| b.center().y > px(70.) && b.center().y < px(660.);
     for _ in 0..12 {
         let b = ui.bounds(id).ok_or(format!("FAIL no control {id:?}"))?;
@@ -1868,8 +1867,12 @@ fn bring(ui: &mut super::snapshot::Ui, id: &str) -> Result<(), String> {
             return Ok(());
         }
         let anchor = [
-            "perf-heat-0",
-            "perf-range-0",
+            "overview-range-0",
+            "overview-bar-0",
+            "overview-week-0",
+            "overview-speed-0",
+            "overview-heat-0",
+            "overview-dictionary",
             "perf-hist-0",
             "perf-hist-23",
             "perf-trend-0",

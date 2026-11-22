@@ -88,8 +88,8 @@ impl Global for Live {}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Page {
+    /// 概览: usage over a picked range, then the 性能 diagnostics for the same range.
     Overview,
-    Perf,
     History,
     /// 设置 → 通用: talk keys and the HUD.
     General,
@@ -104,9 +104,8 @@ pub enum Page {
 
 impl Page {
     #[cfg_attr(not(feature = "snapshot"), allow(dead_code))]
-    pub const ALL: [Page; 9] = [
+    pub const ALL: [Page; 8] = [
         Page::Overview,
-        Page::Perf,
         Page::History,
         Page::General,
         Page::Voice,
@@ -117,7 +116,7 @@ impl Page {
     ];
 
     /// The header tabs; 设置 stands for the settings pages.
-    const TOP: [Page; 4] = [Page::Overview, Page::Perf, Page::History, Page::General];
+    const TOP: [Page; 3] = [Page::Overview, Page::History, Page::General];
 
     /// The 设置 sidebar, in order; a rule goes before 数据.
     const SETTINGS: [Page; 6] = [
@@ -131,8 +130,7 @@ impl Page {
 
     pub fn title(self) -> &'static str {
         match self {
-            Page::Overview => "今天",
-            Page::Perf => "报告",
+            Page::Overview => "概览",
             Page::History => "历史",
             Page::General => "通用",
             Page::Voice => "识别",
@@ -159,7 +157,6 @@ impl Page {
     pub fn slug(self) -> &'static str {
         match self {
             Page::Overview => "overview",
-            Page::Perf => "perf",
             Page::History => "history",
             Page::Voice => "voice",
             Page::Refine => "refine",
@@ -470,7 +467,6 @@ impl Settings {
             Page::Refine => cx.new(|cx| refine::Refine::new(m, window, cx)).into(),
             Page::Commands => cx.new(|cx| commands::Commands::new(m, window, cx)).into(),
             Page::Overview => cx.new(|cx| overview::Overview::new(m, window, cx)).into(),
-            Page::Perf => cx.new(|cx| perf::Perf::new(m, window, cx)).into(),
             Page::Dictionary => {
                 let nav = cx.entity().downgrade();
                 cx.new(|cx| dictionary::Dictionary::new(m, nav, window, cx))
