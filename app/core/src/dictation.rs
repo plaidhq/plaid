@@ -22,8 +22,8 @@ const LEARN_TIMEOUT: Duration = Duration::from_secs(20);
 const ANNOUNCE_AFTER: Duration = Duration::from_millis(1500);
 /// A command waiting for ⏎ is dropped after this.
 const CONFIRM_WAIT: Duration = Duration::from_secs(8);
-/// Shorter results paste as recognized: the LLM rarely changes them, and it adds 0.7-3.6 s.
-const REFINE_MIN_CHARS: usize = 20;
+/// Default for `llmMinChars`: shorter results paste as recognized; the LLM rarely changes them, and it adds 0.7-3.6 s.
+pub const REFINE_MIN_CHARS: usize = 20;
 /// UTF-16 units of the field text before the caret sent as ASR context (commands get all of `Msg::Field`'s).
 const ASR_BEFORE: usize = 300;
 
@@ -1134,7 +1134,11 @@ impl Controller {
         if p.setting("llmEnabled").as_deref() != Some("1") {
             return self.deliver(&raw, &raw, "off", None, asr_at, true, p);
         }
-        if raw.chars().count() < REFINE_MIN_CHARS {
+        let min = p
+            .setting("llmMinChars")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(REFINE_MIN_CHARS);
+        if raw.chars().count() < min {
             p.log("refine skipped: short");
             return self.deliver(&raw, &raw, "off", None, asr_at, true, p);
         }
@@ -1709,11 +1713,11 @@ mod tests {
     }
 
     fn refining(t: &mut T, g: u64, raw: &str) -> Vec<String> {
-        t.p.settings = vec![
+        t.p.settings.extend([
             ("llmEnabled", "1"),
             ("llmBaseUrl", "http://127.0.0.1:1/v1"),
             ("llmModel", "m"),
-        ];
+        ]);
         t.key(StartHold);
         t.send(Msg::Field {
             generation: g,
@@ -1733,6 +1737,11 @@ mod tests {
         );
         t.flush();
         assert_eq!(t.c.store.all.last().unwrap().llm, "off");
+        // llmMinChars 0: every result goes through the LLM.
+        let mut t = T::new();
+        t.p.settings.push(("llmMinChars", "0"));
+        let out = refining(&mut t, 1, "先就这样吧。");
+        assert!(has(&out, "llm 1"), "{out:?}");
     }
 
     #[test]

@@ -691,6 +691,15 @@ fn timeout_ms() -> u64 {
         .unwrap_or(4000)
 }
 
+/// `llmMinChars` choices; anything else saved by hand shows as the default.
+const MIN_CHARS: [usize; 3] = [0, 20, 50];
+
+fn min_chars() -> usize {
+    config::value("llmMinChars")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(plaid_core::dictation::REFINE_MIN_CHARS)
+}
+
 fn history() -> usize {
     config::value("llmHistory")
         .and_then(|s| s.parse::<usize>().ok())
@@ -716,6 +725,21 @@ impl Render for Refine {
                         }),
                     )
                     .into_any_element(),
+                    row("优化：", {
+                        let model = self.model.clone();
+                        let picked = MIN_CHARS.iter().position(|&n| n == min_chars()).unwrap_or(1);
+                        div().flex().child(segmented(
+                            "llmMinChars",
+                            &["每句都优化", "20 字以上", "50 字以上"],
+                            picked,
+                            move |i, _, cx| {
+                                let v = MIN_CHARS[i.min(MIN_CHARS.len() - 1)];
+                                model.update(cx, |m, cx| m.set("llmMinChars", v.to_string(), cx))
+                            },
+                        ))
+                    })
+                    .into_any_element(),
+                    row("", hint("更短的句子识别完直接粘贴，不等 LLM")).into_any_element(),
                     row("", hint(self.status(cx))).into_any_element(),
                     row(
                         "",
@@ -753,6 +777,12 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &None,
     )?;
 
+    ui.click("llmMinChars-2")?;
+    expect(
+        "min chars 50",
+        config::raw("llmMinChars").as_deref() == Some("50"),
+        &None,
+    )?;
     ui.click("llmFormat")?;
     ui.click("llmFormat-menu-1")?;
     expect(
