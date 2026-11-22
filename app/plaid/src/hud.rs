@@ -110,6 +110,8 @@ pub struct Hud {
     fade: Option<Instant>,
     /// An animation loop is running.
     looping: bool,
+    /// Hiding: render nothing.
+    blank: bool,
     visible: bool,
     /// Bumped on every shown change; a pending auto-hide only fires if nothing changed since.
     epoch: u64,
@@ -147,6 +149,7 @@ impl Hud {
             morph: None,
             fade: None,
             looping: false,
+            blank: false,
             visible: false,
             epoch: 0,
         }
@@ -228,7 +231,8 @@ impl Hud {
         self.state = state;
         if self.text != old {
             self.chars = self.text.chars().count();
-            // Within one visible utterance, keep what is already shown and type on the rest; anything else appears whole.
+            // Within one visible utterance, as many characters as were shown stay shown (a correction swaps in place
+            // rather than retracting) and the rest types on; anything else appears whole.
             let utterance = |s| {
                 matches!(
                     s,
@@ -236,7 +240,7 @@ impl Hud {
                 )
             };
             self.reveal = if self.visible && utterance(prev) && utterance(state) {
-                self.reveal.min(common_prefix(&old, &self.text) as f32)
+                self.reveal.min(self.chars as f32)
             } else {
                 self.chars as f32
             };
@@ -449,11 +453,6 @@ fn color([r, g, b, a]: [f32; 4]) -> Rgba {
     Rgba { r, g, b, a }
 }
 
-/// Characters `a` and `b` share at the start.
-fn common_prefix(a: &str, b: &str) -> usize {
-    a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count()
-}
-
 /// Buffer RMS (Int16 scale) to 0...1: log scale between 60 (silence) and 3000 (loud speech).
 fn level(rms: f64) -> f32 {
     let (lo, hi) = (60f64.ln(), 3000f64.ln());
@@ -533,6 +532,9 @@ enum Hint {
 impl Render for Hud {
     fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         use Hint::*;
+        if self.blank {
+            return div().into_any_element();
+        }
         // Only states that ask something of the user get a header; everything else is the text alone.
         let header: Option<(&str, Vec<Hint>)> = match self.state {
             State::Refining => Some(("优化中", vec![Key("esc"), Text("用原文")])),
@@ -638,6 +640,7 @@ impl Render for Hud {
                     .child(line.child(StyledText::new(text).with_highlights(fades)))
                     .child(edge),
             )
+            .into_any_element()
     }
 }
 
@@ -703,11 +706,23 @@ pub fn options(origin: Point<Pixels>) -> WindowOptions {
 }
 
 pub fn hide(handle: &WindowHandle<Hud>, cx: &mut App) {
-    let _ = handle.update(cx, |hud, window, _| {
+    let _ = handle.update(cx, |hud, window, cx| {
         hud.epoch += 1;
         hud.visible = false;
         hud.fade = None;
-        native::set_visible(window, false);
+        // Draw a blank frame before ordering out: the window keeps its last frame while hidden, and the next show
+        // would flash this utterance's text before redrawing.
+        hud.blank = true;
+        cx.notify();
+        let (this, epoch) = (cx.entity(), hud.epoch);
+        // Callbacks run at the start of a frame, so the nested one runs after the blank frame was presented.
+        window.on_next_frame(move |window, _| {
+            window.on_next_frame(move |window, cx| {
+                if this.read(cx).epoch == epoch {
+                    native::set_visible(window, false);
+                }
+            })
+        });
     });
 }
 
@@ -721,6 +736,7 @@ pub fn apply(handle: &WindowHandle<Hud>, m: Msg, cx: &mut App) {
             Effect::Show(_) => {
                 hud.epoch += 1;
                 hud.visible = true;
+                hud.blank = false;
                 if native::set_visible(window, true) {
                     // GPUI's own move/resize callbacks can't update the window from inside this update.
                     window.bounds_changed(cx);
@@ -1056,9 +1072,11 @@ mod tests {
         }
         assert!((5..=20).contains(&frames), "{frames}");
         assert_eq!(h.revealed(), ("hello".into(), vec![]));
-        // A rewrite keeps the shared start and types on the rest.
+        // A correction swaps in place: what was shown stays shown, the rest types on.
         h.apply(text("help me"));
-        assert_eq!(h.reveal, 3.);
+        assert_eq!(h.reveal, 5.);
+        h.apply(text("yes"));
+        assert!(!h.typing());
         // Not on screen: appears whole.
         h.visible = false;
         h.apply(text("other"));
