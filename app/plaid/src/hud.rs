@@ -10,20 +10,18 @@ use std::time::Instant;
 /// The panel per the design; the window adds room around it for the drop shadow. The panel sits at the bottom
 /// center of the window and fits the text: it widens up to `PANEL_MAX_W`, then grows upward up to `MAX_LINES`.
 /// The window is sized for the largest panel.
-const PANEL_MIN_W: f32 = 360.;
+const PANEL_MIN_W: f32 = 320.;
 const PANEL_MAX_W: f32 = 560.;
 const PANEL_PAD_X: f32 = 14.;
 const PANEL_PAD_Y: f32 = 10.;
-const ICON: f32 = 28.;
-const GAP: f32 = 12.;
-/// Status label, hints and elapsed time above the text.
+/// Status dot, label, elapsed time and hints above the text.
 const HEADER_H: f32 = 16.;
 const HEADER_GAP: f32 = 2.;
 const TEXT_SIZE: f32 = 14.;
 const LINE_H: f32 = 19.;
 const MAX_LINES: usize = 3;
 /// Panel width around the text.
-const CHROME_W: f32 = 2. * PANEL_PAD_X + ICON + GAP;
+const CHROME_W: f32 = 2. * PANEL_PAD_X;
 /// Width the text wraps at.
 const TEXT_MAX_W: f32 = PANEL_MAX_W - CHROME_W;
 const PANEL_MAX_H: f32 = 2. * PANEL_PAD_Y + HEADER_H + HEADER_GAP + MAX_LINES as f32 * LINE_H;
@@ -33,7 +31,6 @@ const W: f32 = PANEL_MAX_W + 40.;
 const H: f32 = PAD_TOP + PANEL_MAX_H + PAD_BOTTOM;
 /// Gap between the panel and the bottom of the visible screen area.
 const LIFT: f32 = 40.;
-const BARS: usize = 6;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum State {
@@ -69,8 +66,8 @@ pub struct Hud {
     continuous: bool,
     /// The previous state was a command run, so `Done` reports the command, not a paste.
     ran: bool,
-    /// Recent input levels in 0...1, oldest first.
-    levels: [f32; BARS],
+    /// Smoothed input level in 0...1: rises with the input, decays over a few buffers.
+    level: f32,
     started: Option<Instant>,
     /// Text width and rows the panel shows; both only grow during an utterance so a rewrite of the partial doesn't
     /// make the panel jump.
@@ -90,7 +87,7 @@ impl Hud {
             command: false,
             continuous: false,
             ran: false,
-            levels: [0.; BARS],
+            level: 0.,
             started: None,
             text_w: 0.,
             rows: 1,
@@ -108,8 +105,12 @@ impl Hud {
                 if !matches!(self.state, State::Listen | State::Quiet) {
                     return Effect::Ignore;
                 }
-                self.levels.rotate_left(1);
-                self.levels[BARS - 1] = level(r);
+                let v = level(r);
+                self.level = if v > self.level {
+                    v
+                } else {
+                    self.level * 0.6 + v * 0.4
+                };
                 return Effect::Redraw;
             }
             Msg::Hide => return Effect::Hide,
@@ -118,7 +119,7 @@ impl Hud {
                 self.text = "".into();
                 self.command = false;
                 self.continuous = false;
-                self.levels = [0.; BARS];
+                self.level = 0.;
                 self.started = Some(Instant::now());
                 self.resize();
                 (State::Listen, None)
@@ -187,7 +188,7 @@ impl Hud {
     }
 }
 
-/// Buffer RMS (Int16 scale) to bar height: log scale between 60 (silence) and 3000 (loud speech).
+/// Buffer RMS (Int16 scale) to 0...1: log scale between 60 (silence) and 3000 (loud speech).
 fn level(rms: f64) -> f32 {
     let (lo, hi) = (60f64.ln(), 3000f64.ln());
     ((rms.max(1.).ln() - lo) / (hi - lo)).clamp(0., 1.) as f32
@@ -197,47 +198,16 @@ const WHITE: u32 = 0xffffff;
 const AMBER: u32 = 0xffc65a;
 const CYAN: u32 = 0x7fd8ff;
 
-fn bars(levels: &[f32; BARS]) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(2.))
-        .h(px(22.))
-        .children(levels.iter().map(|v| {
-            div()
-                .w(px(3.))
-                .h(px(3. + 19. * v))
-                .rounded(px(2.))
-                .bg(mav::vgrad(0xffffff, 0xcfd8e3))
-        }))
-}
+/// Box the header's status indicator sits in.
+const DOT_BOX: f32 = 12.;
 
-/// Jewel with a glossy top and a white glyph.
-fn gem(s: Status, glyph: &'static str, size: f32) -> Div {
-    mav::dot(s, 22.)
-        .relative()
-        .flex()
-        .items_center()
-        .justify_center()
-        .shadow(vec![
-            mav::shadow(0., 0., 0., 1., 0x00000066, true),
-            mav::shadow(0., 1., 0., 0., 0xffffff1f, false),
-        ])
-        .child(
-            div()
-                .absolute()
-                .top(px(1.5))
-                .left(px(4.))
-                .w(px(14.))
-                .h(px(8.))
-                .rounded_full()
-                .bg(linear_gradient(
-                    180.,
-                    linear_color_stop(mav::hexa(0xffffffb0), 0.),
-                    linear_color_stop(mav::hexa(0xffffff00), 1.),
-                )),
-        )
-        .child(mav::icon(glyph, size, mav::hex(WHITE)))
+/// Live input dot: grows from 6 to 10 px and brightens with the level.
+fn pulse(level: f32, color: u32) -> Div {
+    let alpha = (0x8c as f32 + level * 0x73 as f32) as u32;
+    div()
+        .size(px(6. + 4. * level))
+        .rounded_full()
+        .bg(mav::hexa(color << 8 | alpha))
 }
 
 /// Translucent key cap for the dark panel.
@@ -269,15 +239,16 @@ enum Hint {
 impl Render for Hud {
     fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         use Hint::*;
-        let glyph = |path, size| mav::icon(path, size, mav::hex(WHITE)).into_any_element();
-        let (icon, label, label_color, hints, meta): (AnyElement, &str, u32, Vec<Hint>, bool) =
+        let glyph = |path, color| mav::icon(path, 12., mav::hex(color)).into_any_element();
+        let mark = |s| mav::dot(s, 8.).into_any_element();
+        let (dot, label, label_color, hints, meta): (AnyElement, &str, u32, Vec<Hint>, bool) =
             match self.state {
                 State::Listen => (
-                    bars(&self.levels).into_any_element(),
+                    pulse(self.level, if self.command { CYAN } else { WHITE }).into_any_element(),
                     match (self.command, self.continuous) {
                         (true, _) => "命令",
                         (false, true) => "连续听写",
-                        (false, false) => "正在听",
+                        (false, false) => "",
                     },
                     0,
                     if self.continuous {
@@ -288,14 +259,19 @@ impl Render for Hud {
                     true,
                 ),
                 State::Quiet => (
-                    mav::icon("plaid/mic.svg", 20., mav::hex(AMBER)).into_any_element(),
+                    // Low input by definition, so a steady dot rather than one that tracks the level.
+                    div()
+                        .size(px(7.))
+                        .rounded_full()
+                        .bg(mav::hex(AMBER))
+                        .into_any_element(),
                     "电平过低",
                     AMBER,
                     vec![],
                     true,
                 ),
                 State::Finishing | State::Running => (
-                    mav::spinner(18., WHITE, self.spin).into_any_element(),
+                    mav::spinner(11., WHITE, self.spin).into_any_element(),
                     if self.state == State::Finishing {
                         "收尾"
                     } else {
@@ -306,49 +282,31 @@ impl Render for Hud {
                     false,
                 ),
                 State::Refining => (
-                    glyph("plaid/refine.svg", 22.),
+                    glyph("plaid/refine.svg", WHITE),
                     "优化中",
                     0,
                     vec![Key("esc"), Text("用原文")],
                     false,
                 ),
                 State::Done => (
-                    gem(Status::Ok, "plaid/check.svg", 11.).into_any_element(),
+                    mark(Status::Ok),
                     if self.ran { "已执行" } else { "已粘贴" },
                     0,
                     vec![],
                     false,
                 ),
-                State::Note => (
-                    gem(Status::Ok, "plaid/check.svg", 11.).into_any_element(),
-                    "完成",
-                    0,
-                    vec![],
-                    false,
-                ),
+                State::Note => (mark(Status::Ok), "完成", 0, vec![], false),
                 State::Saved => (
-                    gem(Status::Warn, "plaid/exclaim.svg", 12.).into_any_element(),
+                    mark(Status::Warn),
                     "已保存，未粘贴",
                     0,
                     vec![Text("在历史中查看")],
                     false,
                 ),
-                State::Flash => (
-                    gem(Status::Warn, "plaid/exclaim.svg", 12.).into_any_element(),
-                    "提示",
-                    0,
-                    vec![],
-                    false,
-                ),
-                State::Failed => (
-                    gem(Status::Err, "plaid/xmark.svg", 10.).into_any_element(),
-                    "失败",
-                    0,
-                    vec![],
-                    false,
-                ),
+                State::Flash => (mark(Status::Warn), "提示", 0, vec![], false),
+                State::Failed => (mark(Status::Err), "失败", 0, vec![], false),
                 State::Ask => (
-                    glyph("plaid/commands.svg", 22.),
+                    glyph("plaid/commands.svg", WHITE),
                     "执行命令？",
                     0,
                     vec![Key("⏎"), Text("执行"), Key("esc"), Text("取消")],
@@ -404,8 +362,8 @@ impl Render for Hud {
                     .px(px(PANEL_PAD_X))
                     .py(px(PANEL_PAD_Y))
                     .flex()
-                    .items_center()
-                    .gap(px(GAP))
+                    .flex_col()
+                    .gap(px(HEADER_GAP))
                     .rounded(px(9.))
                     .bg(mav::hexa(0x181818d1))
                     .shadow(vec![
@@ -417,59 +375,46 @@ impl Render for Hud {
                     .text_color(mav::hex(WHITE))
                     .child(
                         div()
-                            .size(px(ICON))
-                            .flex_none()
+                            .h(px(HEADER_H))
                             .flex()
                             .items_center()
-                            .justify_center()
-                            .child(icon),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(HEADER_GAP))
+                            .gap(px(6.))
+                            .text_size(px(11.))
                             .child(
                                 div()
-                                    .h(px(HEADER_H))
+                                    .size(px(DOT_BOX))
+                                    .flex_none()
                                     .flex()
                                     .items_center()
-                                    .gap(px(6.))
-                                    .text_size(px(11.))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .text_size(px(10.))
-                                            .font_weight(mav::bold())
-                                            .text_color(if label_color == 0 {
-                                                mav::hexa(0xffffff94)
-                                            } else {
-                                                mav::hex(label_color)
-                                            })
-                                            .child(SharedString::from(label)),
-                                    )
-                                    .children(hints.into_iter().map(|h| {
-                                        match h {
-                                            Key(k) => key(k).into_any_element(),
-                                            Text(t) => div()
-                                                .text_color(mav::hexa(0xffffffbf))
-                                                .child(t)
-                                                .into_any_element(),
-                                        }
-                                    }))
-                                    .when_some(meta.then(|| self.elapsed()).flatten(), |d, m| {
-                                        d.child(
-                                            div()
-                                                .ml(px(6.))
-                                                .text_color(mav::hexa(0xffffff8c))
-                                                .child(m),
-                                        )
-                                    }),
+                                    .justify_center()
+                                    .child(dot),
                             )
-                            .child(line.child(text)),
-                    ),
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_size(px(10.))
+                                    .font_weight(mav::bold())
+                                    .text_color(if label_color == 0 {
+                                        mav::hexa(0xffffff94)
+                                    } else {
+                                        mav::hex(label_color)
+                                    })
+                                    .child(SharedString::from(label)),
+                            )
+                            .when_some(meta.then(|| self.elapsed()).flatten(), |d, m| {
+                                d.child(div().mr(px(4.)).text_color(mav::hexa(0xffffff8c)).child(m))
+                            })
+                            .children(hints.into_iter().map(|h| {
+                                match h {
+                                    Key(k) => key(k).into_any_element(),
+                                    Text(t) => div()
+                                        .text_color(mav::hexa(0xffffffbf))
+                                        .child(t)
+                                        .into_any_element(),
+                                }
+                            })),
+                    )
+                    .child(line.child(text)),
             )
     }
 }
@@ -725,7 +670,7 @@ pub mod native {
 
 #[cfg(test)]
 mod tests {
-    use super::{BARS, Effect, Hud, Msg, State, level};
+    use super::{Effect, Hud, Msg, State, level};
 
     #[test]
     fn transitions() {
@@ -733,7 +678,9 @@ mod tests {
         assert_eq!(h.apply(Msg::Listen), Effect::Show(None));
         assert_eq!(h.apply(Msg::Unquiet), Effect::Ignore);
         assert_eq!(h.apply(Msg::Level(3000.)), Effect::Redraw);
-        assert_eq!(h.levels[BARS - 1], 1.);
+        assert_eq!(h.level, 1.);
+        h.apply(Msg::Level(60.));
+        assert!((h.level - 0.6).abs() < 1e-6, "decays, not drops");
         h.apply(Msg::Quiet("low".into()));
         assert_eq!(h.state, State::Quiet);
         assert_eq!(h.apply(Msg::Unquiet), Effect::Show(None));
