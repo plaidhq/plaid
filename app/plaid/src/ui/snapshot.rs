@@ -473,6 +473,45 @@ impl Ui {
         self.frame()
     }
 
+    /// Presses at `from`, moves with the button held to `to`, and releases there (a text-selection drag).
+    pub(super) fn drag(&mut self, from: Point<Pixels>, to: Point<Pixels>) -> Result<(), String> {
+        let handle = self.window.ok_or("no window")?;
+        self.cx
+            .update_window(handle, |_, window, cx| {
+                let modifiers = Modifiers::default();
+                window.dispatch_event(
+                    PlatformInput::MouseDown(MouseDownEvent {
+                        button: MouseButton::Left,
+                        position: from,
+                        modifiers,
+                        click_count: 1,
+                        first_mouse: false,
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position: to,
+                        modifiers,
+                        pressed_button: Some(MouseButton::Left),
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::MouseUp(MouseUpEvent {
+                        button: MouseButton::Left,
+                        position: to,
+                        modifiers,
+                        click_count: 1,
+                    }),
+                    cx,
+                );
+            })
+            .map_err(|e| e.to_string())?;
+        self.cx.run_until_parked();
+        self.frame()
+    }
+
     /// Scrolls the pane under the control with this id by `dy` pixels (negative scrolls content up).
     pub(super) fn scroll(&mut self, id: &str, dy: f32) -> Result<(), String> {
         let handle = self.window.ok_or("no window")?;

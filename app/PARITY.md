@@ -87,6 +87,8 @@ key access) clicks through every page and writes PNGs. Differences from Swift:
   deleted (detail panel, right-click, ⌫; through the controller, refused while that record is being retried;
   usage is kept). ↑↓ move the selection, ⌘F focuses the search. Filters add 润色 and 改过. 重新润色 runs the LLM (the app's level,
   at least 15 s timeout, no history context) on the recognised text again and overwrites the record; it never pastes.
+  The detail texts are selectable (drag, ⌘C); with a selection, 加入词典 appends it to hotwords.txt as one line
+  (skipped when the line exists, refused over 24 characters or across lines).
   重试 and 重新润色 cannot be cancelled and their failures show on the HUD only;
   export does not flush an unsaved 词典 draft first.
 - 报告: new summary cards above the Swift 性能 diagnostics: half a year of daily characters as a heatmap and

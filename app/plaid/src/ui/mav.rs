@@ -22,6 +22,8 @@ pub const RED: u32 = 0xff7a70;
 pub const LINE: u32 = 0xffffff0f;
 pub const LINE2: u32 = 0xffffff1a;
 pub const LINE3: u32 = 0xffffff24;
+/// Selected-text background.
+pub const SELECTION: u32 = 0x7fd8ff4d;
 
 pub const HINT: u32 = TEXT2;
 pub const LINK: u32 = CYAN;

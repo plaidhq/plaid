@@ -39,6 +39,22 @@ fn read(p: impl AsRef<Path>) -> String {
     std::fs::read_to_string(p).unwrap_or_default()
 }
 
+/// Adds one hotword line unless hotwords.txt already has it (History's 加入词典); Ok(false) when it was there.
+pub(super) fn add_word(word: &str, store: &Store) -> std::io::Result<bool> {
+    let mut text = read(path());
+    if text.split('\n').any(|l| l.trim() == word) {
+        return Ok(false);
+    }
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(word);
+    text.push('\n');
+    write_atomic(&path(), text.as_bytes())?;
+    store.write_auto_rules(&config::terms(false), &dismissed());
+    Ok(true)
+}
+
 fn modified() -> Option<SystemTime> {
     std::fs::metadata(path()).and_then(|m| m.modified()).ok()
 }

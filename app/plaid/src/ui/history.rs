@@ -5,6 +5,7 @@ use super::{Model, Page, on_if_one, reveal, send};
 use crate::config;
 use chrono::{DateTime, Datelike, Local, Utc};
 use gpui_kit::base::input::{Input, InputEvent, InputState};
+use gpui_kit::base::{ElementExt as _, SelectableText};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use plaid_core::dictation::Msg;
@@ -101,7 +102,7 @@ pub struct History {
     sheet: Option<Sheet>,
     details: bool,
     retry: Option<Retry>,
-    note: Option<&'static str>,
+    note: Option<SharedString>,
     exporting: bool,
     player: Option<std::process::Child>,
     playing: Option<Playing>,
@@ -166,11 +167,14 @@ impl History {
         if let Some(r) = &self.retry {
             match store.all.iter().rev().find(|x| x.at == r.id) {
                 Some(x) if fingerprint(x) != r.before => {
-                    self.note = Some(if r.refine {
-                        "润色结果已保存在原记录中，未自动粘贴。"
-                    } else {
-                        "识别结果已保存在原记录中，请手动复制；未自动粘贴。"
-                    });
+                    self.note = Some(
+                        if r.refine {
+                            "润色结果已保存在原记录中，未自动粘贴。"
+                        } else {
+                            "识别结果已保存在原记录中，请手动复制；未自动粘贴。"
+                        }
+                        .into(),
+                    );
                     self.retry = None;
                 }
                 None => self.retry = None,
@@ -239,6 +243,24 @@ impl History {
             self.selected = vec![id];
             self.anchor = Some(id);
         }
+        cx.notify();
+    }
+
+    /// 加入词典: the text selected in the detail box becomes one hotword line.
+    fn add_word(&mut self, selected: &str, cx: &mut Context<Self>) {
+        let word = selected.trim();
+        let note = if word.is_empty() {
+            "先在上面的文字里选中要加入的词。".into()
+        } else if word.contains('\n') || word.chars().count() > 24 {
+            "选中的文字太长；词典每行放一个词或短语。".into()
+        } else {
+            match super::dictionary::add_word(word, &self.model.read(cx).store) {
+                Ok(true) => format!("已加入词典：{word}").into(),
+                Ok(false) => format!("词典里已经有「{word}」。").into(),
+                Err(e) => format!("没能写入词典：{e}").into(),
+            }
+        };
+        self.note = Some(note);
         cx.notify();
     }
 
@@ -378,11 +400,14 @@ impl History {
             let _ = this.update(cx, |h, cx| {
                 if let Some(r) = h.retry.take_if(|r| r.id == id) {
                     // Refusals and failures only reach the HUD.
-                    h.note = Some(if r.refine {
-                        "没有收到润色结果，原因见屏幕下方提示。"
-                    } else {
-                        "没有收到识别结果，原因见屏幕下方提示。"
-                    });
+                    h.note = Some(
+                        if r.refine {
+                            "没有收到润色结果，原因见屏幕下方提示。"
+                        } else {
+                            "没有收到识别结果，原因见屏幕下方提示。"
+                        }
+                        .into(),
+                    );
                     cx.notify();
                 }
             });
@@ -723,17 +748,17 @@ impl History {
     fn status_line(&self) -> Option<Stateful<Div>> {
         let (text, busy) = if let Some(r) = &self.retry {
             (
-                if r.refine {
+                SharedString::from(if r.refine {
                     "正在重新润色；不会自动粘贴…"
                 } else {
                     "正在重新识别；不会自动粘贴…"
-                },
+                }),
                 true,
             )
         } else if self.exporting {
-            ("正在导出…", true)
+            ("正在导出…".into(), true)
         } else {
-            (self.note?, false)
+            (self.note.clone()?, false)
         };
         Some(
             hit("history-status")
@@ -898,7 +923,8 @@ impl History {
     }
 
     /// The right panel: one record (the selection, or the newest shown), or the multi-selection actions.
-    fn detail(&self, focus: Option<DateTime<Utc>>, cx: &mut Context<Self>) -> Div {
+    /// `selecting`: text in the window is selected, so 加入词典 is offered.
+    fn detail(&self, focus: Option<DateTime<Utc>>, selecting: bool, cx: &mut Context<Self>) -> Div {
         let this = cx.entity().downgrade();
         let panel = || {
             div()
@@ -1157,8 +1183,15 @@ impl History {
                     .line_height(px(24.))
                     .text_color(hex(TEXT2))
                     .child(
-                        StyledText::new(original.clone())
-                            .with_highlights(deleted.into_iter().map(|g| (g, struck))),
+                        SelectableText::new(
+                            SharedString::from(format!(
+                                "history-text-raw-{}",
+                                id.timestamp_millis()
+                            )),
+                            original.clone(),
+                        )
+                        .selection_color(hexa(SELECTION))
+                        .highlights(deleted.into_iter().map(|g| (g, struck))),
                     ),
             ));
         }
@@ -1185,10 +1218,20 @@ impl History {
         } else {
             block(
                 out_label,
-                div().text_size(px(20.)).line_height(px(30.)).child(
-                    StyledText::new(r.text.clone())
-                        .with_highlights(inserted.into_iter().map(|g| (g, added(mark)))),
-                ),
+                hit("history-out")
+                    .text_size(px(20.))
+                    .line_height(px(30.))
+                    .child(
+                        SelectableText::new(
+                            SharedString::from(format!(
+                                "history-text-out-{}",
+                                id.timestamp_millis()
+                            )),
+                            r.text.clone(),
+                        )
+                        .selection_color(hexa(SELECTION))
+                        .highlights(inserted.into_iter().map(|g| (g, added(mark)))),
+                    ),
             )
         });
         if let Some(e) = &r.edited {
@@ -1196,11 +1239,32 @@ impl History {
             texts = texts.child(block(
                 "你后来改成",
                 div().text_size(px(15.)).line_height(px(24.)).child(
-                    StyledText::new(e.clone())
-                        .with_highlights(ins.into_iter().map(|g| (g, added(AMBER)))),
+                    SelectableText::new(
+                        SharedString::from(format!(
+                            "history-text-edited-{}",
+                            id.timestamp_millis()
+                        )),
+                        e.clone(),
+                    )
+                    .selection_color(hexa(SELECTION))
+                    .highlights(ins.into_iter().map(|g| (g, added(AMBER)))),
                 ),
             ));
         }
+
+        // Over the first label's line, so offering it moves nothing.
+        let t_word = this.clone();
+        let texts = texts.relative().when(selecting, |d| {
+            d.child(
+                div().absolute().top(px(-4.)).right_0().child(
+                    small_button("history-add-word", "加入词典", move |_, window, cx| {
+                        let word = gpui_kit::base::TextSelection::selected_text(window, cx);
+                        let _ = t_word.update(cx, |h, cx| h.add_word(&word, cx));
+                    })
+                    .keep_text_selection("history-add-word-keep"),
+                ),
+            )
+        });
 
         let llm_bad = !matches!(r.llm.as_str(), "ok" | "off");
         let chars = r.text.chars().filter(|c| !c.is_whitespace()).count() as i64;
@@ -1601,7 +1665,11 @@ impl Render for History {
                             .children(self.status_line())
                             .child(self.list(lines, marked, empty, cx)),
                     )
-                    .child(self.detail(focus, cx)),
+                    .child(self.detail(
+                        focus,
+                        gpui_kit::base::TextSelection::has_selection(window, cx),
+                        cx,
+                    )),
             )
             .child(self.bottom(total, cx))
             .when_some(context, |d, at| d.child(self.context_menu(at, cx)))
@@ -1813,7 +1881,7 @@ fn primary(
 }
 
 /// A labeled text block in the panel.
-fn block(label: &'static str, body: Div) -> Div {
+fn block(label: &'static str, body: impl IntoElement) -> Div {
     div()
         .flex()
         .flex_col()
@@ -2296,6 +2364,46 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     expect(
         "refine offered",
         ui.has("history-refine") && !ui.has("history-status"),
+        &None,
+    )?;
+    // 加入词典 shows up once text is selected, and adds the selection once.
+    let hot = dir.join("hotwords.txt");
+    let before = std::fs::read_to_string(&hot).unwrap_or_default();
+    expect(
+        "add word waits for a selection",
+        !ui.has("history-add-word"),
+        &None,
+    )?;
+    let out = ui.bounds("history-out").ok_or("FAIL no history-out")?;
+    let y = out.origin.y + px(15.);
+    ui.drag(
+        point(out.origin.x + px(1.), y),
+        point(out.origin.x + px(50.), y),
+    )?;
+    ui.shot("history-selection")?;
+    ui.click("history-add-word")?;
+    let after = std::fs::read_to_string(&hot).unwrap_or_default();
+    let added = after
+        .strip_prefix(before.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    expect(
+        &format!("selection added to 词典 ({added:?})"),
+        !added.is_empty() && !added.contains('\n') && after.ends_with('\n'),
+        &None,
+    )?;
+    ui.click("history-add-word")?;
+    expect(
+        "same word not added twice",
+        std::fs::read_to_string(&hot).unwrap_or_default() == after,
+        &None,
+    )?;
+    ui.shot("history-word-added")?;
+    ui.click("history-status")?;
+    expect(
+        "a press elsewhere drops the selection and the button",
+        !ui.has("history-add-word"),
         &None,
     )?;
     ui.click("history-refine")?;

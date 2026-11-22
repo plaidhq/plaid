@@ -645,6 +645,7 @@ impl Render for Settings {
             .size_full()
             .flex()
             .flex_col()
+            .child(gpui_kit::base::TextSelectionLayer)
             .child(self.header(window.is_window_active(), cx))
             .child(self.page_frame(page, cx))
             .child(self.footer(cx))
