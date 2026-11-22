@@ -103,6 +103,7 @@ pub enum Page {
 }
 
 impl Page {
+    #[cfg_attr(not(feature = "snapshot"), allow(dead_code))]
     pub const ALL: [Page; 9] = [
         Page::Overview,
         Page::Perf,
