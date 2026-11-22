@@ -2091,6 +2091,17 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
                 .collect()
         })
     };
+    // A row in the middle of the list: scrolling over an edge row can land outside the clipped list.
+    let mid = |ui: &super::snapshot::Ui| -> Result<String, String> {
+        let mut rows: Vec<(f32, String)> = painted()
+            .into_iter()
+            .filter_map(|k| ui.bounds(&k).map(|b| (f32::from(b.center().y), k)))
+            .collect();
+        rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+        rows.get(rows.len() / 2)
+            .map(|r| r.1.clone())
+            .ok_or_else(|| "no rows".to_string())
+    };
     let all = plaid_core::store::Store::load(&dir).all;
     let row_id = |r: &Record| format!("history-row-{}", r.at.timestamp_millis());
     let failed: Vec<String> = all.iter().filter(|r| r.is_failure()).map(row_id).collect();
@@ -2186,12 +2197,12 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
             if ui.bounds(&id).is_some() {
                 break;
             }
-            let over = painted().into_iter().next().ok_or("no rows")?;
+            let over = mid(ui)?;
             ui.scroll(&over, -300.)?;
         }
         ui.click(&id)?;
         ui.shot("history-rules")?;
-        let over = painted().into_iter().next().ok_or("no rows")?;
+        let over = mid(ui)?;
         ui.scroll(&over, 20000.)?;
     }
 
@@ -2205,13 +2216,19 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         config::raw(LATENCY).as_deref() == Some("1") && !ui.has("history-actions-menu-0"),
         &before,
     )?;
-    let first = painted()
-        .into_iter()
-        .filter_map(|k| ui.bounds(&k).map(|b| (f32::from(b.origin.y), k)))
-        .min_by(|a, b| a.0.total_cmp(&b.0))
-        .map(|(_, k)| k)
-        .ok_or("no rows")?;
-    ui.click(&first)?;
+    // The newest record, scrolled back into view (the list may still be settling from the scroll above).
+    let first = row_id(all.last().ok_or("no records")?);
+    let top = |ui: &mut super::snapshot::Ui| -> Result<(), String> {
+        for _ in 0..5 {
+            if ui.bounds(&first).is_some() {
+                break;
+            }
+            let over = mid(ui)?;
+            ui.scroll(&over, 20000.)?;
+        }
+        ui.click(&first)
+    };
+    top(ui)?;
     expect("detail for a pasted record", ui.has("history-copy"), &None)?;
     ui.shot("history-latency")?;
     let y = ui.bounds(&first).map(|b| b.origin.y);
@@ -2232,17 +2249,7 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     // Keyboard: ↓ moves to the next record, ⌫ asks, then deletes it.
     let count = || plaid_core::store::Store::load(&dir).all.len();
     let n = count();
-    for _ in 0..5 {
-        if ui.bounds(&first).is_some() {
-            break;
-        }
-        let over = painted()
-            .into_iter()
-            .find(|k| ui.bounds(k).is_some())
-            .ok_or("no rows")?;
-        ui.scroll(&over, 20000.)?;
-    }
-    ui.click(&first)?;
+    top(ui)?;
     ui.key("down")?;
     ui.key("backspace")?;
     expect("⌫ asks first", ui.has("history-delete-ok"), &None)?;
