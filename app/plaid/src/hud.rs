@@ -44,12 +44,19 @@ const SWEEP_S: f32 = 1.6;
 const MORPH_S: f32 = 0.28;
 /// The auto-hide fades the panel out over this long.
 const FADE_S: f32 = 0.2;
-/// New text types on at a speed (characters per frame) that eases toward clearing the backlog in `TYPE_CATCH`
-/// frames, by `TYPE_EASE` per frame, never below `TYPE_MIN`. Recognized text arrives in bursts; a smoothed speed
-/// keeps the flow steady across them instead of rushing each burst and stalling between.
-const TYPE_CATCH: f32 = 20.;
-const TYPE_EASE: f32 = 0.1;
-const TYPE_MIN: f32 = 0.2;
+/// New text types on at a speed (characters per 60 Hz frame) that eases toward clearing the backlog in `TYPE_CATCH`
+/// frames, by `TYPE_EASE` per frame, never below `TYPE_MIN`. Speech is recognized 2-3 characters every half second
+/// or so; pacing to that rate, about half a second behind, keeps the text flowing between partials instead of
+/// typing each one at once and stalling (a real 27 s utterance: still 12% of the time instead of 73%). Once the
+/// key is released the backlog clears within a few hundred ms.
+const TYPE_CATCH: f32 = 45.;
+const TYPE_EASE: f32 = 0.05;
+const TYPE_MIN: f32 = 0.03;
+const TYPE_CATCH_END: f32 = 12.;
+const TYPE_MIN_END: f32 = 0.2;
+/// Characters a correction changed fade in again from this alpha over `REFADE_S` instead of swapping at once.
+const REFADE_FROM: f32 = 0.3;
+const REFADE_S: f32 = 0.25;
 /// Each new character fades in over about this many frames.
 const TYPE_FADE: f32 = 12.;
 /// Panel width, text rows and scroll close this share of the gap to their target per frame (about 200 ms).
@@ -111,6 +118,8 @@ pub struct Hud {
     chars: usize,
     reveal: f32,
     vel: f32,
+    /// The characters a correction rewrote, and when.
+    refade: Option<(std::ops::Range<usize>, Instant)>,
     /// What the last frame showed, the start of the next morph, and when that morph started.
     lit: Lit,
     from: Lit,
@@ -157,6 +166,7 @@ impl Hud {
             chars: 0,
             reveal: 0.,
             vel: 0.,
+            refade: None,
             lit: Lit::default(),
             from: Lit::default(),
             morph: None,
@@ -256,7 +266,12 @@ impl Hud {
                     State::Listen | State::Finishing | State::Refining | State::Done
                 )
             };
+            self.refade = None;
             self.reveal = if self.visible && utterance(prev) && utterance(state) {
+                let changed = changed(&old, &self.text);
+                if (changed.start as f32) < self.reveal && !changed.is_empty() {
+                    self.refade = Some((changed, Instant::now()));
+                }
                 self.reveal.min(self.chars as f32)
             } else {
                 self.chars as f32
@@ -309,9 +324,17 @@ impl Hud {
         let ease = |k: f32| 1. - (1. - k).powf(n);
         let typing = self.typing();
         if typing {
+            let (catch, min) = self.pace();
             let left = self.chars as f32 - self.reveal;
-            self.vel += (left / TYPE_CATCH - self.vel) * ease(TYPE_EASE);
-            self.reveal = (self.reveal + self.vel.max(TYPE_MIN) * n).min(self.chars as f32);
+            self.vel += (left / catch - self.vel) * ease(TYPE_EASE);
+            self.reveal = (self.reveal + self.vel.max(min) * n).min(self.chars as f32);
+        }
+        if self
+            .refade
+            .as_ref()
+            .is_some_and(|(_, t)| t.elapsed().as_secs_f32() >= REFADE_S)
+        {
+            self.refade = None;
         }
         let sizing = self.sizing();
         if sizing {
@@ -336,6 +359,7 @@ impl Hud {
         };
         typing
             || sizing
+            || self.refade.is_some()
             || level
             || self.morph.is_some()
             || self.fade.is_some()
@@ -345,23 +369,36 @@ impl Hud {
     /// Fades over the full text: the newest revealed characters partly, the rest fully. The text is always laid out
     /// whole, so revealing more never moves what is already shown.
     fn fades(&self) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
-        if !self.typing() {
+        if !self.typing() && self.refade.is_none() {
             return vec![];
         }
         let fade = |f: f32| HighlightStyle {
             fade_out: Some(f),
             ..Default::default()
         };
-        let tail = (self.vel.max(TYPE_MIN) * TYPE_FADE).max(1.);
+        let tail = (self.vel.max(self.pace().1) * TYPE_FADE).max(1.);
         let n = self.reveal.ceil() as usize;
+        let typed = n.saturating_sub(tail.ceil() as usize + 1);
+        // Corrected characters come back up from `REFADE_FROM`, easing out.
+        let (from, refade, refaded) = match &self.refade {
+            Some((r, t)) => {
+                let k = (t.elapsed().as_secs_f32() / REFADE_S).min(1.);
+                let a = REFADE_FROM + (1. - REFADE_FROM) * (1. - (1. - k).powi(2));
+                (r.start.min(typed), a, r.clone())
+            }
+            None => (typed, 1., 0..0),
+        };
         let mut out: Vec<_> = self
             .text
             .char_indices()
             .enumerate()
             .take(n)
-            .skip(n.saturating_sub(tail.ceil() as usize + 1))
+            .skip(from)
             .filter_map(|(k, (i, c))| {
-                let alpha = ((self.reveal - k as f32) / tail).clamp(0., 1.);
+                let mut alpha = ((self.reveal - k as f32) / tail).clamp(0., 1.);
+                if refaded.contains(&k) {
+                    alpha = alpha.min(refade);
+                }
                 (alpha < 1.).then(|| (i..i + c.len_utf8(), fade(1. - alpha)))
             })
             .collect();
@@ -370,6 +407,15 @@ impl Hud {
             out.push((hidden..self.text.len(), fade(1.)));
         }
         out
+    }
+
+    /// Reveal pacing: steady while listening, catching up once the speech has ended.
+    fn pace(&self) -> (f32, f32) {
+        if self.state == State::Listen {
+            (TYPE_CATCH, TYPE_MIN)
+        } else {
+            (TYPE_CATCH_END, TYPE_MIN_END)
+        }
     }
 
     /// Byte offset of character `n` in `text`.
@@ -706,6 +752,22 @@ impl Render for Hud {
             )
             .into_any_element()
     }
+}
+
+/// The characters of `new` that replace something in `old`: after the shared start, up to where the longest
+/// remaining tail of `old` reappears. Pure insertions and deletions give an empty range; text appended at the end
+/// isn't counted.
+fn changed(old: &str, new: &str) -> std::ops::Range<usize> {
+    let (old, new): (Vec<char>, Vec<char>) = (old.chars().collect(), new.chars().collect());
+    let start = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+    let (old, rest) = (&old[start..], &new[start..]);
+    if old.is_empty() {
+        return start..start;
+    }
+    let end = (0..old.len())
+        .find_map(|j| rest.windows(old.len() - j).position(|w| w == &old[j..]))
+        .unwrap_or(rest.len());
+    start..start + end
 }
 
 /// `text` wrapped at `TEXT_MAX_W`: its width, and the byte offset each wrapped row starts at.
@@ -1123,16 +1185,33 @@ mod tests {
             h.frame(1.);
             frames += 1;
         }
-        assert!((5..=40).contains(&frames), "{frames}");
+        // Paced to speech: five characters take about a second and a half while listening.
+        assert!((40..=150).contains(&frames), "{frames}");
         assert!(h.fades().is_empty());
         // A correction swaps in place: what was shown stays shown, the rest types on.
         h.apply(text("help me"));
         assert_eq!(h.reveal, 5.);
+        // "lo" became "p me": all of it counts as replaced (nothing of the old tail reappears).
+        assert_eq!(h.refade.as_ref().map(|r| r.0.clone()), Some(3..7));
+        assert!(h.fades().iter().any(|f| f.0 == (3..4)));
         h.apply(text("yes"));
         assert!(!h.typing());
         // Not on screen: appears whole.
         h.visible = false;
         h.apply(text("other"));
         assert!(!h.typing());
+    }
+
+    #[test]
+    fn changed_spans_only_the_rewrite() {
+        use super::changed;
+        let at = |o: &str, n: &str| changed(o, n);
+        // A word recognized again: just those characters, the rest stays put.
+        assert_eq!(at("文字出现的这种感觉", "文字粗心的这种感觉"), 2..4);
+        // Punctuation swapped while more text arrives.
+        assert_eq!(at("流利的，舒服", "流利的、舒服的感觉"), 3..4);
+        // A filler removed, or text appended: nothing to fade again.
+        assert_eq!(at("效果，嗯，目前", "效果，目前").len(), 0);
+        assert_eq!(at("效果", "效果还是"), 2..2);
     }
 }
