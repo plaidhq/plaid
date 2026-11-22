@@ -172,32 +172,34 @@ fn hud_test(hud: WindowHandle<hud::Hud>, hold: u64, cx: &mut App) {
         let exec = cx.background_executor().clone();
         let sleep = |ms| exec.timer(std::time::Duration::from_millis(ms));
         let before = probe("before show", cx);
-        cx.update(|cx| {
-            hud::apply(&hud, Hud::Listen, cx);
-            hud::apply(
-                &hud,
-                Hud::Text {
-                    text: "测试 HUD：不应抢走焦点 — focus must stay where it was".into(),
-                    command: false,
-                },
-                cx,
-            )
-        });
-        // Speech-like levels at the real 10 Hz buffer rate, so the edge light animates.
+        cx.update(|cx| hud::apply(&hud, Hud::Listen, cx));
+        // Speech-like levels at the real 10 Hz buffer rate, so the edge light animates, and partials that grow in
+        // bursts every 300 ms until the text wraps past three rows, so the panel grows and scrolls.
         let mut levels = [
             300., 1500., 3000., 900., 2200., 400., 2600., 1200., 200., 1800.,
         ]
-        .into_iter();
+        .into_iter()
+        .cycle();
+        let speech = "测试 HUD：不应抢走焦点，focus must stay where it was. 好的，那我们周四下午三点在公司楼下见，\
+                      记得带上那份合同，还有上次说的报价单也一起带过来。";
+        let mut tick = 0;
         let mut feed = async |n: usize, cx: &mut AsyncApp| {
             for rms in levels.by_ref().take(n) {
-                cx.update(|cx| hud::apply(&hud, Hud::Level(rms), cx));
+                tick += 1;
+                cx.update(|cx| {
+                    hud::apply(&hud, Hud::Level(rms), cx);
+                    if tick % 3 == 0 {
+                        let text = speech.chars().take(tick * 3).collect();
+                        hud::apply(&hud, Hud::Text { text, command: false }, cx);
+                    }
+                });
                 sleep(100).await;
             }
         };
         feed(3, cx).await;
         let after = probe("300 ms after show", cx);
-        feed(7, cx).await;
-        let late = probe("1 s after show", cx);
+        feed(27, cx).await;
+        let late = probe("3 s after show", cx);
         cx.update(|cx| hud::apply(&hud, Hud::Finishing, cx));
         sleep(hold * 1000).await;
         let end = probe("end of hold", cx);

@@ -46,12 +46,16 @@ const FRAME_MS: u64 = 16;
 const MORPH_S: f32 = 0.28;
 /// The auto-hide fades the panel out over this long.
 const FADE_S: f32 = 0.2;
-/// New text types on: each frame reveals this share of the unrevealed characters, at least `TYPE_MIN`, so a burst
-/// of recognized text spreads over a few hundred ms and the reveal keeps up with any backlog.
-const TYPE_SHARE: f32 = 0.12;
-const TYPE_MIN: f32 = 0.35;
-/// The newest characters fade in over this many characters behind the reveal head.
-const TYPE_TAIL: f32 = 3.;
+/// New text types on at a speed (characters per frame) that eases toward clearing the backlog in `TYPE_CATCH`
+/// frames, by `TYPE_EASE` per frame, never below `TYPE_MIN`. Recognized text arrives in bursts; a smoothed speed
+/// keeps the flow steady across them instead of rushing each burst and stalling between.
+const TYPE_CATCH: f32 = 20.;
+const TYPE_EASE: f32 = 0.1;
+const TYPE_MIN: f32 = 0.2;
+/// Each new character fades in over about this many frames.
+const TYPE_FADE: f32 = 12.;
+/// Panel width, text rows and scroll close this share of the gap to their target per frame (about 200 ms).
+const SIZE_EASE: f32 = 0.25;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum State {
@@ -97,11 +101,18 @@ pub struct Hud {
     /// make the panel jump.
     text_w: f32,
     rows: usize,
+    /// First wrapped row in view: the text scrolls so the row being revealed is the last one shown.
+    top: f32,
+    /// Width, rows and top as drawn: they ease toward the targets above. `snap` jumps them there on the next render.
+    size: [f32; 3],
+    snap: bool,
     /// Last measured text, so animation frames don't reshape it.
-    fit: Option<(SharedString, (f32, usize))>,
-    /// Characters in `text` and how many of them are revealed so far (fractional: the head is fading in).
+    fit: Option<(SharedString, Fit)>,
+    /// Characters in `text`, how many of them are revealed so far (fractional: the head is fading in), and the
+    /// reveal speed in characters per frame.
     chars: usize,
     reveal: f32,
+    vel: f32,
     /// What the last frame showed, the start of the next morph, and when that morph started.
     lit: Lit,
     from: Lit,
@@ -141,9 +152,13 @@ impl Hud {
             clock: Instant::now(),
             text_w: 0.,
             rows: 1,
+            top: 0.,
+            size: [0.; 3],
+            snap: true,
             fit: None,
             chars: 0,
             reveal: 0.,
+            vel: 0.,
             lit: Lit::default(),
             from: Lit::default(),
             morph: None,
@@ -181,6 +196,7 @@ impl Hud {
                 self.level = 0.;
                 self.shown = 0.;
                 self.resize();
+                self.vel = 0.;
                 (State::Listen, None)
             }
             Msg::Unquiet => (State::Listen, None),
@@ -227,6 +243,9 @@ impl Hud {
         } else if !self.visible {
             self.morph = None;
         }
+        if !self.visible {
+            self.snap = true;
+        }
         self.fade = None;
         self.state = state;
         if self.text != old {
@@ -272,6 +291,7 @@ impl Hud {
             && (self.morph.is_some()
                 || self.fade.is_some()
                 || self.typing()
+                || self.sizing()
                 || matches!(
                     self.state,
                     State::Listen
@@ -287,13 +307,41 @@ impl Hud {
         self.reveal < self.chars as f32
     }
 
-    /// One animation frame: reveal more text, and take about 60 ms to close most of the gap to the latest level.
-    /// False when nothing on screen would change, so a steady level costs no redraw.
+    /// Panel size or scroll is still on its way to the target.
+    fn sizing(&self) -> bool {
+        self.size != self.size_target()
+    }
+
+    fn size_target(&self) -> [f32; 3] {
+        [
+            (self.text_w + CHROME_W).clamp(PANEL_MIN_W, PANEL_MAX_W),
+            self.rows as f32,
+            self.top,
+        ]
+    }
+
+    /// One animation frame: reveal more text, ease the panel size, and take about 60 ms to close most of the gap to
+    /// the latest level. False when nothing on screen would change, so a steady level costs no redraw.
     pub(crate) fn frame(&mut self) -> bool {
         let typing = self.typing();
         if typing {
             let left = self.chars as f32 - self.reveal;
-            self.reveal = (self.reveal + (left * TYPE_SHARE).max(TYPE_MIN)).min(self.chars as f32);
+            self.vel += (left / TYPE_CATCH - self.vel) * TYPE_EASE;
+            self.reveal = (self.reveal + self.vel.max(TYPE_MIN)).min(self.chars as f32);
+        }
+        let sizing = self.sizing();
+        if sizing {
+            let target = self.size_target();
+            // Settle within half a pixel (width) or a fortieth of a row.
+            let near = [0.5, 0.025, 0.025];
+            self.size = std::array::from_fn(|i| {
+                let gap = target[i] - self.size[i];
+                if gap.abs() < near[i] {
+                    target[i]
+                } else {
+                    self.size[i] + gap * SIZE_EASE
+                }
+            });
         }
         let gap = self.level - self.shown;
         let level = gap.abs() >= 0.002;
@@ -303,42 +351,49 @@ impl Hud {
             self.level
         };
         typing
+            || sizing
             || level
             || self.morph.is_some()
             || self.fade.is_some()
             || matches!(self.edge(), Edge::Sweep(_))
     }
 
-    /// The revealed text, and per-character fades for the newest characters still coming in.
-    fn revealed(&self) -> (SharedString, Vec<(std::ops::Range<usize>, HighlightStyle)>) {
+    /// Fades over the full text: the newest revealed characters partly, the rest fully. The text is always laid out
+    /// whole, so revealing more never moves what is already shown.
+    fn fades(&self) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
         if !self.typing() {
-            return (self.text.clone(), vec![]);
+            return vec![];
         }
+        let fade = |f: f32| HighlightStyle {
+            fade_out: Some(f),
+            ..Default::default()
+        };
+        let tail = (self.vel.max(TYPE_MIN) * TYPE_FADE).max(1.);
         let n = self.reveal.ceil() as usize;
-        let end = self
+        let mut out: Vec<_> = self
             .text
             .char_indices()
-            .nth(n)
-            .map_or(self.text.len(), |(i, _)| i);
-        let shown = &self.text[..end];
-        let fades = shown
-            .char_indices()
             .enumerate()
-            .skip(n.saturating_sub(TYPE_TAIL as usize + 1))
+            .take(n)
+            .skip(n.saturating_sub(tail.ceil() as usize + 1))
             .filter_map(|(k, (i, c))| {
-                let alpha = ((self.reveal - k as f32) / TYPE_TAIL).clamp(0., 1.);
-                (alpha < 1.).then(|| {
-                    (
-                        i..i + c.len_utf8(),
-                        HighlightStyle {
-                            fade_out: Some(1. - alpha),
-                            ..Default::default()
-                        },
-                    )
-                })
+                let alpha = ((self.reveal - k as f32) / tail).clamp(0., 1.);
+                (alpha < 1.).then(|| (i..i + c.len_utf8(), fade(1. - alpha)))
             })
             .collect();
-        (shown.to_string().into(), fades)
+        let hidden = self.byte_at(n);
+        if hidden < self.text.len() {
+            out.push((hidden..self.text.len(), fade(1.)));
+        }
+        out
+    }
+
+    /// Byte offset of character `n` in `text`.
+    fn byte_at(&self, n: usize) -> usize {
+        self.text
+            .char_indices()
+            .nth(n)
+            .map_or(self.text.len(), |(i, _)| i)
     }
 
     #[cfg(feature = "snapshot")]
@@ -546,7 +601,6 @@ impl Render for Hud {
             )),
             _ => None,
         };
-        let live = matches!(self.state, State::Listen | State::Finishing);
         let ((text, fades), placeholder) = if self.text.is_empty() {
             let p = match self.state {
                 State::Listen => "请说话…",
@@ -554,37 +608,49 @@ impl Render for Hud {
             };
             ((SharedString::from(p), vec![]), true)
         } else {
-            (self.revealed(), false)
+            ((self.text.clone(), self.fades()), false)
         };
-        let (w, rows) = match &self.fit {
-            Some((t, m)) if *t == text => *m,
-            _ => {
-                let m = fit(window, &text);
-                self.fit = Some((text.clone(), m));
-                m
-            }
-        };
-        self.text_w = self.text_w.max(w);
-        if !placeholder {
-            self.rows = self.rows.max(rows);
+        if !matches!(&self.fit, Some((t, _)) if *t == text) {
+            self.fit = Some((text.clone(), fit(window, &text)));
         }
-        let panel_w = (self.text_w + CHROME_W).clamp(PANEL_MIN_W, PANEL_MAX_W);
+        let Some((_, m)) = &self.fit else {
+            unreachable!()
+        };
+        // The row holding the character being revealed is the last one in view.
+        let head = self.byte_at((self.reveal.ceil() as usize).saturating_sub(1));
+        let row = if placeholder {
+            0
+        } else {
+            m.starts.partition_point(|&s| s <= head).saturating_sub(1)
+        };
+        self.text_w = self.text_w.max(m.w);
+        if !placeholder {
+            self.rows = self.rows.max((row + 1).min(MAX_LINES));
+        }
+        self.top = (row + 1).saturating_sub(MAX_LINES) as f32;
+        // A size change with no frame loop to ease it (nothing else animating) lands at once.
+        if self.snap || (!self.looping && self.sizing()) {
+            self.size = self.size_target();
+            self.snap = false;
+        }
+        let [w, rows, top] = self.size;
+        // Whole pixels, and an even width so the centered panel's edges land on pixels: text never sits between
+        // pixels while the panel eases.
+        let panel_w = (w / 2.).round() * 2.;
         // The light runs between the corner curves, so it never spills past the rounded edge.
         let track = panel_w - 2. * RADIUS;
         let lit = self.current();
         let edge = light(RADIUS + lit.x * track, lit.w * track, lit.rgb, lit.a);
+        // The text wraps at the widest panel and is clipped to the rows in view, scrolled to keep the newest row
+        // last; the panel easing around it never reflows it.
         let line = div()
-            .min_h(px(self.rows as f32 * LINE_H))
+            .h(px((rows * LINE_H).round()))
+            .w(px(panel_w - CHROME_W))
+            .overflow_hidden()
             .text_size(px(TEXT_SIZE))
             .line_height(px(LINE_H))
-            .text_color(color(lit.text))
-            .line_clamp(MAX_LINES);
-        // Live partials keep their newest words; everything else keeps its start.
-        let line = if live {
-            line.text_ellipsis_start()
-        } else {
-            line.text_ellipsis()
-        };
+            .text_color(color(lit.text));
+        let scroll = div().w(px(TEXT_MAX_W)).mt(px(-(top * LINE_H).round()));
         div()
             .size_full()
             .flex()
@@ -637,15 +703,20 @@ impl Render for Hud {
                                 })),
                         )
                     })
-                    .child(line.child(StyledText::new(text).with_highlights(fades)))
+                    .child(line.child(scroll.child(StyledText::new(text).with_highlights(fades))))
                     .child(edge),
             )
             .into_any_element()
     }
 }
 
-/// Width and wrapped rows (capped at `MAX_LINES`) `text` takes when wrapped at `TEXT_MAX_W`.
-fn fit(window: &Window, text: &SharedString) -> (f32, usize) {
+/// `text` wrapped at `TEXT_MAX_W`: its width, and the byte offset each wrapped row starts at.
+struct Fit {
+    w: f32,
+    starts: Vec<usize>,
+}
+
+fn fit(window: &Window, text: &SharedString) -> Fit {
     let run = TextRun {
         len: text.len(),
         font: mav::font(),
@@ -661,15 +732,33 @@ fn fit(window: &Window, text: &SharedString) -> (f32, usize) {
         Some(px(TEXT_MAX_W)),
         None,
     ) else {
-        return (TEXT_MAX_W, 1);
+        return Fit {
+            w: TEXT_MAX_W,
+            starts: vec![0],
+        };
     };
     let w = lines
         .iter()
         .map(|l| f32::from(l.width()))
         .fold(0., f32::max);
-    let rows: usize = lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum();
+    // A wrap boundary names the glyph that starts the next row; hard line breaks start rows too.
+    let mut starts = vec![];
+    let mut at = 0;
+    for l in lines.iter() {
+        starts.push(at);
+        let runs = &l.unwrapped_layout.runs;
+        starts.extend(
+            l.wrap_boundaries()
+                .iter()
+                .map(|b| at + runs[b.run_ix].glyphs[b.glyph_ix].index),
+        );
+        at += l.len() + 1;
+    }
     // A pixel of slack so the laid-out text never wraps where the measurement didn't.
-    ((w.ceil() + 1.).min(TEXT_MAX_W), rows.clamp(1, MAX_LINES))
+    Fit {
+        w: (w.ceil() + 1.).min(TEXT_MAX_W),
+        starts,
+    }
 }
 
 /// Opens the HUD hidden, bottom center of the primary display (macOS re-anchors on each show). Show and hide go through `apply`/`hide`, which
@@ -1060,18 +1149,22 @@ mod tests {
         h.visible = true;
         h.apply(Msg::Listen);
         h.apply(text("hello"));
-        assert_eq!(h.revealed().0.as_ref(), "");
+        // Laid out whole, all hidden; the first frame starts fading in "h".
+        assert_eq!(h.fades()[0].0, 0..5);
         h.frame();
-        let (shown, fades) = h.revealed();
-        assert_eq!(shown.as_ref(), "h");
-        assert_eq!(fades.len(), 1);
+        let fades = h.fades();
+        assert_eq!(
+            fades.iter().map(|f| f.0.clone()).collect::<Vec<_>>(),
+            [0..1, 1..5]
+        );
+        assert!(fades[0].1.fade_out.unwrap() < 1.);
         let mut frames = 1;
         while h.typing() {
             h.frame();
             frames += 1;
         }
-        assert!((5..=20).contains(&frames), "{frames}");
-        assert_eq!(h.revealed(), ("hello".into(), vec![]));
+        assert!((5..=40).contains(&frames), "{frames}");
+        assert!(h.fades().is_empty());
         // A correction swaps in place: what was shown stays shown, the rest types on.
         h.apply(text("help me"));
         assert_eq!(h.reveal, 5.);
