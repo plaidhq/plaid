@@ -436,7 +436,9 @@ impl Hud {
         match self.state {
             State::Listen => Edge::Level(if self.command { CYAN } else { WHITE }, self.shown),
             State::Quiet => Edge::Fixed(AMBER, 0.3),
-            State::Finishing | State::Running | State::Refining => Edge::Sweep(WHITE),
+            State::Finishing | State::Running => Edge::Sweep(WHITE),
+            // The LLM pass is told apart by color alone; esc still pastes the raw text.
+            State::Refining => Edge::Sweep(VIOLET),
             State::Done | State::Note => Edge::Fixed(GREEN, 1.),
             State::Saved | State::Flash => Edge::Fixed(AMBER, 1.),
             State::Failed => Edge::Fixed(RED, 1.),
@@ -550,6 +552,7 @@ const AMBER: u32 = 0xffc65a;
 const CYAN: u32 = 0x7fd8ff;
 const GREEN: u32 = 0x7ee08a;
 const RED: u32 = 0xff7a70;
+const VIOLET: u32 = 0xb59cff;
 
 /// A light segment `w` wide starting at `x`, fading out toward both ends, with a soft glow from its middle.
 fn light(x: f32, w: f32, rgb: [f32; 4], alpha: f32) -> Div {
@@ -632,7 +635,6 @@ impl Render for Hud {
         let busy = self.visible && self.frame(n);
         // Only states that ask something of the user get a header; everything else is the text alone.
         let header: Option<(&str, Vec<Hint>)> = match self.state {
-            State::Refining => Some(("优化中", vec![Key("esc"), Text("用原文")])),
             State::Saved => Some(("未粘贴", vec![Text("在历史中查看")])),
             State::Failed => Some(("失败", vec![])),
             State::Ask => Some((
