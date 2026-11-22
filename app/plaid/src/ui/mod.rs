@@ -91,24 +91,41 @@ pub enum Page {
     Overview,
     Perf,
     History,
+    /// 设置 → 通用: talk keys and the HUD.
+    General,
+    /// 设置 → 识别: Volcengine key, microphone, recognition options.
     Voice,
     Refine,
     Dictionary,
     Commands,
-    General,
+    /// 设置 → 数据: data folder, kept recordings, privacy note.
+    Data,
 }
 
 impl Page {
-    /// Header order; a rule goes before 声音 and 设置.
-    pub const ALL: [Page; 8] = [
+    pub const ALL: [Page; 9] = [
         Page::Overview,
         Page::Perf,
         Page::History,
+        Page::General,
         Page::Voice,
         Page::Refine,
         Page::Dictionary,
         Page::Commands,
+        Page::Data,
+    ];
+
+    /// The header tabs; 设置 stands for the settings pages.
+    const TOP: [Page; 4] = [Page::Overview, Page::Perf, Page::History, Page::General];
+
+    /// The 设置 sidebar, in order; a rule goes before 数据.
+    const SETTINGS: [Page; 6] = [
         Page::General,
+        Page::Voice,
+        Page::Refine,
+        Page::Dictionary,
+        Page::Commands,
+        Page::Data,
     ];
 
     pub fn title(self) -> &'static str {
@@ -116,11 +133,25 @@ impl Page {
             Page::Overview => "今天",
             Page::Perf => "报告",
             Page::History => "历史",
-            Page::Voice => "声音",
-            Page::Refine => "文字",
+            Page::General => "通用",
+            Page::Voice => "识别",
+            Page::Refine => "润色",
             Page::Dictionary => "词典",
             Page::Commands => "命令",
-            Page::General => "设置",
+            Page::Data => "数据",
+        }
+    }
+
+    fn is_setting(self) -> bool {
+        Page::SETTINGS.contains(&self)
+    }
+
+    /// The header tab this page lights up.
+    fn top(self) -> Page {
+        if self.is_setting() {
+            Page::General
+        } else {
+            self
         }
     }
 
@@ -134,6 +165,7 @@ impl Page {
             Page::Dictionary => "dictionary",
             Page::Commands => "commands",
             Page::General => "general",
+            Page::Data => "data",
         }
     }
 }
@@ -356,8 +388,10 @@ pub struct Settings {
     pages: Vec<(Page, AnyView)>,
     /// 词典 suggestions waiting for a decision (sidebar badge); recounted when the model or hotwords.txt changes.
     pending: usize,
-    /// The page shown before the last switch: the header pill slides from its tab.
+    /// The page shown before the last switch: the header pill slides from its tab, the sidebar pill from its row.
     from: Option<Page>,
+    /// The settings page 设置 reopens.
+    setting: Page,
     /// Each tab's (left, width) inside the nav row, measured while painting; the pill slides between them.
     tabs: Rc<RefCell<Vec<(Page, f32, f32)>>>,
     nav_x: Rc<Cell<f32>>,
@@ -390,6 +424,11 @@ impl Settings {
             pages: vec![],
             pending,
             from: None,
+            setting: if page.is_setting() {
+                page
+            } else {
+                Page::General
+            },
             tabs: Rc::default(),
             nav_x: Rc::default(),
         }
@@ -405,6 +444,9 @@ impl Settings {
             self.from = Some(self.page);
         }
         self.page = page;
+        if page.is_setting() {
+            self.setting = page;
+        }
         cx.notify();
     }
 
@@ -414,11 +456,8 @@ impl Settings {
         }
         let m = self.model.clone();
         let v: AnyView = match page {
-            Page::General => cx
-                .new(|cx| general::General::new(m, false, window, cx))
-                .into(),
-            Page::Voice => cx
-                .new(|cx| general::General::new(m, true, window, cx))
+            Page::General | Page::Voice | Page::Data => cx
+                .new(|cx| general::General::new(m, page, window, cx))
                 .into(),
             Page::History => {
                 let s = cx.entity().downgrade();
@@ -444,7 +483,7 @@ impl Settings {
     /// The page area. In the app a page switch fades the new page in while it settles 6 px up; snapshot runs draw
     /// it at rest so shots never catch the fade.
     fn page_frame(&self, page: AnyView, cx: &App) -> AnyElement {
-        let frame = div().flex_1().min_h_0().relative().child(page);
+        let frame = div().flex_1().min_h_0().min_w_0().relative().child(page);
         if cx.try_global::<Live>().is_none() {
             return frame.into_any_element();
         }
@@ -471,10 +510,12 @@ impl Settings {
                 .map(|t| (t.1 - x0, t.2))
         };
         // Live only (snapshots draw the pill on the tab): slide from the previous tab once both are measured.
+        let top = self.page.top();
         let slide = cx
             .try_global::<Live>()
-            .and(self.from)
-            .and_then(|f| Some((f, spot(f)?, spot(self.page)?)));
+            .and(self.from.map(Page::top))
+            .filter(|&f| f != top)
+            .and_then(|f| Some((f, spot(f)?, spot(top)?)));
         let mut nav = div()
             .relative()
             .flex()
@@ -495,9 +536,7 @@ impl Settings {
                     .rounded_full()
                     .bg(hexa(0xffffff17))
                     .with_animation(
-                        ElementId::Name(
-                            format!("tab-pill-{}-{}", from.slug(), self.page.slug()).into(),
-                        ),
+                        ElementId::Name(format!("tab-pill-{}-{}", from.slug(), top.slug()).into()),
                         Animation::new(Duration::from_millis(220)).with_easing(ease_out_quint()),
                         move |d, t| {
                             d.left(px(a.0 + (b.0 - a.0) * t))
@@ -506,11 +545,11 @@ impl Settings {
                     ),
             );
         }
-        for p in Page::ALL {
-            if matches!(p, Page::Voice | Page::General) {
+        for p in Page::TOP {
+            if p == Page::General {
                 nav = nav.child(div().w(px(1.)).h(px(14.)).mx(px(8.)).bg(hexa(LINE3)));
             }
-            let on = p == self.page;
+            let on = p == top;
             let measure = {
                 let tabs = tabs.clone();
                 canvas(
@@ -524,25 +563,14 @@ impl Settings {
                 .absolute()
                 .inset_0()
             };
-            let count = (p == Page::Dictionary && pending > 0).then(|| {
-                div()
-                    .ml(px(6.))
-                    .h(px(16.))
-                    .min_w(px(16.))
-                    .px(px(4.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_full()
-                    .bg(hex(CYAN))
-                    .text_color(hex(BG))
-                    .font(mono())
-                    .text_size(px(10.))
-                    .font_weight(bold())
-                    .child(pending.to_string())
-            });
+            let count = (p == Page::General && pending > 0).then(|| count_badge(pending));
+            let (id, title, go) = if p == Page::General {
+                ("settings", "设置", self.setting)
+            } else {
+                (p.slug(), p.title(), p)
+            };
             nav = nav.child(
-                hit(p.slug())
+                hit(id)
                     .flex()
                     .items_center()
                     .h(px(30.))
@@ -559,9 +587,9 @@ impl Settings {
                         }
                     })
                     .child(measure)
-                    .child(p.title())
+                    .child(title)
                     .children(count)
-                    .on_click(cx.listener(move |this, _, _, cx| this.show(p, cx))),
+                    .on_click(cx.listener(move |this, _, _, cx| this.show(go, cx))),
             );
         }
         div()
@@ -590,6 +618,78 @@ impl Settings {
             )
             .child(nav)
             .child(drag_area().flex_1().h_full())
+    }
+
+    /// 设置's page list. In the app the pill slides between rows when the previous page was a settings page too.
+    fn sidebar(&self, cx: &mut Context<Self>) -> Div {
+        const ROW: f32 = 34.;
+        const GAP: f32 = 2.;
+        const RULE: f32 = 17.;
+        let y = |p: Page| {
+            let i = Page::SETTINGS.iter().position(|&s| s == p).unwrap_or(0);
+            i as f32 * (ROW + GAP) + if p == Page::Data { RULE } else { 0. }
+        };
+        let slide = cx
+            .try_global::<Live>()
+            .and(self.from)
+            .filter(|f| f.is_setting() && *f != self.page)
+            .map(|f| (f, y(f), y(self.page)));
+        let mut list = div().relative().flex().flex_col().gap(px(GAP));
+        if let Some((from, a, b)) = slide {
+            list = list.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .h(px(ROW))
+                    .rounded(px(9.))
+                    .bg(hexa(0xffffff12))
+                    .with_animation(
+                        ElementId::Name(
+                            format!("side-pill-{}-{}", from.slug(), self.page.slug()).into(),
+                        ),
+                        Animation::new(Duration::from_millis(220)).with_easing(ease_out_quint()),
+                        move |d, t| d.top(px(a + (b - a) * t)),
+                    ),
+            );
+        }
+        for p in Page::SETTINGS {
+            if p == Page::Data {
+                list = list.child(div().h(px(1.)).mx(px(12.)).my(px(8.)).bg(hexa(LINE)));
+            }
+            let on = p == self.page;
+            let count = (p == Page::Dictionary && self.pending > 0)
+                .then(|| div().ml_auto().child(count_badge(self.pending)));
+            list = list.child(
+                hit(p.slug())
+                    .flex()
+                    .items_center()
+                    .h(px(ROW))
+                    .px(px(12.))
+                    .rounded(px(9.))
+                    .text_size(px(14.))
+                    .map(|d| {
+                        if on && slide.is_some() {
+                            d.text_color(hex(TEXT))
+                        } else if on {
+                            d.bg(hexa(0xffffff12)).text_color(hex(TEXT))
+                        } else {
+                            d.text_color(hex(TEXT2))
+                                .hover(|s| s.text_color(hex(TEXT)).bg(hexa(0xffffff0a)))
+                        }
+                    })
+                    .child(p.title())
+                    .children(count)
+                    .on_click(cx.listener(move |this, _, _, cx| this.show(p, cx))),
+            );
+        }
+        div()
+            .w(px(SIDEBAR_W))
+            .flex_none()
+            .pt(px(6.))
+            .pl(px(20.))
+            .pr(px(4.))
+            .child(list)
     }
 
     /// 40 px mono status line, then the 2 px cyan→violet edge light along the window's bottom.
@@ -647,10 +747,44 @@ impl Render for Settings {
             .flex_col()
             .child(gpui_kit::base::TextSelectionLayer)
             .child(self.header(window.is_window_active(), cx))
-            .child(self.page_frame(page, cx))
+            .map(|d| {
+                if self.page.is_setting() {
+                    d.child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .child(self.sidebar(cx))
+                            .child(self.page_frame(page, cx)),
+                    )
+                } else {
+                    d.child(self.page_frame(page, cx))
+                }
+            })
             .child(self.footer(cx))
     }
 }
+
+/// The cyan count pill on 设置 and 词典 (词典 suggestions waiting for a decision).
+fn count_badge(n: usize) -> Div {
+    div()
+        .ml(px(6.))
+        .h(px(16.))
+        .min_w(px(16.))
+        .px(px(4.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .bg(hex(CYAN))
+        .text_color(hex(BG))
+        .font(mono())
+        .text_size(px(10.))
+        .font_weight(bold())
+        .child(n.to_string())
+}
+
+const SIDEBAR_W: f32 = 168.;
 
 /// Scrolling page body with the canvas paddings.
 pub fn page_body(id: &'static str) -> Stateful<Div> {
@@ -666,7 +800,7 @@ pub fn page_body(id: &'static str) -> Stateful<Div> {
         .pb(px(20.))
 }
 
-pub const W: f32 = 980.;
+pub const W: f32 = 1100.;
 pub const H: f32 = 720.;
 
 pub fn window_options(bounds: Option<Bounds<Pixels>>, show: bool) -> WindowOptions {
@@ -682,7 +816,7 @@ pub fn window_options(bounds: Option<Bounds<Pixels>>, show: bool) -> WindowOptio
         }),
         focus: show,
         show,
-        window_min_size: Some(size(px(860.), px(600.))),
+        window_min_size: Some(size(px(960.), px(600.))),
         ..Default::default()
     }
 }

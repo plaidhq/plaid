@@ -2,7 +2,8 @@
 use super::key_field::KeyField;
 use super::mav::*;
 use super::{
-    Live, Model, bool_str, data_dir_label, field, on_if_one, on_unless_zero, pick_list, reveal,
+    Live, Model, Page, bool_str, data_dir_label, field, on_if_one, on_unless_zero, pick_list,
+    reveal,
 };
 use crate::config;
 use gpui_kit::base::input::{InputEvent, InputState};
@@ -214,8 +215,8 @@ impl Number {
 
 pub struct General {
     model: Entity<Model>,
-    /// The 声音 page; otherwise 设置.
-    voice: bool,
+    /// Page::General (通用), Page::Voice (识别) or Page::Data (数据).
+    page: Page,
     key: Entity<KeyField>,
     menu: Option<Menu>,
     recording: Option<Shortcut>,
@@ -227,7 +228,7 @@ pub struct General {
 impl General {
     pub fn new(
         model: Entity<Model>,
-        voice: bool,
+        page: Page,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> General {
@@ -238,7 +239,7 @@ impl General {
         let tail = Self::number("tailMs", 100, 1000, 300, window, cx);
         General {
             model,
-            voice,
+            page,
             key,
             menu: None,
             recording: None,
@@ -721,21 +722,8 @@ impl General {
                 .into_any_element(),
             );
         }
-        super::page_body("voice")
-            .child(
-                group_body()
-                    .child(
-                        card_head("麦克风", "仅影响 Plaid，不更改系统输入设备").child(
-                            div()
-                                .font(mono())
-                                .text_size(px(11.))
-                                .text_color(hex(TEXT2))
-                                .child(status),
-                        ),
-                    )
-                    .child(self.mic_list(cx))
-                    .child(div().pt(px(6.)).child(meter)),
-            )
+        if self.page == Page::General {
+            return super::page_body("general")
             .child(
                 group_body()
                     .child(card_head("说话键", "仅单独按下时触发；两者可以是同一个键"))
@@ -780,14 +768,35 @@ impl General {
                             ),
                     ),
             )
-            .child(group_body().children(asr))
             .child(
                 group_body()
                     .child(card_head("屏幕底部光带", "说话时出现在当前屏幕底部"))
                     .child(hud_states())
                     .child(div().h(px(6.)))
                     .children(self.hud_options()),
+            );
+        }
+        super::page_body("voice")
+            .child(
+                group_body()
+                    .child(card_head("火山引擎", "语音识别服务；key 只存在本机"))
+                    .child(row("API Key", self.key.clone())),
             )
+            .child(
+                group_body()
+                    .child(
+                        card_head("麦克风", "仅影响 Plaid，不更改系统输入设备").child(
+                            div()
+                                .font(mono())
+                                .text_size(px(11.))
+                                .text_color(hex(TEXT2))
+                                .child(status),
+                        ),
+                    )
+                    .child(self.mic_list(cx))
+                    .child(div().pt(px(6.)).child(meter)),
+            )
+            .child(group_body().children(asr))
     }
 
     fn hud_options(&self) -> Vec<AnyElement> {
@@ -861,18 +870,13 @@ impl General {
         rows
     }
 
-    fn general_page(&self) -> Stateful<Div> {
+    fn data_page(&self) -> Stateful<Div> {
         let reveal_label = if cfg!(windows) {
             "在资源管理器中显示"
         } else {
             "在 Finder 中显示"
         };
-        super::page_body("general")
-            .child(
-                group_body()
-                    .child(card_head("火山引擎", "语音识别服务；key 只存在本机"))
-                    .child(row("API Key", self.key.clone())),
-            )
+        super::page_body("data")
             .child(
                 group_body()
                     .child(card_head("数据", "全部只存本机"))
@@ -908,10 +912,10 @@ impl General {
 
 impl Render for General {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.voice {
-            self.voice_page(window, cx)
+        if self.page == Page::Data {
+            self.data_page()
         } else {
-            self.general_page()
+            self.voice_page(window, cx)
         }
     }
 }

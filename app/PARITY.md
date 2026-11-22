@@ -18,7 +18,7 @@ removed afterwards (migrate.rs, commit fa9d596).
 | Learner.swift, Field.swift (EditWatch) | controller Learner, driver `Watch` | |
 | Actions.swift | core/actions.rs, plaid/run.rs | Same env vars, including PLAID_BUNDLE. |
 | Paste.swift | plaid/paste.rs, paste_win.rs, driver `verify_target` | The clipboard is restored on quit as well. |
-| Mic.swift `micDevice` | audio.rs `input_device`, 声音 page picker | Same Core Audio UID; falls back to the default input. |
+| Mic.swift `micDevice` | audio.rs `input_device`, 识别 page picker | Same Core Audio UID; falls back to the default input. |
 | Recovery.swift | controller `recover`, driver `recognize`, 历史 重试 | Also `plaid --recover [at]`; status goes to the HUD. |
 | Settings.swift and its pages | plaid/ui/*.rs | Redesigned dark-only "Edge Light" look drawn in GPUI (ui/mav.rs); see **Settings window** below. |
 | HUD | plaid/hud | Same states; restyled as a 10.9 HUD panel. |
@@ -65,13 +65,14 @@ removed afterwards (migrate.rs, commit fa9d596).
 
 ## Settings window
 
-Top tabs 今天, 报告, 历史 | 声音, 文字, 词典, 命令 | 设置. Space Grotesk and JetBrains Mono are bundled
-(resources/fonts); CJK falls back to the system font. Tray 历史/设置 open the window on that page.
-今天/报告/历史/词典/命令 carry over the Swift pages (概览, 性能, 历史, 词典, 命令). 声音 holds the shortcut,
-microphone list with a live meter, recognition options, HUD states and HUD options (text on/off, reveal speed
-跟着说话/快/立即, linger 0.4/0.7/1.5 s, start/paste chime, follow the mouse screen; chime and mouse screen are
-macOS-only, no-ops on Windows); 设置 holds the Volc key and data folder.
-文字 adds six local text rules (core/rules.rs: fillers, repeats, corrections, final 。, CJK–Latin spacing, Chinese
+Top tabs 今天, 报告, 历史 | 设置. 设置 has a sidebar: 通用, 识别, 润色, 词典, 命令 | 数据; the 设置 tab reopens the last
+settings page and carries the 词典 pending count. Space Grotesk and JetBrains Mono are bundled
+(resources/fonts); CJK falls back to the system font. Tray 历史/设置 open the window on 历史 / 通用.
+今天/报告/历史/词典/命令 carry over the Swift pages (概览, 性能, 历史, 词典, 命令). 通用 holds the shortcut, HUD
+states and HUD options (text on/off, reveal speed 跟着说话/快/立即, linger 0.4/0.7/1.5 s, start/paste chime, follow
+the mouse screen; chime and mouse screen are macOS-only, no-ops on Windows); 识别 the Volc key, microphone list
+with a live meter and recognition options; 数据 the data folder, kept recordings and the privacy note.
+润色 adds six local text rules (core/rules.rs: fillers, repeats, corrections, final 。, CJK–Latin spacing, Chinese
 numerals), all off by default, applied before the LLM pass and without it, so short sentences get them too; then
 the LLM level and its threshold (`llmMinChars`): 关 (rules only, `llmEnabled` 0), 轻度 (`llmLevel` light: a
 punctuation-and-typos prompt, `llmPromptLight`) or 通顺 (the Swift prompt). 按应用 (`llmApps`, `app<TAB>level`
@@ -80,7 +81,7 @@ no LLM). Drawn menus occlude, so a click on an entry never reaches the control u
 Checked offscreen only: `plaid --ui-check <dir>` (snapshot feature, fixture data, no window shown, no device or
 key access) clicks through every page and writes PNGs. Differences from Swift:
 
-- 设置: no 测试 button for the Volc key; no launch-at-login switch.
+- 识别: no 测试 button for the Volc key; 通用: no launch-at-login switch.
 - 历史: a list beside a detail panel (always shows the selected or newest record): waveform with playback, the
   recognised text with the rules' deletions struck through, what was pasted with the LLM's insertions marked, and
   the user's later edit; the waveform fills as the recording plays and the play button stops it. Records can be
@@ -90,7 +91,7 @@ key access) clicks through every page and writes PNGs. Differences from Swift:
   The detail texts are selectable (drag, ⌘C); with a selection, 加入词典 appends it to hotwords.txt as one line
   (skipped when the line exists, refused over 24 characters or across lines).
   Rows and the detail header show the app's icon (running app by name, else Launch Services by name; cached per
-  name); the letter mark stays when none is found and always on Windows. 文字 → 按应用 rows do the same.
+  name); the letter mark stays when none is found and always on Windows. 设置 → 润色 → 按应用 rows do the same.
   重试 and 重新润色 cannot be cancelled and their failures show on the HUD only;
   export does not flush an unsaved 词典 draft first.
 - 报告: new summary cards above the Swift 性能 diagnostics: half a year of daily characters as a heatmap and

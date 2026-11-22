@@ -1374,10 +1374,13 @@ impl Dictionary {
                 .flex_col()
                 .items_start()
                 .gap(px(6.))
-                .child(hint("没有可用的 LLM：在「文字」里填好接口和 key").text_color(hex(AMBER)))
+                .child(
+                    hint("没有可用的 LLM：在「设置 → 润色」里填好接口和 key")
+                        .text_color(hex(AMBER)),
+                )
                 .child(small_button(
                     "open-refine",
-                    "打开文字",
+                    "打开润色",
                     move |_, _, cx| {
                         let _ = nav.update(cx, |s, cx| s.show(Page::Refine, cx));
                     },

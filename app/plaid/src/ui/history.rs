@@ -2437,7 +2437,7 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         point(out.origin.x + px(100.), y),
     )?;
     ui.click("history-add-word")?;
-    ui.click("dictionary")?;
+    ui.click("settings")?;
     ui.click("dict-search")?;
     super::dictionary::type_text(ui, "张小明")?;
     super::dictionary::press(ui, "enter")?;

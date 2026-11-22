@@ -247,6 +247,7 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
         &None,
     )?;
 
+    ui.click("advanced")?;
     let y = ui.bounds("advanced").map(|b| b.origin.y);
     ui.scroll("asrContext", -400.)?;
     let y2 = ui.bounds("advanced").map(|b| b.origin.y);
@@ -255,8 +256,6 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
         matches!((y, y2), (Some(a), Some(b)) if b < a),
         &None,
     )?;
-    ui.shot("voice-scrolled")?;
-    ui.click("advanced")?;
     ui.shot("voice-advanced")?;
     let silence = config::value("silenceRMS");
     ui.click("silenceRMS-1")?;
@@ -270,7 +269,10 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
         &up,
     )?;
 
-    ui.scroll("silenceRMS-1", -600.)?;
+    ui.click("general")?;
+    expect("sidebar opens 通用", ui.has("hold"), &None)?;
+    ui.shot("general")?;
+    ui.scroll("hold", -600.)?;
     ui.click("hudText")?;
     ui.click("hudReveal-2")?;
     ui.click("hudLinger-2")?;
@@ -281,10 +283,10 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
         !o.text && o.reveal == crate::hud::Reveal::Instant && o.linger == 1.5 && o.sound,
         &None,
     )?;
-    ui.shot("voice-hud")?;
+    ui.shot("general-hud")?;
     ui.scroll("hudText", 1600.)?;
     ui.click("hold")?;
-    ui.shot("voice-menu")?;
+    ui.shot("general-menu")?;
     let want = super::general::offered()[0];
     ui.click("hold-menu-0")?;
     expect(
@@ -296,7 +298,7 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
     expect("menu closed after pick", !ui.has("hold-menu-0"), &None)?;
     ui.close()?;
 
-    ui.open(Page::General, facts())?;
+    ui.open(Page::Data, facts())?;
     ui.click("keepAudio")?;
     expect(
         "keepAudio toggled",
@@ -305,11 +307,11 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
     )?;
     ui.click("keepAudio")?;
     expect("reveal button present", ui.has("reveal"), &None)?;
-    ui.shot("general")?;
+    ui.shot("data")?;
     ui.close()?;
 
     ui.open(
-        Page::General,
+        Page::Voice,
         Facts {
             volc_key: false,
             ..facts()
@@ -320,7 +322,7 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
         ui.has("key-save") && !ui.has("key-change"),
         &None,
     )?;
-    ui.shot("general-nokey")?;
+    ui.shot("voice-nokey")?;
     ui.close()
 }
 

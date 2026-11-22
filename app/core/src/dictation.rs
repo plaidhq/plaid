@@ -1246,7 +1246,7 @@ impl Controller {
         }
         let Some(ep) = Self::configured(p) else {
             return p.hud(Hud::Flash(
-                "没有可用的 LLM：在「文字」里填好接口和 key".into(),
+                "没有可用的 LLM：在「设置 → 润色」里填好接口和 key".into(),
             ));
         };
         let light = llm::level(|k| p.setting(k), r.app.as_deref()) == Level::Light;
