@@ -22,6 +22,8 @@ use gpui_kit::*;
 use mav::*;
 use plaid_core::dictation::Msg;
 use plaid_core::store::Store;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -354,6 +356,11 @@ pub struct Settings {
     pages: Vec<(Page, AnyView)>,
     /// 词典 suggestions waiting for a decision (sidebar badge); recounted when the model or hotwords.txt changes.
     pending: usize,
+    /// The page shown before the last switch: the header pill slides from its tab.
+    from: Option<Page>,
+    /// Each tab's (left, width) inside the nav row, measured while painting; the pill slides between them.
+    tabs: Rc<RefCell<Vec<(Page, f32, f32)>>>,
+    nav_x: Rc<Cell<f32>>,
 }
 
 impl Settings {
@@ -382,6 +389,9 @@ impl Settings {
             model,
             pages: vec![],
             pending,
+            from: None,
+            tabs: Rc::default(),
+            nav_x: Rc::default(),
         }
     }
 
@@ -391,6 +401,9 @@ impl Settings {
     }
 
     pub fn show(&mut self, page: Page, cx: &mut Context<Self>) {
+        if page != self.page {
+            self.from = Some(self.page);
+        }
         self.page = page;
         cx.notify();
     }
@@ -448,12 +461,69 @@ impl Settings {
     /// so the pills keep their clicks (Windows hit-tests drag areas natively).
     fn header(&self, active: bool, cx: &mut Context<Self>) -> Div {
         let pending = self.pending;
-        let mut nav = div().flex().items_center().gap(px(2.)).ml(px(10.));
+        let tabs = self.tabs.clone();
+        let nav_x = self.nav_x.clone();
+        let spot = |p: Page| {
+            let x0 = nav_x.get();
+            tabs.borrow()
+                .iter()
+                .find(|t| t.0 == p)
+                .map(|t| (t.1 - x0, t.2))
+        };
+        // Live only (snapshots draw the pill on the tab): slide from the previous tab once both are measured.
+        let slide = cx
+            .try_global::<Live>()
+            .and(self.from)
+            .and_then(|f| Some((f, spot(f)?, spot(self.page)?)));
+        let mut nav = div()
+            .relative()
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .ml(px(10.))
+            .child(
+                canvas(move |b, _, _| nav_x.set(b.origin.x.into()), |_, _, _, _| {})
+                    .absolute()
+                    .inset_0(),
+            );
+        if let Some((from, a, b)) = slide {
+            nav = nav.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .h(px(30.))
+                    .rounded_full()
+                    .bg(hexa(0xffffff17))
+                    .with_animation(
+                        ElementId::Name(
+                            format!("tab-pill-{}-{}", from.slug(), self.page.slug()).into(),
+                        ),
+                        Animation::new(Duration::from_millis(220)).with_easing(ease_out_quint()),
+                        move |d, t| {
+                            d.left(px(a.0 + (b.0 - a.0) * t))
+                                .w(px(a.1 + (b.1 - a.1) * t))
+                        },
+                    ),
+            );
+        }
         for p in Page::ALL {
             if matches!(p, Page::Voice | Page::General) {
                 nav = nav.child(div().w(px(1.)).h(px(14.)).mx(px(8.)).bg(hexa(LINE3)));
             }
             let on = p == self.page;
+            let measure = {
+                let tabs = tabs.clone();
+                canvas(
+                    move |b, _, _| {
+                        let mut t = tabs.borrow_mut();
+                        t.retain(|x| x.0 != p);
+                        t.push((p, b.origin.x.into(), b.size.width.into()));
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0()
+            };
             let count = (p == Page::Dictionary && pending > 0).then(|| {
                 div()
                     .ml(px(6.))
@@ -479,13 +549,16 @@ impl Settings {
                     .px(px(12.))
                     .rounded_full()
                     .map(|d| {
-                        if on {
+                        if on && slide.is_some() {
+                            d.text_color(hex(TEXT))
+                        } else if on {
                             d.bg(hexa(0xffffff17)).text_color(hex(TEXT))
                         } else {
                             d.text_color(hex(TEXT2))
                                 .hover(|s| s.text_color(hex(TEXT)).bg(hexa(0xffffff0a)))
                         }
                     })
+                    .child(measure)
                     .child(p.title())
                     .children(count)
                     .on_click(cx.listener(move |this, _, _, cx| this.show(p, cx))),
