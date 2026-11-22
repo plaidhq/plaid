@@ -78,6 +78,15 @@ fn hud(out: &str) -> Result<(), String> {
             ]
             .concat(),
         ),
+        (
+            "hud-continuous-long",
+            [
+                vec![H::Listen, H::Continuous],
+                levels.to_vec(),
+                vec![text(&[partial, partial, partial].join("。"), false)],
+            ]
+            .concat(),
+        ),
         ("hud-command", vec![H::Listen, text("Plaid 打开日历", true)]),
         (
             "hud-quiet",

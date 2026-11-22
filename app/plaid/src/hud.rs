@@ -7,13 +7,26 @@ use gpui_kit::*;
 use plaid_core::dictation::Hud as Msg;
 use std::time::Instant;
 
-/// The panel per the design; the window adds room around it for the drop shadow.
-const PANEL_W: f32 = 440.;
-const PANEL_H: f32 = 54.;
+/// The panel per the design; the window adds room around it for the drop shadow. The panel sits at the bottom
+/// of the window and grows upward with the text, up to `MAX_LINES`; the window is sized for the tallest panel.
+const PANEL_W: f32 = 560.;
+const PANEL_PAD_X: f32 = 14.;
+const PANEL_PAD_Y: f32 = 10.;
+const ICON: f32 = 28.;
+const GAP: f32 = 12.;
+/// Status label, hints and elapsed time above the text.
+const HEADER_H: f32 = 16.;
+const HEADER_GAP: f32 = 2.;
+const TEXT_SIZE: f32 = 14.;
+const LINE_H: f32 = 19.;
+const MAX_LINES: usize = 3;
+/// Width the text wraps at.
+const TEXT_W: f32 = PANEL_W - 2. * PANEL_PAD_X - ICON - GAP;
+const PANEL_MAX_H: f32 = 2. * PANEL_PAD_Y + HEADER_H + HEADER_GAP + MAX_LINES as f32 * LINE_H;
 const PAD_TOP: f32 = 14.;
 const PAD_BOTTOM: f32 = 34.;
 const W: f32 = PANEL_W + 40.;
-const H: f32 = PAD_TOP + PANEL_H + PAD_BOTTOM;
+const H: f32 = PAD_TOP + PANEL_MAX_H + PAD_BOTTOM;
 /// Gap between the panel and the bottom of the visible screen area.
 const LIFT: f32 = 40.;
 const BARS: usize = 6;
@@ -55,6 +68,8 @@ pub struct Hud {
     /// Recent input levels in 0...1, oldest first.
     levels: [f32; BARS],
     started: Option<Instant>,
+    /// Text rows the panel shows; only grows during an utterance so a rewrite of the partial doesn't make it jump.
+    rows: usize,
     spin: usize,
     visible: bool,
     /// Bumped on every shown change; a pending auto-hide only fires if nothing changed since.
@@ -71,6 +86,7 @@ impl Hud {
             ran: false,
             levels: [0.; BARS],
             started: None,
+            rows: 1,
             spin: 0,
             visible: false,
             epoch: 0,
@@ -97,6 +113,7 @@ impl Hud {
                 self.continuous = false;
                 self.levels = [0.; BARS];
                 self.started = Some(Instant::now());
+                self.rows = 1;
                 (State::Listen, None)
             }
             Msg::Unquiet => (State::Listen, None),
@@ -140,6 +157,10 @@ impl Hud {
 
     fn with(&mut self, t: String, s: State, hide_after: Option<f32>) -> (State, Option<f32>) {
         self.text = t.into();
+        // The utterance's text stays at its size through refining and the paste; anything else sizes afresh.
+        if !matches!(s, State::Refining | State::Done) {
+            self.rows = 1;
+        }
         (s, hide_after)
     }
 
@@ -212,8 +233,8 @@ fn key(text: &'static str) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .min_w(px(22.))
-        .h(px(18.))
+        .min_w(px(20.))
+        .h(px(HEADER_H))
         .px(px(5.))
         .rounded(px(4.))
         .bg(linear_gradient(
@@ -233,7 +254,7 @@ enum Hint {
 }
 
 impl Render for Hud {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         use Hint::*;
         let glyph = |path, size| mav::icon(path, size, mav::hex(WHITE)).into_any_element();
         let (icon, label, label_color, hints, meta): (AnyElement, &str, u32, Vec<Hint>, bool) =
@@ -340,12 +361,15 @@ impl Render for Hud {
         } else {
             mav::hex(WHITE)
         };
+        if !placeholder {
+            self.rows = self.rows.max(rows(window, &text));
+        }
         let line = div()
-            .text_size(px(14.))
-            .line_height(px(19.))
+            .min_h(px(self.rows as f32 * LINE_H))
+            .text_size(px(TEXT_SIZE))
+            .line_height(px(LINE_H))
             .text_color(text_color)
-            .overflow_hidden()
-            .whitespace_nowrap();
+            .line_clamp(MAX_LINES);
         // Live partials keep their newest words; everything else keeps its start.
         let line = if live {
             line.text_ellipsis_start()
@@ -355,16 +379,18 @@ impl Render for Hud {
         div()
             .size_full()
             .flex()
-            .justify_center()
-            .pt(px(PAD_TOP))
+            .flex_col()
+            .justify_end()
+            .items_center()
+            .pb(px(PAD_BOTTOM))
             .child(
                 div()
                     .w(px(PANEL_W))
-                    .h(px(PANEL_H))
-                    .px(px(14.))
+                    .px(px(PANEL_PAD_X))
+                    .py(px(PANEL_PAD_Y))
                     .flex()
                     .items_center()
-                    .gap(px(12.))
+                    .gap(px(GAP))
                     .rounded(px(9.))
                     .bg(mav::hexa(0x181818d1))
                     .shadow(vec![
@@ -376,7 +402,7 @@ impl Render for Hud {
                     .text_color(mav::hex(WHITE))
                     .child(
                         div()
-                            .size(px(28.))
+                            .size(px(ICON))
                             .flex_none()
                             .flex()
                             .items_center()
@@ -389,47 +415,67 @@ impl Render for Hud {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .gap(px(2.))
+                            .gap(px(HEADER_GAP))
                             .child(
                                 div()
-                                    .text_size(px(10.))
-                                    .line_height(px(13.))
-                                    .font_weight(mav::bold())
-                                    .text_color(if label_color == 0 {
-                                        mav::hexa(0xffffff94)
-                                    } else {
-                                        mav::hex(label_color)
-                                    })
-                                    .child(SharedString::from(label)),
+                                    .h(px(HEADER_H))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .text_size(px(11.))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .text_size(px(10.))
+                                            .font_weight(mav::bold())
+                                            .text_color(if label_color == 0 {
+                                                mav::hexa(0xffffff94)
+                                            } else {
+                                                mav::hex(label_color)
+                                            })
+                                            .child(SharedString::from(label)),
+                                    )
+                                    .children(hints.into_iter().map(|h| {
+                                        match h {
+                                            Key(k) => key(k).into_any_element(),
+                                            Text(t) => div()
+                                                .text_color(mav::hexa(0xffffffbf))
+                                                .child(t)
+                                                .into_any_element(),
+                                        }
+                                    }))
+                                    .when_some(meta.then(|| self.elapsed()).flatten(), |d, m| {
+                                        d.child(
+                                            div()
+                                                .ml(px(6.))
+                                                .text_color(mav::hexa(0xffffff8c))
+                                                .child(m),
+                                        )
+                                    }),
                             )
                             .child(line.child(text)),
-                    )
-                    .when(!hints.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .gap(px(6.))
-                                .text_size(px(11.))
-                                .text_color(mav::hexa(0xffffffbf))
-                                .children(hints.into_iter().map(|h| match h {
-                                    Key(k) => key(k).into_any_element(),
-                                    Text(t) => div().child(t).into_any_element(),
-                                })),
-                        )
-                    })
-                    .when_some(meta.then(|| self.elapsed()).flatten(), |d, m| {
-                        d.child(
-                            div()
-                                .flex_none()
-                                .text_size(px(11.))
-                                .text_color(mav::hexa(0xffffff8c))
-                                .child(m),
-                        )
-                    }),
+                    ),
             )
     }
+}
+
+/// Wrapped rows `text` takes at the panel's width, capped at `MAX_LINES`.
+fn rows(window: &Window, text: &SharedString) -> usize {
+    let run = TextRun {
+        len: text.len(),
+        font: mav::font(),
+        color: mav::hex(WHITE),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window
+        .text_system()
+        .shape_text(text.clone(), px(TEXT_SIZE), &[run], Some(px(TEXT_W)), None)
+        .map_or(1, |lines| {
+            lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum()
+        })
+        .clamp(1, MAX_LINES)
 }
 
 /// Opens the HUD hidden, bottom center of the primary display (macOS re-anchors on each show). Show and hide go through `apply`/`hide`, which
@@ -439,7 +485,7 @@ pub fn open(cx: &mut App) -> Result<WindowHandle<Hud>> {
     let origin = display.map_or(point(px(200.), px(200.)), |b| {
         point(
             b.origin.x + (b.size.width - px(W)) / 2.,
-            b.origin.y + b.size.height - px(LIFT + PANEL_H + PAD_TOP),
+            b.origin.y + b.size.height - px(LIFT - PAD_BOTTOM + H),
         )
     });
     let handle = cx.open_window(options(origin), |_, cx| cx.new(|_| Hud::new()))?;
@@ -684,6 +730,28 @@ mod tests {
         assert!(!h.ran);
         assert_eq!(h.apply(Msg::Failed("x".into())), Effect::Show(Some(5.)));
         assert_eq!(h.apply(Msg::Hide), Effect::Hide);
+    }
+
+    /// The panel keeps the rows the utterance reached through finishing, refining and the paste; a new utterance
+    /// or an unrelated message starts at one row (render measures and grows it).
+    #[test]
+    fn rows_only_grow_within_an_utterance() {
+        let mut h = Hud::new();
+        h.apply(Msg::Listen);
+        h.rows = 3;
+        h.apply(Msg::Text {
+            text: "短".into(),
+            command: false,
+        });
+        h.apply(Msg::Finishing);
+        h.apply(Msg::Refining("短".into()));
+        h.apply(Msg::Done("短".into()));
+        assert_eq!(h.rows, 3);
+        h.apply(Msg::Flash("学会".into()));
+        assert_eq!(h.rows, 1);
+        h.rows = 2;
+        h.apply(Msg::Listen);
+        assert_eq!(h.rows, 1);
     }
 
     #[test]
