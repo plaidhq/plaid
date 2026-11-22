@@ -840,7 +840,6 @@ pub fn meter(lit: usize, total: usize) -> Div {
 pub enum Status {
     Ok,
     Warn,
-    Err,
     Off,
 }
 
@@ -849,7 +848,6 @@ pub fn dot(s: Status, size: f32) -> Div {
     let (top, bottom) = match s {
         Status::Ok => (0xc9f3a6, 0x2f8a1b),
         Status::Warn => (0xffe08a, 0xb57b12),
-        Status::Err => (0xff9a92, 0xb8302a),
         Status::Off => (0xe2e2e2, 0xa8a8a8),
     };
     div()
@@ -865,7 +863,6 @@ pub fn badge(s: Status, text: impl Into<SharedString>) -> Div {
     let color = match s {
         Status::Ok => 0x3c6a2b,
         Status::Warn => 0x8a5a00,
-        Status::Err => 0xa3241d,
         Status::Off => 0x666666,
     };
     div()

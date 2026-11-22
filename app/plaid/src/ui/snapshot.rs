@@ -131,6 +131,10 @@ fn hud(out: &str) -> Result<(), String> {
                 for m in msgs {
                     h.apply(m);
                 }
+                // Let the edge light settle on the last level.
+                for _ in 0..30 {
+                    h.frame();
+                }
                 h
             });
             cx.new(|_| Backdrop(hud))

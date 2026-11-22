@@ -1,7 +1,7 @@
 // Recording HUD: a small always-on-top window that never takes focus and lets the mouse through.
 // GPUI's PopUp kind gives a non-activating NSPanel at NSPopUpWindowLevel on macOS and a
 // WS_EX_TOOLWINDOW | WS_EX_TOPMOST window on Windows; the rest is patched through the native handle.
-use crate::ui::mav::{self, Status};
+use crate::ui::mav;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use plaid_core::dictation::Hud as Msg;
@@ -9,16 +9,18 @@ use std::time::Instant;
 
 /// The panel per the design; the window adds room around it for the drop shadow. The panel sits at the bottom
 /// center of the window and fits the text: it widens up to `PANEL_MAX_W`, then grows upward up to `MAX_LINES`.
-/// The window is sized for the largest panel.
-const PANEL_MIN_W: f32 = 320.;
+/// The window is sized for the largest panel. The panel holds only the text; the light along its bottom edge carries
+/// the input level and the state.
+const PANEL_MIN_W: f32 = 280.;
 const PANEL_MAX_W: f32 = 560.;
-const PANEL_PAD_X: f32 = 14.;
-const PANEL_PAD_Y: f32 = 10.;
-/// Status dot, label, elapsed time and hints above the text.
+const PANEL_PAD_X: f32 = 16.;
+const PANEL_PAD_Y: f32 = 11.;
+const RADIUS: f32 = 12.;
+/// Label and key hints above the text, only for states that ask something of the user.
 const HEADER_H: f32 = 16.;
-const HEADER_GAP: f32 = 2.;
-const TEXT_SIZE: f32 = 14.;
-const LINE_H: f32 = 19.;
+const HEADER_GAP: f32 = 4.;
+const TEXT_SIZE: f32 = 15.;
+const LINE_H: f32 = 21.;
 const MAX_LINES: usize = 3;
 /// Panel width around the text.
 const CHROME_W: f32 = 2. * PANEL_PAD_X;
@@ -31,6 +33,15 @@ const W: f32 = PANEL_MAX_W + 40.;
 const H: f32 = PAD_TOP + PANEL_MAX_H + PAD_BOTTOM;
 /// Gap between the panel and the bottom of the visible screen area.
 const LIFT: f32 = 40.;
+/// Edge light: thickness, and its width as a fraction of the panel at silence and at full level.
+const EDGE_H: f32 = 2.;
+const EDGE_MIN: f32 = 0.08;
+const EDGE_MAX: f32 = 0.8;
+/// While processing, a segment of this fraction of the panel sweeps across once per `SWEEP_S` (there and back).
+const SWEEP_W: f32 = 0.28;
+const SWEEP_S: f32 = 1.6;
+/// Animation frame interval while the edge moves.
+const FRAME_MS: u64 = 16;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum State {
@@ -66,17 +77,32 @@ pub struct Hud {
     continuous: bool,
     /// The previous state was a command run, so `Done` reports the command, not a paste.
     ran: bool,
-    /// Smoothed input level in 0...1: rises with the input, decays over a few buffers.
+    /// Input level in 0...1 per 100 ms buffer: rises with the input, decays over a few buffers.
     level: f32,
-    started: Option<Instant>,
+    /// What the edge shows: eases toward `level` every frame so 10 Hz levels move smoothly.
+    shown: f32,
+    /// Phase origin for the processing sweep.
+    clock: Instant,
     /// Text width and rows the panel shows; both only grow during an utterance so a rewrite of the partial doesn't
     /// make the panel jump.
     text_w: f32,
     rows: usize,
-    spin: usize,
+    /// Last measured text, so animation frames don't reshape it.
+    fit: Option<(SharedString, (f32, usize))>,
     visible: bool,
     /// Bumped on every shown change; a pending auto-hide only fires if nothing changed since.
     epoch: u64,
+}
+
+/// What the light along the panel's bottom edge shows.
+#[derive(PartialEq, Debug)]
+enum Edge {
+    /// Centered, width and brightness from the level.
+    Level(u32, f32),
+    /// Centered, fixed fraction of the panel.
+    Fixed(u32, f32),
+    /// A segment sweeping across: work in progress.
+    Sweep(u32),
 }
 
 impl Hud {
@@ -88,10 +114,11 @@ impl Hud {
             continuous: false,
             ran: false,
             level: 0.,
-            started: None,
+            shown: 0.,
+            clock: Instant::now(),
             text_w: 0.,
             rows: 1,
-            spin: 0,
+            fit: None,
             visible: false,
             epoch: 0,
         }
@@ -120,7 +147,7 @@ impl Hud {
                 self.command = false;
                 self.continuous = false;
                 self.level = 0.;
-                self.started = Some(Instant::now());
+                self.shown = 0.;
                 self.resize();
                 (State::Listen, None)
             }
@@ -156,6 +183,11 @@ impl Hud {
             Msg::Running(t) => self.with(t, State::Running, None),
             Msg::Note(t) => self.with(t, State::Note, Some(4.)),
         };
+        if !matches!(prev, State::Finishing | State::Running | State::Refining)
+            && matches!(state, State::Finishing | State::Running | State::Refining)
+        {
+            self.clock = Instant::now();
+        }
         self.state = state;
         if !matches!(state, State::Listen | State::Quiet | State::Finishing) {
             self.command = false;
@@ -178,13 +210,37 @@ impl Hud {
         self.rows = 1;
     }
 
-    fn spins(&self) -> bool {
-        self.visible && matches!(self.state, State::Finishing | State::Running)
+    /// The edge moves on its own: eases toward the level, or sweeps.
+    fn animates(&self) -> bool {
+        self.visible
+            && matches!(
+                self.state,
+                State::Listen | State::Quiet | State::Finishing | State::Running | State::Refining
+            )
     }
 
-    fn elapsed(&self) -> Option<String> {
-        let s = self.started?.elapsed().as_secs();
-        Some(format!("{}:{:02}", s / 60, s % 60))
+    /// One animation frame: about 60 ms to close most of the gap to the latest level.
+    /// False when nothing on screen would change, so a steady level costs no redraw.
+    pub(crate) fn frame(&mut self) -> bool {
+        let gap = self.level - self.shown;
+        if gap.abs() < 0.002 {
+            self.shown = self.level;
+            return !matches!(self.edge(), Edge::Fixed(..) | Edge::Level(..));
+        }
+        self.shown += gap * 0.3;
+        true
+    }
+
+    fn edge(&self) -> Edge {
+        match self.state {
+            State::Listen => Edge::Level(if self.command { CYAN } else { WHITE }, self.shown),
+            State::Quiet => Edge::Fixed(AMBER, 0.3),
+            State::Finishing | State::Running | State::Refining => Edge::Sweep(WHITE),
+            State::Done | State::Note => Edge::Fixed(GREEN, 1.),
+            State::Saved | State::Flash => Edge::Fixed(AMBER, 1.),
+            State::Failed => Edge::Fixed(RED, 1.),
+            State::Ask => Edge::Fixed(CYAN, 1.),
+        }
     }
 }
 
@@ -197,17 +253,45 @@ fn level(rms: f64) -> f32 {
 const WHITE: u32 = 0xffffff;
 const AMBER: u32 = 0xffc65a;
 const CYAN: u32 = 0x7fd8ff;
+const GREEN: u32 = 0x7ee08a;
+const RED: u32 = 0xff7a70;
 
-/// Box the header's status indicator sits in.
-const DOT_BOX: f32 = 12.;
-
-/// Live input dot: grows from 6 to 10 px and brightens with the level.
-fn pulse(level: f32, color: u32) -> Div {
-    let alpha = (0x8c as f32 + level * 0x73 as f32) as u32;
+/// A light segment `w` wide starting at `x`, fading out toward both ends, with a soft glow from its middle.
+fn light(x: f32, w: f32, color: u32, alpha: f32) -> Div {
+    let a = (alpha.clamp(0., 1.) * 255.) as u32;
+    let half = |from: u32, to: u32| {
+        div().w(px(w / 2.)).h_full().bg(linear_gradient(
+            90.,
+            linear_color_stop(mav::hexa(color << 8 | from), 0.),
+            linear_color_stop(mav::hexa(color << 8 | to), 1.),
+        ))
+    };
     div()
-        .size(px(6. + 4. * level))
-        .rounded_full()
-        .bg(mav::hexa(color << 8 | alpha))
+        .absolute()
+        .bottom_0()
+        .left(px(x))
+        .w(px(w))
+        .h(px(EDGE_H))
+        .flex()
+        .child(half(0, a))
+        .child(half(a, 0))
+        .child(
+            // Glow: a short core whose blurred shadow lights the panel edge around the middle.
+            div()
+                .absolute()
+                .bottom_0()
+                .left(px(w * 0.35))
+                .w(px(w * 0.3))
+                .h(px(EDGE_H))
+                .shadow(vec![mav::shadow(
+                    0.,
+                    0.,
+                    10.,
+                    0.,
+                    color << 8 | (a as f32 * 0.6) as u32,
+                    false,
+                )]),
+        )
 }
 
 /// Translucent key cap for the dark panel.
@@ -239,85 +323,25 @@ enum Hint {
 impl Render for Hud {
     fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         use Hint::*;
-        let glyph = |path, color| mav::icon(path, 12., mav::hex(color)).into_any_element();
-        let mark = |s| mav::dot(s, 8.).into_any_element();
-        let (dot, label, label_color, hints, meta): (AnyElement, &str, u32, Vec<Hint>, bool) =
-            match self.state {
-                State::Listen => (
-                    pulse(self.level, if self.command { CYAN } else { WHITE }).into_any_element(),
-                    match (self.command, self.continuous) {
-                        (true, _) => "命令",
-                        (false, true) => "连续听写",
-                        (false, false) => "",
-                    },
-                    0,
-                    if self.continuous {
-                        vec![Key("⏎"), Text("结束")]
-                    } else {
-                        vec![]
-                    },
-                    true,
-                ),
-                State::Quiet => (
-                    // Low input by definition, so a steady dot rather than one that tracks the level.
-                    div()
-                        .size(px(7.))
-                        .rounded_full()
-                        .bg(mav::hex(AMBER))
-                        .into_any_element(),
-                    "电平过低",
-                    AMBER,
-                    vec![],
-                    true,
-                ),
-                State::Finishing | State::Running => (
-                    mav::spinner(11., WHITE, self.spin).into_any_element(),
-                    if self.state == State::Finishing {
-                        "收尾"
-                    } else {
-                        "处理中"
-                    },
-                    0,
-                    vec![],
-                    false,
-                ),
-                State::Refining => (
-                    glyph("plaid/refine.svg", WHITE),
-                    "优化中",
-                    0,
-                    vec![Key("esc"), Text("用原文")],
-                    false,
-                ),
-                State::Done => (
-                    mark(Status::Ok),
-                    if self.ran { "已执行" } else { "已粘贴" },
-                    0,
-                    vec![],
-                    false,
-                ),
-                State::Note => (mark(Status::Ok), "完成", 0, vec![], false),
-                State::Saved => (
-                    mark(Status::Warn),
-                    "已保存，未粘贴",
-                    0,
-                    vec![Text("在历史中查看")],
-                    false,
-                ),
-                State::Flash => (mark(Status::Warn), "提示", 0, vec![], false),
-                State::Failed => (mark(Status::Err), "失败", 0, vec![], false),
-                State::Ask => (
-                    glyph("plaid/commands.svg", WHITE),
-                    "执行命令？",
-                    0,
-                    vec![Key("⏎"), Text("执行"), Key("esc"), Text("取消")],
-                    false,
-                ),
-            };
+        // Only states that ask something of the user get a header; everything else is the text alone.
+        let header: Option<(&str, Vec<Hint>)> = match self.state {
+            State::Refining => Some(("优化中", vec![Key("esc"), Text("用原文")])),
+            State::Saved => Some(("未粘贴", vec![Text("在历史中查看")])),
+            State::Failed => Some(("失败", vec![])),
+            State::Ask => Some((
+                "执行命令？",
+                vec![Key("⏎"), Text("执行"), Key("esc"), Text("取消")],
+            )),
+            _ => None,
+        };
         let live = matches!(self.state, State::Listen | State::Finishing);
-        let dim = matches!(self.state, State::Finishing | State::Refining);
+        let dim = matches!(
+            self.state,
+            State::Finishing | State::Refining | State::Running
+        );
         let (text, placeholder) = if self.text.is_empty() {
             let p = match self.state {
-                State::Listen if self.continuous => "再按一次快捷键或 ⏎ 结束",
+                State::Listen if self.continuous => "再按快捷键或 ⏎ 结束",
                 State::Listen => "请说话…",
                 _ => "等待最终结果…",
             };
@@ -325,18 +349,48 @@ impl Render for Hud {
         } else {
             (self.text.clone(), false)
         };
-        let text_color = if self.command && live && !dim {
+        let text_color = if placeholder {
+            mav::hexa(0xffffff73)
+        } else if dim {
+            mav::hexa(0xffffff99)
+        } else if self.state == State::Quiet {
+            mav::hex(AMBER)
+        } else if self.command && live {
             mav::hex(CYAN)
-        } else if dim || placeholder {
-            mav::hexa(0xffffff9e)
         } else {
             mav::hex(WHITE)
         };
-        let (w, rows) = fit(window, &text);
+        let (w, rows) = match &self.fit {
+            Some((t, m)) if *t == text => *m,
+            _ => {
+                let m = fit(window, &text);
+                self.fit = Some((text.clone(), m));
+                m
+            }
+        };
         self.text_w = self.text_w.max(w);
         if !placeholder {
             self.rows = self.rows.max(rows);
         }
+        let panel_w = (self.text_w + CHROME_W).clamp(PANEL_MIN_W, PANEL_MAX_W);
+        // The light runs between the corner curves, so it never spills past the rounded edge.
+        let track = panel_w - 2. * RADIUS;
+        let edge = match self.edge() {
+            Edge::Level(c, l) => {
+                let w = track * (EDGE_MIN + (EDGE_MAX - EDGE_MIN) * l);
+                light(RADIUS + (track - w) / 2., w, c, 0.35 + 0.65 * l)
+            }
+            Edge::Fixed(c, f) => {
+                let w = track * f;
+                light(RADIUS + (track - w) / 2., w, c, 0.9)
+            }
+            Edge::Sweep(c) => {
+                let t = self.clock.elapsed().as_secs_f32() / SWEEP_S;
+                let p = 0.5 - 0.5 * (t * std::f32::consts::TAU).cos();
+                let w = track * SWEEP_W;
+                light(RADIUS + (track - w) * p, w, c, 0.75)
+            }
+        };
         let line = div()
             .min_h(px(self.rows as f32 * LINE_H))
             .text_size(px(TEXT_SIZE))
@@ -358,14 +412,15 @@ impl Render for Hud {
             .pb(px(PAD_BOTTOM))
             .child(
                 div()
-                    .w(px((self.text_w + CHROME_W).clamp(PANEL_MIN_W, PANEL_MAX_W)))
+                    .relative()
+                    .w(px(panel_w))
                     .px(px(PANEL_PAD_X))
                     .py(px(PANEL_PAD_Y))
                     .flex()
                     .flex_col()
                     .gap(px(HEADER_GAP))
-                    .rounded(px(9.))
-                    .bg(mav::hexa(0x181818d1))
+                    .rounded(px(RADIUS))
+                    .bg(mav::hexa(0x181818db))
                     .shadow(vec![
                         mav::shadow(0., 0., 0., 1., 0x0000008c, false),
                         mav::shadow(0., 1., 0., 0., 0xffffff24, true),
@@ -373,48 +428,34 @@ impl Render for Hud {
                     ])
                     .font(mav::font())
                     .text_color(mav::hex(WHITE))
-                    .child(
-                        div()
-                            .h(px(HEADER_H))
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .text_size(px(11.))
-                            .child(
-                                div()
-                                    .size(px(DOT_BOX))
-                                    .flex_none()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(dot),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_size(px(10.))
-                                    .font_weight(mav::bold())
-                                    .text_color(if label_color == 0 {
-                                        mav::hexa(0xffffff94)
-                                    } else {
-                                        mav::hex(label_color)
-                                    })
-                                    .child(SharedString::from(label)),
-                            )
-                            .when_some(meta.then(|| self.elapsed()).flatten(), |d, m| {
-                                d.child(div().mr(px(4.)).text_color(mav::hexa(0xffffff8c)).child(m))
-                            })
-                            .children(hints.into_iter().map(|h| {
-                                match h {
-                                    Key(k) => key(k).into_any_element(),
-                                    Text(t) => div()
-                                        .text_color(mav::hexa(0xffffffbf))
-                                        .child(t)
-                                        .into_any_element(),
-                                }
-                            })),
-                    )
-                    .child(line.child(text)),
+                    .when_some(header, |d, (label, hints)| {
+                        d.child(
+                            div()
+                                .h(px(HEADER_H))
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .text_size(px(11.))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .font_weight(mav::bold())
+                                        .text_color(mav::hexa(0xffffff99))
+                                        .child(label),
+                                )
+                                .children(hints.into_iter().map(|h| {
+                                    match h {
+                                        Key(k) => key(k).into_any_element(),
+                                        Text(t) => div()
+                                            .text_color(mav::hexa(0xffffffbf))
+                                            .child(t)
+                                            .into_any_element(),
+                                    }
+                                })),
+                        )
+                    })
+                    .child(line.child(text))
+                    .child(edge),
             )
     }
 }
@@ -488,10 +529,10 @@ pub fn hide(handle: &WindowHandle<Hud>, cx: &mut App) {
     });
 }
 
-/// Applies one controller HUD change to the window: show, hide, schedule the auto-hide, run the spinner.
+/// Applies one controller HUD change to the window: show, hide, schedule the auto-hide, animate the edge light.
 pub fn apply(handle: &WindowHandle<Hud>, m: Msg, cx: &mut App) {
-    let Ok((effect, spin_started, epoch)) = handle.update(cx, |hud, window, cx| {
-        let was_spinning = hud.spins();
+    let Ok((effect, anim_started, epoch)) = handle.update(cx, |hud, window, cx| {
+        let was_animating = hud.animates();
         let effect = hud.apply(m);
         match effect {
             Effect::Ignore | Effect::Hide => {}
@@ -506,7 +547,7 @@ pub fn apply(handle: &WindowHandle<Hud>, m: Msg, cx: &mut App) {
                 cx.notify();
             }
         }
-        (effect, !was_spinning && hud.spins(), hud.epoch)
+        (effect, !was_animating && hud.animates(), hud.epoch)
     }) else {
         return;
     };
@@ -531,18 +572,17 @@ pub fn apply(handle: &WindowHandle<Hud>, m: Msg, cx: &mut App) {
         }
         _ => {}
     }
-    if spin_started {
+    if anim_started {
         cx.spawn(async move |cx| {
             loop {
                 cx.background_executor()
-                    .timer(std::time::Duration::from_millis(83))
+                    .timer(std::time::Duration::from_millis(FRAME_MS))
                     .await;
                 let go = cx.update(|cx| {
                     handle
                         .update(cx, |hud, _, cx| {
-                            let go = hud.spins();
-                            if go {
-                                hud.spin += 1;
+                            let go = hud.animates();
+                            if go && hud.frame() {
                                 cx.notify();
                             }
                             go
@@ -732,5 +772,21 @@ mod tests {
         assert_eq!(level(60.), 0.);
         assert_eq!(level(10_000.), 1.);
         assert!((level(424.26) - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn edge_eases_and_resets() {
+        let mut h = Hud::new();
+        h.apply(Msg::Listen);
+        h.apply(Msg::Level(3000.));
+        h.frame();
+        assert!(h.shown > 0.2 && h.shown < 0.4, "{}", h.shown);
+        // Six frames (~100 ms, one audio buffer) close most of the gap.
+        for _ in 0..5 {
+            h.frame();
+        }
+        assert!(h.shown > 0.85, "{}", h.shown);
+        h.apply(Msg::Listen);
+        assert_eq!(h.shown, 0.);
     }
 }
