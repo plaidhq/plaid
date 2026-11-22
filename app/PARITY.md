@@ -68,6 +68,9 @@ removed afterwards (migrate.rs, commit fa9d596).
 Top tabs 概览, 历史 | 设置. 设置 has a sidebar: 通用, 识别, 润色, 词典, 命令 | 数据; the 设置 tab reopens the last
 settings page and carries the 词典 pending count. Space Grotesk and JetBrains Mono are bundled
 (resources/fonts); CJK falls back to the system font. Tray 历史/设置 open the window on 历史 / 通用.
+On macOS the window blurs the desktop behind it under a near-black tint that is denser at the edges, bottom and
+corners, with translucent cards; gpui-component's theme background is cleared so its root layer stays out of the
+way. Windows paints an opaque ground.
 概览/历史/词典/命令 carry over the Swift pages (概览 and 性能 merged into 概览, 历史, 词典, 命令). 通用 holds the shortcut, HUD
 states and HUD options (text on/off, reveal speed 跟着说话/快/立即, linger 0.4/0.7/1.5 s, start/paste chime, follow
 the mouse screen; chime and mouse screen are macOS-only, no-ops on Windows); 识别 the Volc key, microphone list

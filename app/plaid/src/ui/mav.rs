@@ -151,8 +151,8 @@ pub fn root() -> Div {
 }
 
 /// The settings window's ground on macOS, where the window blurs the desktop behind it: a translucent near-black
-/// that gets denser toward the edges, densest at the bottom and in the corners, with a faint violet cast at the top
-/// left. Elsewhere the window is opaque and this is plain BG. Sits under everything as the root's first child.
+/// that gets denser toward the edges, densest at the bottom and in the corners. Elsewhere the window is opaque and
+/// this is plain BG. Sits under everything as the root's first child.
 pub fn backdrop() -> Div {
     let band = |angle: f32, from: u32, to: u32| {
         linear_gradient(
@@ -167,7 +167,7 @@ pub fn backdrop() -> Div {
         return d.bg(hex(BG));
     }
     let bg = BG << 8;
-    d.bg(hexa(bg | 0x9a))
+    d.bg(hexa(bg | 0xa8))
         .child(
             div()
                 .absolute()
@@ -203,15 +203,6 @@ pub fn backdrop() -> Div {
                 .right_0()
                 .w(px(220.))
                 .bg(band(90., bg, bg | 0x90)),
-        )
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .w(px(520.))
-                .h(px(260.))
-                .bg(band(135., (VIOLET << 8) | 0x26, VIOLET << 8)),
         )
 }
 

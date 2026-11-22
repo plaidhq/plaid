@@ -76,6 +76,13 @@ pub fn init(cx: &mut App) {
     c.border = hexa(LINE2);
     c.accent = hex(0x2f6f8c);
     c.selection = tint(CYAN, 0x55);
+    // gpui-component's root plugin fills every kit window with its own theme's background, white by default,
+    // under whatever the window paints. Each window paints its own ground, and the settings window's must let
+    // the blurred desktop through.
+    let t = gpui_kit::component::Theme::global_mut(cx);
+    let clear = transparent_black();
+    t.tokens.background = gpui_kit::component::ThemeToken::new(clear, clear.into());
+    t.colors.background = clear;
 }
 
 /// What the running app hands the settings window: the controller's inbox and the hotkey hook's state.
