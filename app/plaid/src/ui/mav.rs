@@ -5,9 +5,12 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 pub const BG: u32 = 0x0c0d10;
-pub const SURFACE: u32 = 0x14161b;
 pub const WELL: u32 = 0x0f1014;
 pub const RAISED: u32 = 0x1a1c22;
+/// Cards and wells over the settings window's see-through ground, `0xRRGGBBAA`: dark fills with some of the
+/// blurred desktop showing through. Drawn menus keep the opaque RAISED2 so they still occlude.
+pub const GLASS: u32 = 0x161920b8;
+pub const GLASS_WELL: u32 = 0x0d0e12c0;
 pub const RAISED2: u32 = 0x1e2128;
 pub const HOVER: u32 = 0x262a32;
 pub const TEXT: u32 = 0xecedef;
@@ -147,6 +150,71 @@ pub fn root() -> Div {
         .bg(hex(BG))
 }
 
+/// The settings window's ground on macOS, where the window blurs the desktop behind it: a translucent near-black
+/// that gets denser toward the edges, densest at the bottom and in the corners, with a faint violet cast at the top
+/// left. Elsewhere the window is opaque and this is plain BG. Sits under everything as the root's first child.
+pub fn backdrop() -> Div {
+    let band = |angle: f32, from: u32, to: u32| {
+        linear_gradient(
+            angle,
+            linear_color_stop(hexa(from), 0.),
+            linear_color_stop(hexa(to), 1.),
+        )
+    };
+    let d = div().absolute().inset_0();
+    // Offscreen snapshots have no desktop behind them.
+    if !cfg!(target_os = "macos") || cfg!(feature = "snapshot") {
+        return d.bg(hex(BG));
+    }
+    let bg = BG << 8;
+    d.bg(hexa(bg | 0x9a))
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .h(px(150.))
+                .bg(band(180., bg | 0xb0, bg)),
+        )
+        .child(
+            div()
+                .absolute()
+                .bottom_0()
+                .left_0()
+                .right_0()
+                .h(relative(0.45))
+                .bg(band(180., bg, bg | 0xd8)),
+        )
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .w(px(260.))
+                .bg(band(90., bg | 0x90, bg)),
+        )
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right_0()
+                .w(px(220.))
+                .bg(band(90., bg, bg | 0x90)),
+        )
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .w(px(520.))
+                .h(px(260.))
+                .bg(band(135., (VIOLET << 8) | 0x26, VIOLET << 8)),
+        )
+}
+
 // --- Title bar -------------------------------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -261,7 +329,7 @@ pub fn group_body() -> Div {
         .px(px(20.))
         .py(px(16.))
         .rounded(px(16.))
-        .bg(hex(SURFACE))
+        .bg(hexa(GLASS))
         .border_1()
         .border_color(hexa(LINE))
 }
@@ -612,7 +680,7 @@ pub fn radio(
             .shadow(vec![glow(CYAN, 8., 0x44)])
             .child(div().size(px(8.)).rounded_full().bg(hex(CYAN)))
     } else {
-        dot.border_color(hexa(LINE3)).bg(hex(WELL))
+        dot.border_color(hexa(LINE3)).bg(hexa(GLASS_WELL))
     };
     hit(id)
         .flex()
@@ -639,7 +707,7 @@ pub fn segmented(
         .p(px(3.))
         .gap(px(2.))
         .rounded_full()
-        .bg(hex(WELL))
+        .bg(hexa(GLASS_WELL))
         .border_1()
         .border_color(hexa(LINE))
         .children(items.iter().enumerate().map(|(i, label)| {
@@ -698,7 +766,7 @@ pub fn field_frame(focused: bool) -> Div {
         .items_center()
         .min_h(px(30.))
         .rounded(px(8.))
-        .bg(hex(WELL))
+        .bg(hexa(GLASS_WELL))
         .border_1()
         .map(|d| {
             if focused {
@@ -844,7 +912,7 @@ pub fn table_well() -> Div {
         .flex()
         .flex_col()
         .rounded(px(12.))
-        .bg(hex(SURFACE))
+        .bg(hexa(GLASS))
         .border_1()
         .border_color(hexa(LINE))
         .overflow_hidden()

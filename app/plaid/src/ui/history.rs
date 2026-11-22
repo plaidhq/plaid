@@ -622,7 +622,7 @@ impl History {
             .gap(px(8.))
             .px(px(12.))
             .rounded(px(10.))
-            .bg(hex(SURFACE))
+            .bg(hexa(GLASS))
             .border_1()
             .border_color(hexa(LINE))
             .child(icon("plaid/search.svg", 14., hex(TEXT2)))
@@ -961,7 +961,7 @@ impl History {
                 .flex()
                 .flex_col()
                 .rounded(px(16.))
-                .bg(hex(SURFACE))
+                .bg(hexa(GLASS))
                 .border_1()
                 .border_color(hexa(LINE))
         };
@@ -1093,7 +1093,7 @@ impl History {
             .h(px(50.))
             .px(px(12.))
             .rounded(px(12.))
-            .bg(hex(WELL))
+            .bg(hexa(GLASS_WELL))
             .border_1()
             .border_color(hexa(LINE));
         if let Some(path) = wav.clone() {

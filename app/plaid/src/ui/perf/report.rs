@@ -45,7 +45,7 @@ fn panel() -> Div {
         .flex()
         .flex_col()
         .min_w_0()
-        .bg(hex(SURFACE))
+        .bg(hexa(GLASS))
         .border_1()
         .border_color(hexa(LINE))
         .rounded(px(16.))

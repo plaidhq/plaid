@@ -1386,7 +1386,7 @@ impl Perf {
                         .max_h(px(260.))
                         .overflow_y_scroll()
                         .p(px(8.))
-                        .bg(hex(WELL))
+                        .bg(hexa(GLASS_WELL))
                         .border_1()
                         .border_color(hexa(LINE2))
                         .font(mono())
@@ -1477,7 +1477,7 @@ impl Perf {
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .bg(hex(WELL))
+            .bg(hexa(GLASS_WELL))
             .border_1()
             .border_color(hexa(LINE2));
         let well = if empty {

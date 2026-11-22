@@ -450,7 +450,7 @@ fn stat(title: &str, value: &str, unit: Option<&str>, sub: impl IntoElement) -> 
         .px(px(14.))
         .py(px(12.))
         .rounded(px(10.))
-        .bg(hex(SURFACE))
+        .bg(hexa(GLASS))
         .border_1()
         .border_color(hexa(LINE))
         .child(hint(title.to_string()).text_size(px(11.)))
@@ -505,7 +505,7 @@ pub(super) fn boxed(title: impl Into<SharedString>, trailing: Option<AnyElement>
         .px(px(16.))
         .py(px(12.))
         .rounded(px(10.))
-        .bg(hex(SURFACE))
+        .bg(hexa(GLASS))
         .border_1()
         .border_color(hexa(LINE));
     (head, body)

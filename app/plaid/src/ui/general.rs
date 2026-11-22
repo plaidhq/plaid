@@ -630,7 +630,7 @@ fn hud_states() -> Div {
                         .relative()
                         .h(px(64.))
                         .rounded(px(10.))
-                        .bg(hex(WELL))
+                        .bg(hexa(GLASS_WELL))
                         .border_1()
                         .border_color(hexa(LINE))
                         .overflow_hidden()

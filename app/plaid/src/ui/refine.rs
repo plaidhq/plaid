@@ -862,7 +862,7 @@ impl Refine {
                         .px(px(10.))
                         .py(px(8.))
                         .rounded(px(8.))
-                        .bg(hex(WELL))
+                        .bg(hexa(GLASS_WELL))
                         .border_1()
                         .border_color(hexa(LINE))
                         .text_color(hex(if *failed { RED } else { TEXT }))
@@ -1157,7 +1157,7 @@ fn rule_tile(i: usize, model: &Entity<Model>) -> Stateful<Div> {
                     .border_color(tint(CYAN, 0x66))
                     .shadow(vec![glow(CYAN, 18., 0x1a)])
             } else {
-                d.bg(hex(SURFACE))
+                d.bg(hexa(GLASS))
                     .border_color(hexa(LINE))
                     .hover(|s| s.border_color(hexa(LINE3)))
             }

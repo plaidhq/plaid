@@ -801,7 +801,7 @@ impl Dictionary {
                 .items_center()
                 .gap(px(8.))
                 .rounded_full()
-                .bg(hex(WELL))
+                .bg(hexa(GLASS_WELL))
                 .border_1()
                 .border_color(if focused {
                     tint(CYAN, 0x80)

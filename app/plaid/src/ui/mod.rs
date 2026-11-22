@@ -738,10 +738,13 @@ impl Render for Settings {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let page = self.view(self.page, window, cx);
         root()
+            .bg(transparent_black())
             .id("settings")
+            .relative()
             .size_full()
             .flex()
             .flex_col()
+            .child(backdrop())
             .child(gpui_kit::base::TextSelectionLayer)
             .child(self.header(window.is_window_active(), cx))
             .map(|d| {
@@ -814,6 +817,11 @@ pub fn window_options(bounds: Option<Bounds<Pixels>>, show: bool) -> WindowOptio
         focus: show,
         show,
         window_min_size: Some(size(px(960.), px(600.))),
+        window_background: if cfg!(target_os = "macos") {
+            WindowBackgroundAppearance::Blurred
+        } else {
+            WindowBackgroundAppearance::Opaque
+        },
         ..Default::default()
     }
 }
