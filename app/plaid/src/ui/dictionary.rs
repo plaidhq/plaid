@@ -11,18 +11,24 @@ use plaid_core::hotwords::{self, Snapshot};
 use plaid_core::llm;
 use plaid_core::store::{AUTO_RULES, Fix, Store, write_atomic};
 use plaid_core::text::trim_ws;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 
-const TABS: [&str; 4] = ["全部", "热词", "读音别名", "替换"];
-const TAB_HINTS: [&str; 4] = [
-    "热词用于识别和润色；替换规则按原文匹配，不区分大小写。改动自动保存，下次录音生效。",
-    "识别时优先选这些词。专有名词、英文术语、人名放这里。",
-    "别名：读音相近的片段改成想要的；附近出现排除词时不改。",
-    "原文匹配，不区分大小写；右侧留空表示删除。",
-];
+/// Pill font sizes by recent use: unused, then the lower, middle and top of the used range.
+const PILL_SIZES: [f32; 4] = [12., 14., 17., 21.];
+
+/// Index into PILL_SIZES for a word used `n` times when the most used word has `max`.
+fn size_level(n: usize, max: usize) -> usize {
+    match n {
+        0 => 0,
+        _ if n * 10 >= max * 6 => 3,
+        _ if n * 10 >= max * 3 => 2,
+        _ => 1,
+    }
+}
+
 const KINDS: [&str; 3] = ["热词", "替换规则", "高级原文"];
 
 fn path() -> PathBuf {
@@ -130,37 +136,6 @@ impl Shape {
         Shape::Raw
     }
 
-    /// Tab it belongs to (0 = only under 全部).
-    fn tab(&self) -> usize {
-        match self {
-            Shape::Word { aliases, .. } if aliases.is_empty() => 1,
-            Shape::Word { .. } => 2,
-            Shape::Replace { .. } => 3,
-            Shape::Raw => 0,
-        }
-    }
-
-    fn title(&self, line: &str) -> String {
-        match self {
-            Shape::Replace { from, to } if to.is_empty() => format!("{from} → （删除）"),
-            Shape::Replace { from, to } => format!("{from} → {to}"),
-            Shape::Word {
-                target, aliases, ..
-            } if !aliases.is_empty() => format!("{} → {target}", aliases.join(" / ")),
-            Shape::Word { target, .. } => target.clone(),
-            Shape::Raw => trim_ws(line).to_owned(),
-        }
-    }
-
-    fn note(&self) -> &'static str {
-        match self {
-            Shape::Replace { .. } => "原样替换 · 不区分大小写",
-            Shape::Word { aliases, .. } if !aliases.is_empty() => "读音别名",
-            Shape::Word { .. } => "热词",
-            Shape::Raw => "高级原文",
-        }
-    }
-
     fn block(&self) -> Option<String> {
         match self {
             Shape::Word { block, .. } if !block.is_empty() => {
@@ -261,6 +236,8 @@ impl Sheet {
 struct Derived {
     fixes: Vec<Fix>,
     autos: Vec<(String, String, usize)>,
+    /// Records of the last 30 days whose pasted text contains the word, keyed by the lowercased word.
+    uses: HashMap<String, usize>,
 }
 
 pub struct Dictionary {
@@ -275,8 +252,6 @@ pub struct Dictionary {
     /// Bumped by every edit and flush; a pending debounce saves only if it is still the latest.
     generation: u64,
     derived: Option<Rc<Derived>>,
-    tab: usize,
-    selected: Option<usize>,
     search: Entity<InputState>,
     raw: bool,
     raw_input: Entity<TextareaState>,
@@ -307,14 +282,22 @@ impl Dictionary {
             }
         })
         .detach();
-        let search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索热词、错法或替换内容"));
-        cx.subscribe(&search, |this, _, e: &InputEvent, cx| {
-            if matches!(e, InputEvent::Change) {
-                this.selected = None;
-                cx.notify();
-            }
-        })
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("输入新词，回车添加"));
+        cx.subscribe_in(
+            &search,
+            window,
+            |this, s, e: &InputEvent, window, cx| match e {
+                InputEvent::Change => cx.notify(),
+                InputEvent::PressEnter { .. } => {
+                    let line = trim_ws(&s.read(cx).value()).to_owned();
+                    if !line.is_empty() {
+                        this.append(&line, cx);
+                        s.update(cx, |s, cx| s.set_value("", window, cx));
+                    }
+                }
+                _ => {}
+            },
+        )
         .detach();
         let raw_input = cx.new(|cx| TextareaState::new(window, cx).rows(16));
         cx.subscribe(&raw_input, |this, s, e: &InputEvent, cx| {
@@ -340,8 +323,6 @@ impl Dictionary {
             stamp: modified(),
             generation: 0,
             derived: None,
-            tab: 0,
-            selected: None,
             search,
             raw: false,
             raw_input,
@@ -418,7 +399,6 @@ impl Dictionary {
         }
         lines.remove(i);
         self.text = lines.join("\n");
-        self.selected = None;
         self.schedule(cx);
     }
 
@@ -445,7 +425,30 @@ impl Dictionary {
         let store = &self.model.read(cx).store;
         let autos = store.auto_rules(&config::terms(false), &dismissed());
         let fixes = pending_fixes(store, &self.text, &autos);
-        let d = Rc::new(Derived { fixes, autos });
+        let since = chrono::Utc::now() - chrono::Duration::days(30);
+        let texts: Vec<String> = store
+            .all
+            .iter()
+            .filter(|r| r.at >= since)
+            .map(|r| r.text.to_lowercase())
+            .collect();
+        let mut uses = HashMap::new();
+        let words = self
+            .shapes()
+            .into_iter()
+            .filter_map(|(_, s)| match s {
+                Shape::Word { target, .. } => Some(target),
+                _ => None,
+            })
+            .chain(autos.iter().map(|(_, to, _)| to.clone()));
+        for w in words {
+            let w = w.to_lowercase();
+            if !w.is_empty() && !uses.contains_key(&w) {
+                let n = texts.iter().filter(|t| t.contains(&w)).count();
+                uses.insert(w, n);
+            }
+        }
+        let d = Rc::new(Derived { fixes, autos, uses });
         self.derived = Some(d.clone());
         d
     }
@@ -525,6 +528,12 @@ impl Dictionary {
             .store
             .write_auto_rules(&config::terms(false), &dismissed());
         cx.notify();
+    }
+
+    /// Keeps a learned rule as a line of the user's own file; ignoring it drops it from the learned set.
+    fn keep_auto(&mut self, line: &str, cx: &mut Context<Self>) {
+        self.append(line, cx);
+        self.dismiss_auto(line.to_owned(), cx);
     }
 
     // --- Entry sheet -------------------------------------------------------------------------------------------
@@ -674,229 +683,6 @@ impl Dictionary {
 
     // --- Rendering ---------------------------------------------------------------------------------------------
 
-    fn entries(&self, window: &Window, cx: &mut Context<Self>) -> Div {
-        let this = cx.entity().downgrade();
-        let lines: Vec<&str> = self.text.split('\n').collect();
-        let all: Vec<(usize, Shape)> = lines
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| {
-                let t = trim_ws(l);
-                !t.is_empty() && !t.starts_with('#')
-            })
-            .map(|(i, l)| (i, Shape::of(l)))
-            .collect();
-        let total = all.len();
-        let query = self.search.read(cx).value().to_lowercase();
-        let in_tab: Vec<(usize, Shape)> = all
-            .into_iter()
-            .filter(|(_, s)| self.tab == 0 || s.tab() == self.tab)
-            .collect();
-        let tab_count = in_tab.len();
-        let shown: Vec<(usize, Shape)> = in_tab
-            .into_iter()
-            .filter(|(i, _)| query.is_empty() || lines[*i].to_lowercase().contains(&query))
-            .collect();
-
-        let search_focused = self.search.read(cx).focus_handle(cx).is_focused(window);
-        let search = hit("dict-search").child(
-            field_frame(search_focused)
-                .h(px(22.))
-                .px(px(5.))
-                .gap(px(4.))
-                .child(icon("plaid/search.svg", 11., hex(TEXT3)))
-                .child(div().flex_1().min_w_0().child(Input::new(&self.search)))
-                .when(!query.is_empty(), |d| {
-                    let this = this.clone();
-                    d.child(hint(format!("{} 条", shown.len()))).child(
-                        hit("dict-search-clear")
-                            .size(px(13.))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .bg(hex(TEXT3))
-                            .child(icon("plaid/xmark.svg", 7., hex(BG)))
-                            .on_click(move |_, w, cx| {
-                                let _ = this.update(cx, |this, cx| {
-                                    this.search.update(cx, |s, cx| s.set_value("", w, cx));
-                                    cx.notify();
-                                });
-                            }),
-                    )
-                }),
-        );
-
-        let body: AnyElement = if total == 0 {
-            let this = this.clone();
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap(px(6.))
-                .p(px(16.))
-                .child(div().font_weight(bold()).child("还没有词典条目"))
-                .child(hint("添加人名、项目名和术语，或将常见错法设为替换规则。"))
-                .child(div().mt(px(4.)).child(button(
-                    "dict-add-first",
-                    "添加第一个条目",
-                    move |_, w, cx| {
-                        let _ = this.update(cx, |this, cx| this.open_sheet(None, w, cx));
-                    },
-                )))
-                .into_any_element()
-        } else if shown.is_empty() && !query.is_empty() {
-            div()
-                .p(px(12.))
-                .child(hint("没有匹配的条目，试试其他关键词。"))
-                .into_any_element()
-        } else {
-            div()
-                .id("dict-rows")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .children(shown.iter().enumerate().map(|(n, (i, shape))| {
-                    let i = *i;
-                    let selected = self.selected == Some(i);
-                    let sub = HINT;
-                    let (pick, edit, del) = (this.clone(), this.clone(), this.clone());
-                    let title = shape.title(lines[i]);
-                    let raw = matches!(shape, Shape::Raw);
-                    table_row(SharedString::from(format!("entry-{i}")), n, selected)
-                        .text_size(px(12.))
-                        .child(
-                            cell(0.)
-                                .flex()
-                                .items_center()
-                                .gap(px(6.))
-                                .child(
-                                    div()
-                                        .min_w_0()
-                                        // Leave room for the block note when there is one.
-                                        .map(|d| match shape.block() {
-                                            Some(_) => d.flex_none().max_w(relative(0.75)),
-                                            None => d.flex_1(),
-                                        })
-                                        .truncate()
-                                        .when(raw, |d| d.font(mono()).text_size(px(11.)))
-                                        .child(title),
-                                )
-                                .when_some(shape.block(), |d, b| {
-                                    d.child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_size(px(11.))
-                                            .text_color(hex(sub))
-                                            .child(b),
-                                    )
-                                }),
-                        )
-                        .child(
-                            cell(150.)
-                                .truncate()
-                                .text_size(px(11.))
-                                .text_color(hex(sub))
-                                .child(shape.note()),
-                        )
-                        .child(
-                            cell(46.)
-                                .flex()
-                                .items_center()
-                                .justify_end()
-                                .gap(px(8.))
-                                .child(
-                                    hit(SharedString::from(format!("entry-edit-{i}")))
-                                        .child(icon(
-                                            "plaid/pencil.svg",
-                                            11.,
-                                            hex(if selected { TEXT } else { TEXT2 }),
-                                        ))
-                                        .on_click(move |_, w, cx| {
-                                            cx.stop_propagation();
-                                            let _ = edit.update(cx, |this, cx| {
-                                                this.open_sheet(Some(i), w, cx)
-                                            });
-                                        }),
-                                )
-                                .child(
-                                    hit(SharedString::from(format!("entry-del-{i}")))
-                                        .child(icon(
-                                            "plaid/xmark.svg",
-                                            10.,
-                                            hex(if selected { TEXT } else { TEXT2 }),
-                                        ))
-                                        .on_click(move |_, _, cx| {
-                                            cx.stop_propagation();
-                                            let _ = del.update(cx, |this, cx| this.remove(i, cx));
-                                        }),
-                                ),
-                        )
-                        .on_click(move |_, _, cx| {
-                            let _ = pick.update(cx, |this, cx| {
-                                this.selected = Some(i);
-                                cx.notify();
-                            });
-                        })
-                }))
-                .into_any_element()
-        };
-
-        let (add, del) = (this.clone(), this.clone());
-        let selected = self.selected;
-        let table = div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .child(
-                table_well()
-                    .flex_1()
-                    .min_h_0()
-                    .child(table_header(&[("条目", 0.), ("说明", 150.), ("", 46.)]))
-                    .child(body),
-            )
-            .child(
-                bottom_bar()
-                    .border_1()
-                    .border_t_0()
-                    .border_color(hexa(LINE))
-                    .bg(hex(SURFACE))
-                    .child(bar_button("dict-add", "plaid/plus.svg", move |_, w, cx| {
-                        let _ = add.update(cx, |this, cx| this.open_sheet(None, w, cx));
-                    }))
-                    .child(
-                        bar_button("dict-remove", "plaid/minus.svg", move |_, _, cx| {
-                            let _ = del.update(cx, |this, cx| {
-                                if let Some(i) = this.selected {
-                                    this.remove(i, cx);
-                                }
-                            });
-                        })
-                        .when(selected.is_none(), |d| d.opacity(0.4)),
-                    )
-                    .child(
-                        div()
-                            .ml_auto()
-                            .pr(px(8.))
-                            .child(hint(format!("{tab_count} 个"))),
-                    ),
-            );
-        div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .child(search)
-            .child(table)
-    }
-
     fn raw_editor(&self, window: &Window, cx: &App) -> Div {
         let focused = self.raw_input.read(cx).focus_handle(cx).is_focused(window);
         let legend = [
@@ -950,67 +736,358 @@ impl Dictionary {
             )
     }
 
-    fn left(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+    /// Non-empty, non-comment lines with their line numbers.
+    fn shapes(&self) -> Vec<(usize, Shape)> {
+        self.text
+            .split('\n')
+            .enumerate()
+            .filter(|(_, l)| {
+                let t = trim_ws(l);
+                !t.is_empty() && !t.starts_with('#')
+            })
+            .map(|(i, l)| (i, Shape::of(l)))
+            .collect()
+    }
+
+    /// The wall: hotwords as pills, sized by recent use. Typing filters it, Enter adds the typed line.
+    fn words_card(&self, d: &Derived, window: &Window, cx: &mut Context<Self>) -> Div {
         let this = cx.entity().downgrade();
-        let content = if self.raw {
-            self.raw_editor(window, cx)
-        } else {
-            self.entries(window, cx)
+        let query = self.search.read(cx).value().to_lowercase();
+        let query = trim_ws(&query).to_owned();
+        let shapes = self.shapes();
+        // A word is tinted when something rewrites into it: its own aliases, a replacement or a learned rule.
+        let rewritten = |w: &str| {
+            d.autos.iter().any(|(_, to, _)| to == w)
+                || shapes
+                    .iter()
+                    .any(|(_, s)| matches!(s, Shape::Replace { to, .. } if to == w))
         };
-        let tab_pick = this.clone();
-        div()
+        let words: Vec<(usize, String, bool)> = shapes
+            .iter()
+            .filter_map(|(i, s)| match s {
+                Shape::Word {
+                    target, aliases, ..
+                } => Some((*i, target.clone(), !aliases.is_empty() || rewritten(target))),
+                _ => None,
+            })
+            .collect();
+        let total = words.len();
+        let uses = |w: &str| d.uses.get(&w.to_lowercase()).copied().unwrap_or(0);
+        let max = words.iter().map(|(_, w, _)| uses(w)).max().unwrap_or(0);
+        let matches = |w: &str| query.is_empty() || w.to_lowercase().contains(&query);
+
+        let focused = self.search.read(cx).focus_handle(cx).is_focused(window);
+        let input = hit("dict-search").w(px(220.)).flex_none().child(
+            div()
+                .h(px(32.))
+                .px(px(12.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .rounded_full()
+                .bg(hex(WELL))
+                .border_1()
+                .border_color(if focused {
+                    tint(CYAN, 0x80)
+                } else {
+                    hexa(LINE2)
+                })
+                .child(div().text_size(px(16.)).text_color(hex(CYAN)).child("+"))
+                .child(div().flex_1().min_w_0().child(Input::new(&self.search))),
+        );
+        let legend_dot = |tinted: bool| {
+            let d = div().size(px(8.)).rounded_full();
+            if tinted {
+                d.bg(hex(CYAN))
+            } else {
+                d.border_1().border_color(hex(TEXT2))
+            }
+        };
+        let legend = div()
+            .flex()
+            .items_center()
+            .gap(px(14.))
+            .text_size(px(11.))
+            .text_color(hex(TEXT2))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(legend_dot(true))
+                    .child("带改写规则"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(legend_dot(false))
+                    .child("只做热词"),
+            )
+            .child(div().ml_auto().child("字越大，最近用得越多 · 点词编辑"));
+
+        let pill = |id: SharedString, text: String, tinted: bool| {
+            let level = size_level(uses(&text), max);
+            let big = level >= 2;
+            let p = hit(id)
+                .px(px(12.))
+                .py(px(5.))
+                .rounded_full()
+                .border_1()
+                .text_size(px(PILL_SIZES[level]))
+                .whitespace_nowrap()
+                .child(text);
+            let p = p.cursor_pointer();
+            if tinted {
+                p.bg(tint(CYAN, if big { 0x22 } else { 0x12 }))
+                    .border_color(tint(CYAN, if big { 0x66 } else { 0x33 }))
+                    .text_color(hex(if big { TEXT } else { 0xc9cbd1 }))
+                    .hover(|s| s.bg(tint(CYAN, 0x2c)))
+            } else {
+                p.border_color(hexa(LINE3))
+                    .text_color(hex(if big { TEXT } else { 0xa4a7ae }))
+                    .hover(|s| s.bg(hexa(0xffffff0d)).border_color(hexa(0xffffff3d)))
+            }
+        };
+        let pills: Vec<AnyElement> = words
+            .iter()
+            .filter(|(_, w, _)| matches(w))
+            .map(|(i, w, tinted)| {
+                let (i, edit) = (*i, this.clone());
+                pill(SharedString::from(format!("word-{i}")), w.clone(), *tinted)
+                    .on_click(move |_, w, cx| {
+                        let _ = edit.update(cx, |this, cx| this.open_sheet(Some(i), w, cx));
+                    })
+                    .into_any_element()
+            })
+            .collect();
+        let body = if total == 0 {
+            hint("还没有词。在上面输入专有名词、人名或英文术语，回车添加。")
+        } else if pills.is_empty() {
+            hint(format!("没有匹配的词，回车把「{query}」加进词典。"))
+        } else {
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(8.))
+                .children(pills)
+        };
+        group_body()
+            .gap(px(14.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .font(mono())
+                            .text_size(px(34.))
+                            .line_height(px(40.))
+                            .font_weight(bold())
+                            .child(total.to_string()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(hex(TEXT2))
+                            .child("个词 · 发给火山做热词，也发给 LLM 参考"),
+                    )
+                    .child(input),
+            )
+            .when(total > 0, |el| el.child(legend))
+            .child(body)
+    }
+
+    /// Aliases, replacements and lines only the raw syntax can show, one row each.
+    fn rules_card(&self, cx: &mut Context<Self>) -> Div {
+        let this = cx.entity().downgrade();
+        let query = self.search.read(cx).value().to_lowercase();
+        let query = trim_ws(&query).to_owned();
+        let lines: Vec<&str> = self.text.split('\n').collect();
+        let rules: Vec<(usize, Shape)> = self
+            .shapes()
+            .into_iter()
+            .filter(|(_, s)| !matches!(s, Shape::Word { aliases, .. } if aliases.is_empty()))
+            .collect();
+        let shown: Vec<&(usize, Shape)> = rules
+            .iter()
+            .filter(|(i, _)| query.is_empty() || lines[*i].to_lowercase().contains(&query))
+            .collect();
+        let rows = shown.iter().enumerate().map(|(n, (i, shape))| {
+            let i = *i;
+            let (pick, edit, del) = (this.clone(), this.clone(), this.clone());
+            let (from, to, kind): (String, Option<String>, &str) = match shape {
+                Shape::Word {
+                    target, aliases, ..
+                } => (aliases.join(" / "), Some(target.clone()), "读音别名"),
+                Shape::Replace { from, to } => (from.clone(), Some(to.clone()), "替换"),
+                Shape::Raw => (trim_ws(lines[i]).to_owned(), None, "原文"),
+            };
+            let icon_button = |id: String, path: &'static str, size: f32| {
+                hit(SharedString::from(id))
+                    .size(px(22.))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.))
+                    .hover(|s| s.bg(hex(HOVER)))
+                    .child(icon(path, size, hex(TEXT3)))
+            };
+            hit(SharedString::from(format!("entry-{i}")))
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .min_h(px(36.))
+                .py(px(6.))
+                .when(n > 0, |d| d.border_t_1().border_color(hexa(LINE)))
+                .cursor_pointer()
+                .map(|d| match &to {
+                    Some(to) => d
+                        .child(
+                            div()
+                                .w(px(130.))
+                                .flex_none()
+                                .truncate()
+                                .text_color(hex(TEXT2))
+                                .child(from.clone()),
+                        )
+                        .child(div().flex_none().text_color(hex(TEXT3)).child("→"))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .items_baseline()
+                                .gap(px(8.))
+                                .child(if to.is_empty() {
+                                    div().flex_none().text_color(hex(RED)).child("（删除）")
+                                } else {
+                                    div()
+                                        .flex_none()
+                                        .max_w(relative(0.6))
+                                        .truncate()
+                                        .text_color(hex(CYAN))
+                                        .child(to.clone())
+                                })
+                                .when_some(shape.block(), |d, b| {
+                                    d.child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(px(11.))
+                                            .text_color(hex(TEXT3))
+                                            .child(b),
+                                    )
+                                }),
+                        ),
+                    None => d.child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font(mono())
+                            .text_size(px(11.))
+                            .text_color(hex(TEXT2))
+                            .child(from.clone()),
+                    ),
+                })
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.))
+                        .text_color(hex(TEXT3))
+                        .child(kind),
+                )
+                .child(
+                    icon_button(format!("entry-edit-{i}"), "plaid/pencil.svg", 11.).on_click(
+                        move |_, w, cx| {
+                            cx.stop_propagation();
+                            let _ = edit.update(cx, |this, cx| this.open_sheet(Some(i), w, cx));
+                        },
+                    ),
+                )
+                .child(
+                    icon_button(format!("entry-del-{i}"), "plaid/xmark.svg", 10.).on_click(
+                        move |_, _, cx| {
+                            cx.stop_propagation();
+                            let _ = del.update(cx, |this, cx| this.remove(i, cx));
+                        },
+                    ),
+                )
+                .on_click(move |_, w, cx| {
+                    let _ = pick.update(cx, |this, cx| this.open_sheet(Some(i), w, cx));
+                })
+                .into_any_element()
+        });
+        let rows: Vec<AnyElement> = rows.collect();
+        let (add, raw) = (this.clone(), this);
+        let body = if rules.is_empty() {
+            hint("还没有改写规则。待处理建议里点「加别名」，或在这里新建。").into_any_element()
+        } else if rows.is_empty() {
+            hint("没有匹配的规则。").into_any_element()
+        } else {
+            div().flex().flex_col().children(rows).into_any_element()
+        };
+        group_body()
+            .gap(px(8.))
+            .child(
+                card_head("改写规则", "听错的说法改成想要的词，改动自动保存")
+                    .items_center()
+                    .child(small_button("dict-add", "+ 新建", move |_, w, cx| {
+                        let _ = add.update(cx, |this, cx| {
+                            this.open_sheet(None, w, cx);
+                            this.set_kind(1, w, cx);
+                        });
+                    }))
+                    .child(small_button(
+                        "dict-raw",
+                        "编辑原文…",
+                        move |_, w, cx| {
+                            let _ = raw.update(cx, |this, cx| this.set_raw(true, w, cx));
+                        },
+                    )),
+            )
+            .child(body)
+    }
+
+    /// The whole file as text, with the syntax legend.
+    fn raw_card(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let this = cx.entity().downgrade();
+        group_body()
+            .flex_1()
+            .min_h(px(480.))
+            .child(
+                card_head("编辑原文", "hotwords.txt，一行一个条目")
+                    .items_center()
+                    .child(default_button("dict-raw", "完成", move |_, w, cx| {
+                        let _ = this.update(cx, |this, cx| this.set_raw(false, w, cx));
+                    })),
+            )
+            .child(self.raw_editor(window, cx))
+    }
+
+    fn left(&self, d: &Derived, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
+        let main = div()
+            .id("dict-main")
             .flex_1()
             .min_w_0()
             .h_full()
+            .overflow_y_scroll()
             .flex()
             .flex_col()
-            .pt(px(11.))
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .gap(px(10.))
-                    .pt(px(24.))
-                    .px(px(14.))
-                    .pb(px(14.))
-                    .rounded(px(5.))
-                    .bg(hex(SURFACE))
-                    .border_1()
-                    .border_color(hexa(LINE))
-                    .child(hint(TAB_HINTS[self.tab]))
-                    .child(content)
-                    .child(div().flex().justify_end().child(button(
-                        "dict-raw",
-                        if self.raw {
-                            "完成"
-                        } else {
-                            "编辑原文…"
-                        },
-                        move |_, w, cx| {
-                            let _ = this.update(cx, |this, cx| this.set_raw(!this.raw, w, cx));
-                        },
-                    )))
-                    // Last child, so the strip paints over the box edge it straddles.
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(-12.))
-                            .left_0()
-                            .right_0()
-                            .flex()
-                            .justify_center()
-                            .child(tabs("dict-kind", &TABS, self.tab, move |i, _, cx| {
-                                let _ = tab_pick.update(cx, |this, cx| {
-                                    this.tab = i;
-                                    this.selected = None;
-                                    cx.notify();
-                                });
-                            })),
-                    ),
-            )
+            .gap(px(14.));
+        if self.raw {
+            return main.child(self.raw_card(window, cx));
+        }
+        main.child(self.words_card(d, window, cx))
+            .child(self.rules_card(cx))
+            .child(self.learned_card(d, cx))
     }
 
     fn suggestions(&self, d: &Derived, cx: &mut Context<Self>) -> Option<Div> {
@@ -1162,38 +1239,95 @@ impl Dictionary {
         )
     }
 
-    fn autos(&self, d: &Derived, cx: &mut Context<Self>) -> Option<Div> {
-        if d.autos.is_empty() {
-            return None;
-        }
+    /// Rules learned from repeated manual edits (hotwords.auto.txt): keep one as a user line, or undo it.
+    fn learned_card(&self, d: &Derived, cx: &mut Context<Self>) -> Div {
         let this = cx.entity().downgrade();
         let rows = d.autos.iter().enumerate().map(|(i, (from, to, n))| {
-            let this = this.clone();
+            let (keep, undo) = (this.clone(), this.clone());
             let key = rule(from, to);
+            let line = key.clone();
             div()
                 .flex()
                 .items_center()
-                .gap(px(6.))
-                .child(div().text_color(hex(TEXT3)).child(from.clone()))
-                .child(div().text_color(hex(VIOLET)).font_weight(bold()).child("→"))
-                .child(div().font_weight(bold()).child(to.clone()))
-                .child(hint(format!("{n} 次")))
+                .gap(px(10.))
+                .py(px(8.))
+                .border_t_1()
+                .border_color(hexa(LINE))
+                .child(
+                    div()
+                        .w(px(130.))
+                        .flex_none()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .line_through()
+                        .text_color(hex(TEXT2))
+                        .child(from.clone()),
+                )
+                .child(div().flex_none().text_color(hex(TEXT3)).child("→"))
+                .child(
+                    div()
+                        .w(px(130.))
+                        .flex_none()
+                        .truncate()
+                        .text_color(hex(CYAN))
+                        .child(to.clone()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(11.))
+                        .text_color(hex(TEXT2))
+                        .child(format!("改过 {n} 次")),
+                )
+                .child(small_button(
+                    SharedString::from(format!("auto-keep-{i}")),
+                    "保留",
+                    move |_, _, cx| {
+                        let _ = keep.update(cx, |this, cx| this.keep_auto(&line, cx));
+                    },
+                ))
                 .child(
                     hit(SharedString::from(format!("auto-dismiss-{i}")))
-                        .ml_auto()
-                        .p(px(3.))
-                        .child(icon("plaid/xmark.svg", 9., hex(TEXT2)))
+                        .h(px(24.))
+                        .px(px(10.))
+                        .flex()
+                        .items_center()
+                        .rounded_full()
+                        .text_size(px(12.))
+                        .text_color(hex(TEXT2))
+                        .hover(|s| s.bg(hex(HOVER)).text_color(hex(TEXT)))
+                        .child("撤销")
                         .on_click(move |_, _, cx| {
-                            let _ = this.update(cx, |this, cx| this.dismiss_auto(key.clone(), cx));
+                            let _ = undo.update(cx, |this, cx| this.dismiss_auto(key.clone(), cx));
                         }),
                 )
                 .into_any_element()
         });
-        Some(group(format!("自动规则（{}）", d.autos.len())).child(
-            group_body().children(rows).child(hint(
-                "同一个改法出现 2 次以上后自动生效，存放在 hotwords.auto.txt；忽略后不再出现。",
-            )),
-        ))
+        let on = on_unless_zero("learnEdits");
+        group_body()
+            .gap(px(4.))
+            .child(
+                card_head("最近学会", "粘贴后手动改过的词，出现两次就自动生效")
+                    .pb(px(6.))
+                    .child(
+                        div()
+                            .flex_none()
+                            .font(mono())
+                            .text_size(px(11.))
+                            .text_color(hex(if on { TEXT2 } else { AMBER }))
+                            .child(if on {
+                                "自动学习 开"
+                            } else {
+                                "自动学习 关"
+                            }),
+                    ),
+            )
+            .children(rows)
+            .when(d.autos.is_empty(), |el| {
+                el.child(hint("还没有学会的词。保留后写进你的词典；撤销后不再出现。"))
+            })
     }
 
     fn learning(&self, cx: &mut Context<Self>) -> Div {
@@ -1331,6 +1465,19 @@ impl Dictionary {
                     .flex()
                     .justify_end()
                     .gap(px(10.))
+                    .when_some(sheet.index, |d, i| {
+                        let this = this.clone();
+                        d.child(
+                            button("entry-delete", "删除", move |_, _, cx| {
+                                let _ = this.update(cx, |this, cx| {
+                                    this.sheet = None;
+                                    this.remove(i, cx);
+                                });
+                            })
+                            .text_color(hex(RED))
+                            .mr_auto(),
+                        )
+                    })
                     .child(button("entry-cancel", "取消", move |_, _, cx| {
                         let _ = cancel.update(cx, |this, cx| this.close_sheet(cx));
                     }))
@@ -1457,7 +1604,7 @@ impl Render for Dictionary {
                     .min_h_0()
                     .flex()
                     .gap(px(18.))
-                    .child(self.left(window, cx))
+                    .child(self.left(&d, window, cx))
                     .child(
                         div()
                             .id("dict-side")
@@ -1469,7 +1616,6 @@ impl Render for Dictionary {
                             .flex_col()
                             .gap(px(12.))
                             .children(self.suggestions(&d, cx))
-                            .children(self.autos(&d, cx))
                             .child(self.learning(cx)),
                     ),
             )
@@ -1644,19 +1790,21 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &config::raw("dismissedFixes"),
     )?;
 
-    // Learned rule 杰森 → JSON: ignoring it records it and regenerates hotwords.auto.txt without it.
+    // Learned rule 杰森 → JSON: 保留 writes it into hotwords.txt and drops it from hotwords.auto.txt.
     expect(
         "auto file has the learned rule",
         read(&auto).contains("杰森 -> JSON"),
         &None,
     )?;
-    ui.click("auto-dismiss-0")?;
+    ui.click("auto-keep-0")?;
     expect(
-        "auto rule ignored",
-        dismissed_has("杰森 -> JSON") && !read(&auto).contains("杰森 -> JSON"),
+        "auto rule kept as a user line",
+        has_line("杰森 -> JSON")
+            && dismissed_has("杰森 -> JSON")
+            && !read(&auto).contains("杰森 -> JSON"),
         &Some(read(&auto)),
     )?;
-    expect("auto section gone", !ui.has("auto-dismiss-0"), &None)?;
+    expect("learned row gone", !ui.has("auto-keep-0"), &None)?;
 
     // Learning switches.
     for key in ["learnEdits", "autoLearn"] {
@@ -1677,34 +1825,39 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     expect("no-LLM hint hidden when off", !ui.has("open-refine"), &None)?;
     ui.click("autoLearn")?;
 
-    // Tabs filter by kind.
-    ui.click("dict-kind-3")?;
+    // The add field filters the wall and the rules.
     let lines: Vec<String> = hotwords_file().split('\n').map(str::to_owned).collect();
-    let claude = lines.iter().position(|l| l == "克劳德 -> Claude");
-    let plaid = lines.iter().position(|l| l == "Plaid");
-    expect(
-        "替换 tab shows only replacements",
-        matches!((claude, plaid), (Some(c), Some(p)) if ui.has(&format!("entry-{c}")) && !ui.has(&format!("entry-{p}"))),
-        &None,
-    )?;
-    ui.shot("dictionary-replace")?;
-    ui.click("dict-kind-0")?;
-
-    // Search, then delete the one match: the delete waits for the debounce, and closing the window saves it.
+    let line_of = |l: &str| lines.iter().position(|x| x == l);
+    let (claude, plaid) = (line_of("克劳德 -> Claude"), line_of("Plaid"));
     ui.click("dict-search")?;
-    type_text(ui, "gpui")?;
-    let gpui = lines.iter().position(|l| l == "GPUI").ok_or("GPUI line")?;
+    type_text(ui, "claude")?;
     expect(
-        "search narrows rows",
-        ui.has(&format!("entry-{gpui}")) && plaid.is_some_and(|p| !ui.has(&format!("entry-{p}"))),
+        "typing filters rules and words",
+        matches!((claude, plaid), (Some(c), Some(p)) if ui.has(&format!("entry-{c}")) && !ui.has(&format!("word-{p}"))),
         &None,
     )?;
-    ui.shot("dictionary-search")?;
-    ui.click(&format!("entry-del-{gpui}"))?;
+    ui.shot("dictionary-filter")?;
+    poke(ui, |me, w, cx| {
+        me.update(cx, |this, cx| {
+            this.search.update(cx, |s, cx| s.set_value("", w, cx))
+        })
+    })?;
+
+    // Delete a word from its sheet: the delete waits for the debounce, and closing the window saves it.
+    let gpui = line_of("GPUI").ok_or("GPUI line")?;
+    ui.click(&format!("word-{gpui}"))?;
+    expect("word opens its sheet", ui.has("entry-delete"), &None)?;
+    ui.click("entry-delete")?;
+    expect("delete closes the sheet", !ui.has("entry-sheet"), &None)?;
+    let draft = Rc::new(std::cell::RefCell::new(String::new()));
+    let dr = draft.clone();
+    poke(ui, move |me, _, cx| {
+        *dr.borrow_mut() = me.read(cx).text.clone()
+    })?;
     expect(
-        "deleted row gone from the page",
-        !ui.has(&format!("entry-{gpui}")),
-        &None,
+        "deleted word gone from the draft",
+        !draft.borrow().split('\n').any(|l| l == "GPUI"),
+        &Some(draft.borrow().clone()),
     )?;
     expect("delete waits for the debounce", has_line("GPUI"), &None)?;
     ui.close()?;
@@ -1714,20 +1867,32 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &Some(hotwords_file()),
     )?;
 
-    // Add through the sheet.
+    // Enter in the add field adds the word and clears the field.
     ui.open(Page::Dictionary, facts())?;
-    ui.click("dict-add")?;
-    expect("add sheet open", ui.has("entry-word"), &None)?;
+    ui.click("dict-search")?;
     type_text(ui, "张小明")?;
     ui.shot("dictionary-add")?;
-    ui.click("entry-save")?;
+    press(ui, "enter")?;
     expect(
-        "sheet saved a hotword",
-        has_line("张小明") && !ui.has("entry-sheet"),
+        "Enter added a hotword",
+        has_line("张小明"),
         &Some(hotwords_file()),
     )?;
-    // Enter in the field saves like the 保存 button.
+    let cleared = Rc::new(std::cell::Cell::new(false));
+    let c = cleared.clone();
+    poke(ui, move |me, _, cx| {
+        c.set(me.read(cx).search.read(cx).value().is_empty())
+    })?;
+    expect("add field cleared", cleared.get(), &None)?;
+
+    // 新建 opens the sheet on a replacement; Enter in a field saves like the 保存 button.
     ui.click("dict-add")?;
+    expect(
+        "add sheet opens on a replacement",
+        ui.has("entry-from") && !ui.has("entry-delete"),
+        &None,
+    )?;
+    ui.click("entry-kind-0")?;
     type_text(ui, "Neo")?;
     press(ui, "enter")?;
     expect(
@@ -1738,6 +1903,7 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
 
     // Duplicate entry is refused.
     ui.click("dict-add")?;
+    ui.click("entry-kind-0")?;
     type_text(ui, "Plaid")?;
     ui.click("entry-save")?;
     expect(
@@ -1812,7 +1978,8 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         .split('\n')
         .position(|l| l == "Zed")
         .ok_or("Zed line")?;
-    ui.click(&format!("entry-del-{zed}"))?;
+    ui.click(&format!("word-{zed}"))?;
+    ui.click("entry-delete")?;
     expect("delete pending before page switch", has_line("Zed"), &None)?;
     ui.click("open-refine")?;
     expect("打开文字 leaves the page", !ui.has("dict-add"), &None)?;
@@ -1832,7 +1999,11 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     // Empty dictionary.
     write_atomic(&path(), b"").map_err(|e| e.to_string())?;
     ui.open(Page::Dictionary, facts())?;
-    expect("empty state", ui.has("dict-add-first"), &None)?;
+    expect(
+        "empty state",
+        ui.has("dict-search") && !ui.has("word-0"),
+        &None,
+    )?;
     ui.shot("dictionary-empty")?;
     ui.close()?;
 

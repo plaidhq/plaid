@@ -846,11 +846,22 @@ pub(super) fn fixture(dir: &Path) -> std::io::Result<()> {
             .collect();
         std::fs::write(dir.join("events.log"), body)?;
     }
-    // --- 词典 page fixture: a JSON term (so 杰森 -> JSON becomes a learned rule), an alias line with a block
-    // list, and a replacement.
+    // --- 词典 page fixture: a JSON term (so 杰森 -> JSON becomes a learned rule), words the history uses at
+    // different rates, an alias line with a block list, and a replacement.
     let hotwords = dir.join("hotwords.txt");
     let mut body = std::fs::read_to_string(&hotwords)?;
-    for line in ["JSON", "Tauri | 陶瑞 | 套瑞 ~~~ 金牛座", "克劳德 -> Claude"] {
+    for line in [
+        "JSON",
+        "PR",
+        "接口",
+        "文档",
+        "会议",
+        "Rust",
+        "TypeScript",
+        "WebSocket",
+        "Tauri | 陶瑞 | 套瑞 ~~~ 金牛座",
+        "克劳德 -> Claude",
+    ] {
         if !body.split('\n').any(|l| l == line) {
             body.push_str(line);
             body.push('\n');

@@ -658,16 +658,6 @@ pub fn segmented(
         }))
 }
 
-/// Tab strip: the same pill group as `segmented`.
-pub fn tabs(
-    id: impl Into<SharedString>,
-    items: &[&str],
-    selected: usize,
-    on_pick: impl Fn(usize, &mut Window, &mut App) + 'static,
-) -> Stateful<Div> {
-    segmented(id, items, selected, on_pick)
-}
-
 /// Disclosure chevron with a label.
 pub fn disclosure(
     id: impl Into<ElementId>,
@@ -819,30 +809,6 @@ pub fn keycap(text: impl Into<SharedString>) -> Div {
 
 // --- Tables ----------------------------------------------------------------------------------------------------
 
-/// Column header strip.
-pub fn table_header(cols: &[(&str, f32)]) -> Div {
-    div()
-        .flex()
-        .flex_none()
-        .h(px(30.))
-        .border_b_1()
-        .border_color(hexa(LINE))
-        .text_size(px(11.))
-        .text_color(hex(TEXT3))
-        .children(cols.iter().map(|(label, w)| {
-            let cell = div()
-                .flex()
-                .items_center()
-                .px(px(10.))
-                .child(label.to_string());
-            if *w > 0. {
-                cell.w(px(*w)).flex_none()
-            } else {
-                cell.flex_1().min_w_0()
-            }
-        }))
-}
-
 /// One table row: hairline between rows, cyan wash when selected.
 pub fn table_row(id: impl Into<ElementId>, index: usize, selected: bool) -> Stateful<Div> {
     let r = hit(id)
@@ -877,35 +843,6 @@ pub fn table_well() -> Div {
         .border_1()
         .border_color(hexa(LINE))
         .overflow_hidden()
-}
-
-/// Strip under a table with small icon buttons.
-pub fn bottom_bar() -> Div {
-    div()
-        .flex()
-        .items_center()
-        .h(px(32.))
-        .flex_none()
-        .px(px(4.))
-        .gap(px(2.))
-        .border_t_1()
-        .border_color(hexa(LINE))
-}
-
-pub fn bar_button(
-    id: impl Into<ElementId>,
-    glyph: &'static str,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> Stateful<Div> {
-    hit(id)
-        .size(px(26.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(6.))
-        .hover(|s| s.bg(hex(RAISED2)))
-        .child(icon(glyph, 11., hex(TEXT2)))
-        .on_click(on_click)
 }
 
 // --- Spinner ---------------------------------------------------------------------------------------------------

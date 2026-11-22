@@ -88,7 +88,10 @@ key access) clicks through every page and writes PNGs. Differences from Swift:
 - 报告: new summary cards above the Swift 性能 diagnostics: half a year of daily characters as a heatmap and
   speaking speed (both from usage.json, so they survive 清空历史), a release → paste histogram split into direct and
   LLM, and how many records the LLM (punctuation vs other characters) and each local rule changed.
-- 词典: rows drop the 来源 and 添加于 columns; adds a 全部 tab. The sidebar badge counts pending suggestions.
+- 词典: no tabs or table. Hotwords are a wall of pills sized by how often the last 30 days of records used them
+  (tinted when a rewrite rule targets them); the field filters the wall and adds a word on ⏎; clicking a pill opens
+  the edit sheet, which also deletes. Aliases and replacements list in 改写规则; learned rules in 最近学会 with 保留
+  (adds a 替换 line and drops the learned rule) or 撤销. No 来源 or 添加于. The tab badge counts pending suggestions.
 - 命令: an actions.json parse error locks only the cards and the add menu (as in the Swift source).
 - 报告: the trend axis labels every second day.
 - No tooltips anywhere.
