@@ -8,8 +8,10 @@ use plaid_core::dictation::Hud as Msg;
 use std::time::Instant;
 
 /// The panel per the design; the window adds room around it for the drop shadow. The panel sits at the bottom
-/// of the window and grows upward with the text, up to `MAX_LINES`; the window is sized for the tallest panel.
-const PANEL_W: f32 = 560.;
+/// center of the window and fits the text: it widens up to `PANEL_MAX_W`, then grows upward up to `MAX_LINES`.
+/// The window is sized for the largest panel.
+const PANEL_MIN_W: f32 = 360.;
+const PANEL_MAX_W: f32 = 560.;
 const PANEL_PAD_X: f32 = 14.;
 const PANEL_PAD_Y: f32 = 10.;
 const ICON: f32 = 28.;
@@ -20,12 +22,14 @@ const HEADER_GAP: f32 = 2.;
 const TEXT_SIZE: f32 = 14.;
 const LINE_H: f32 = 19.;
 const MAX_LINES: usize = 3;
+/// Panel width around the text.
+const CHROME_W: f32 = 2. * PANEL_PAD_X + ICON + GAP;
 /// Width the text wraps at.
-const TEXT_W: f32 = PANEL_W - 2. * PANEL_PAD_X - ICON - GAP;
+const TEXT_MAX_W: f32 = PANEL_MAX_W - CHROME_W;
 const PANEL_MAX_H: f32 = 2. * PANEL_PAD_Y + HEADER_H + HEADER_GAP + MAX_LINES as f32 * LINE_H;
 const PAD_TOP: f32 = 14.;
 const PAD_BOTTOM: f32 = 34.;
-const W: f32 = PANEL_W + 40.;
+const W: f32 = PANEL_MAX_W + 40.;
 const H: f32 = PAD_TOP + PANEL_MAX_H + PAD_BOTTOM;
 /// Gap between the panel and the bottom of the visible screen area.
 const LIFT: f32 = 40.;
@@ -68,7 +72,9 @@ pub struct Hud {
     /// Recent input levels in 0...1, oldest first.
     levels: [f32; BARS],
     started: Option<Instant>,
-    /// Text rows the panel shows; only grows during an utterance so a rewrite of the partial doesn't make it jump.
+    /// Text width and rows the panel shows; both only grow during an utterance so a rewrite of the partial doesn't
+    /// make the panel jump.
+    text_w: f32,
     rows: usize,
     spin: usize,
     visible: bool,
@@ -86,6 +92,7 @@ impl Hud {
             ran: false,
             levels: [0.; BARS],
             started: None,
+            text_w: 0.,
             rows: 1,
             spin: 0,
             visible: false,
@@ -113,7 +120,7 @@ impl Hud {
                 self.continuous = false;
                 self.levels = [0.; BARS];
                 self.started = Some(Instant::now());
-                self.rows = 1;
+                self.resize();
                 (State::Listen, None)
             }
             Msg::Unquiet => (State::Listen, None),
@@ -159,9 +166,15 @@ impl Hud {
         self.text = t.into();
         // The utterance's text stays at its size through refining and the paste; anything else sizes afresh.
         if !matches!(s, State::Refining | State::Done) {
-            self.rows = 1;
+            self.resize();
         }
         (s, hide_after)
+    }
+
+    /// Next render sizes the panel afresh from its text.
+    fn resize(&mut self) {
+        self.text_w = 0.;
+        self.rows = 1;
     }
 
     fn spins(&self) -> bool {
@@ -361,8 +374,10 @@ impl Render for Hud {
         } else {
             mav::hex(WHITE)
         };
+        let (w, rows) = fit(window, &text);
+        self.text_w = self.text_w.max(w);
         if !placeholder {
-            self.rows = self.rows.max(rows(window, &text));
+            self.rows = self.rows.max(rows);
         }
         let line = div()
             .min_h(px(self.rows as f32 * LINE_H))
@@ -385,7 +400,7 @@ impl Render for Hud {
             .pb(px(PAD_BOTTOM))
             .child(
                 div()
-                    .w(px(PANEL_W))
+                    .w(px((self.text_w + CHROME_W).clamp(PANEL_MIN_W, PANEL_MAX_W)))
                     .px(px(PANEL_PAD_X))
                     .py(px(PANEL_PAD_Y))
                     .flex()
@@ -459,8 +474,8 @@ impl Render for Hud {
     }
 }
 
-/// Wrapped rows `text` takes at the panel's width, capped at `MAX_LINES`.
-fn rows(window: &Window, text: &SharedString) -> usize {
+/// Width and wrapped rows (capped at `MAX_LINES`) `text` takes when wrapped at `TEXT_MAX_W`.
+fn fit(window: &Window, text: &SharedString) -> (f32, usize) {
     let run = TextRun {
         len: text.len(),
         font: mav::font(),
@@ -469,13 +484,22 @@ fn rows(window: &Window, text: &SharedString) -> usize {
         underline: None,
         strikethrough: None,
     };
-    window
-        .text_system()
-        .shape_text(text.clone(), px(TEXT_SIZE), &[run], Some(px(TEXT_W)), None)
-        .map_or(1, |lines| {
-            lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum()
-        })
-        .clamp(1, MAX_LINES)
+    let Ok(lines) = window.text_system().shape_text(
+        text.clone(),
+        px(TEXT_SIZE),
+        &[run],
+        Some(px(TEXT_MAX_W)),
+        None,
+    ) else {
+        return (TEXT_MAX_W, 1);
+    };
+    let w = lines
+        .iter()
+        .map(|l| f32::from(l.width()))
+        .fold(0., f32::max);
+    let rows: usize = lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum();
+    // A pixel of slack so the laid-out text never wraps where the measurement didn't.
+    ((w.ceil() + 1.).min(TEXT_MAX_W), rows.clamp(1, MAX_LINES))
 }
 
 /// Opens the HUD hidden, bottom center of the primary display (macOS re-anchors on each show). Show and hide go through `apply`/`hide`, which
@@ -732,13 +756,14 @@ mod tests {
         assert_eq!(h.apply(Msg::Hide), Effect::Hide);
     }
 
-    /// The panel keeps the rows the utterance reached through finishing, refining and the paste; a new utterance
+    /// The panel keeps the size the utterance reached through finishing, refining and the paste; a new utterance
     /// or an unrelated message starts at one row (render measures and grows it).
     #[test]
-    fn rows_only_grow_within_an_utterance() {
+    fn size_only_grows_within_an_utterance() {
         let mut h = Hud::new();
         h.apply(Msg::Listen);
         h.rows = 3;
+        h.text_w = 400.;
         h.apply(Msg::Text {
             text: "短".into(),
             command: false,
@@ -746,9 +771,9 @@ mod tests {
         h.apply(Msg::Finishing);
         h.apply(Msg::Refining("短".into()));
         h.apply(Msg::Done("短".into()));
-        assert_eq!(h.rows, 3);
+        assert_eq!((h.rows, h.text_w), (3, 400.));
         h.apply(Msg::Flash("学会".into()));
-        assert_eq!(h.rows, 1);
+        assert_eq!((h.rows, h.text_w), (1, 0.));
         h.rows = 2;
         h.apply(Msg::Listen);
         assert_eq!(h.rows, 1);
