@@ -97,14 +97,16 @@ key access) clicks through every page and writes PNGs. Differences from Swift:
   name); the letter mark stays when none is found and always on Windows. 设置 → 润色 → 按应用 rows do the same.
   重试 and 重新润色 cannot be cancelled and their failures show on the HUD only;
   export does not flush an unsaved 词典 draft first.
-- 概览: one page for usage and diagnostics. A range tab (今天, 7 天, 30 天, 90 天, 全部; `overviewRange`) drives it:
-  duration, characters, speed and time saved against the previous equal period (今天: yesterday up to this hour),
-  characters per hour/day/7 days, a weekday × hour grid, top apps, speaking speed, what the LLM and local rules
-  changed, and under 全部 half a year of daily characters. Totals come from usage.json, so they survive 清空历史;
-  usage.json now also keeps per-hour counts per day (`hours`), backfilled from records for older days. The Swift
-  性能 diagnostics follow as a section at the bottom (release → paste histogram split into direct and LLM, latency,
-  stages, levels, raw records, events), filtered by the same range instead of the last N records; at most the
-  last 1000 records are loaded.
+- 概览: one page for usage and diagnostics. A range tab (今天, 7 天, 30 天, 90 天, 全部; `overviewRange`) drives it,
+  with the streak beside it. One summary card: characters with the change against the previous equal period
+  (今天: yesterday up to this hour), duration, speed and time saved, then characters per hour/day/7 days. Below,
+  top apps and characters by hour of day (not under 今天). Swift's speed chart, weekday × hour grid, edits card,
+  个性化 card and half-year calendar are gone; status pills live in the footer. Totals come from usage.json, so they
+  survive 清空历史; usage.json now also keeps per-hour counts per day (`hours`), backfilled from records for older
+  days. The Swift 性能 diagnostics follow at the bottom, folded to one line (count, release → paste p50/p90,
+  failures) until 展开 (`perfOpen`; 历史's 概览与性能… opens it unfolded): release → paste histogram split into
+  direct and LLM, latency, stages, levels, raw records, events, filtered by the same range instead of the last N
+  records; at most the last 1000 records are loaded.
 - 词典: no tabs or table. Hotwords are a wall of pills sized by how often the last 30 days of records used them
   (tinted when a rewrite rule targets them); the field filters the wall and adds a word on ⏎; clicking a pill opens
   the edit sheet, which also deletes. Aliases and replacements list in 改写规则; learned rules in 最近学会 with 保留

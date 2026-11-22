@@ -741,7 +741,11 @@ impl History {
                                 0 => h.model.update(cx, |m, cx| {
                                     m.set(LATENCY, super::bool_str(!on_if_one(LATENCY)), cx)
                                 }),
-                                1 => go(Page::Overview, w, cx),
+                                1 => {
+                                    h.model
+                                        .update(cx, |m, cx| m.set(super::perf::OPEN, "1", cx));
+                                    go(Page::Overview, w, cx)
+                                }
                                 2 if !empty && !exporting => {
                                     let all = &h.model.read(cx).store.all;
                                     let ids = all[all.len().saturating_sub(20)..]

@@ -309,6 +309,9 @@ enum Menu {
     Kinds,
 }
 
+/// Config key: the 性能 section is unfolded.
+pub(super) const OPEN: &str = "perfOpen";
+
 pub struct Perf {
     model: Entity<Model>,
     /// The last `range` records (time order), engine-filtered.
@@ -453,13 +456,35 @@ impl Perf {
         self.rows.iter().filter(|r| sample(r)).collect()
     }
 
-    fn header(&self, cx: &mut Context<Self>) -> Div {
-        let mut caption = format!(
-            "{} {} 句的粘贴延迟、改动、电平和原始数据，用来排查慢和漏字",
-            overview::range_label(overview::range()),
-            thousands(self.rows.len() as i64)
-        );
-        if let Some(d) = self.kept_from {
+    /// The section title with a summary line; folded, that line is all the section shows.
+    fn header(&self, open: bool, cx: &mut Context<Self>) -> Div {
+        let label = overview::range_label(overview::range());
+        let n = thousands(self.rows.len() as i64);
+        let mut caption = if open {
+            format!("{label} {n} 句的粘贴延迟、改动、电平和原始数据，用来排查慢和漏字")
+        } else {
+            let paste: Vec<i64> = self.samples().iter().map(|r| r.total_ms).collect();
+            let failed = self.rows.iter().filter(|r| r.is_failure()).count();
+            let mut c = format!("{label} {n} 句");
+            if let Some((a, b)) = p50_90(&paste) {
+                c += &format!(" · 松键到粘贴中位 {a} ms，p90 {b} ms");
+            }
+            if failed > 0 {
+                c += &format!(" · 失败 {failed} 句");
+            }
+            c
+        };
+        let model = self.model.clone();
+        let toggle = hit("perf-toggle")
+            .flex_none()
+            .text_size(px(12.))
+            .text_color(hex(LINK))
+            .cursor_pointer()
+            .child(if open { "收起" } else { "展开" })
+            .on_click(move |_, _, cx| {
+                model.update(cx, |m, cx| m.set(OPEN, super::bool_str(!open), cx))
+            });
+        if let Some(d) = self.kept_from.filter(|_| open) {
             caption += &format!(
                 "。只保留最近 {} 句，最早一句在 {}月{}日",
                 plaid_core::store::LIMIT,
@@ -492,18 +517,26 @@ impl Perf {
                     )
                     .child(hint(caption).text_size(px(12.))),
             )
-            .when(self.has_both, |d| {
-                d.child(segmented(
-                    "perf-engine",
-                    &["全部引擎", "火山引擎", "本地"],
-                    self.engine,
-                    pick(cx, |this, i: &usize, cx| {
-                        this.engine = *i;
-                        this.reload(cx);
-                        cx.notify();
-                    }),
-                ))
-            })
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(14.))
+                    .when(self.has_both && open, |d| {
+                        d.child(segmented(
+                            "perf-engine",
+                            &["全部引擎", "火山引擎", "本地"],
+                            self.engine,
+                            pick(cx, |this, i: &usize, cx| {
+                                this.engine = *i;
+                                this.reload(cx);
+                                cx.notify();
+                            }),
+                        ))
+                    })
+                    .child(toggle),
+            )
     }
 
     fn status(&self) -> Div {
@@ -1681,13 +1714,17 @@ fn pick(
 impl Render for Perf {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // A section of the 概览 page: no scroller of its own.
+        let open = super::on_if_one(OPEN);
         let page = div()
             .id("perf")
             .flex()
             .flex_col()
             .flex_none()
             .gap(px(14.))
-            .child(self.header(cx));
+            .child(self.header(open, cx));
+        if !open {
+            return page;
+        }
         if self.rows.is_empty() {
             let (_, body) = boxed("", None);
             let (title, sub) = if self.total == 0 {
@@ -1741,6 +1778,16 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     use super::Page;
     use super::snapshot::expect;
     ui.open(Page::Overview, super::overview::fixture_facts())?;
+    if !super::on_if_one(OPEN) {
+        bring(ui, "perf-toggle")?;
+        ui.click("perf-toggle")?;
+        bring(ui, "overview-range-0")?;
+    }
+    expect(
+        "性能 unfolded",
+        ui.has("perf-hist-0") || ui.has("perf-row-0"),
+        &None,
+    )?;
     // 今天 first: the section follows the range, so the fixture's older records drop out of the table.
     ui.click("overview-range-0")?;
     let today = (0..400)
@@ -1869,10 +1916,8 @@ pub(super) fn bring(ui: &mut super::snapshot::Ui, id: &str) -> Result<(), String
         let anchor = [
             "overview-range-0",
             "overview-bar-0",
-            "overview-week-0",
-            "overview-speed-0",
-            "overview-heat-0",
-            "overview-dictionary",
+            "overview-hour-0",
+            "perf-toggle",
             "perf-hist-0",
             "perf-hist-23",
             "perf-trend-0",
