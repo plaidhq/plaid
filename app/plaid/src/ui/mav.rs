@@ -478,7 +478,9 @@ pub fn menu(
 ) -> Stateful<Div> {
     let id: SharedString = id.into();
     let on_pick = std::rc::Rc::new(on_pick);
+    // Occlude: a click on an entry must not also reach the control drawn under the menu.
     hit(id.clone())
+        .occlude()
         .min_w(px(width))
         .p(px(4.))
         .rounded(px(10.))

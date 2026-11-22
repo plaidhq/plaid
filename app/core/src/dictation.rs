@@ -2,7 +2,7 @@
 //! on one thread, every side effect goes through `Platform`. Inputs from other threads (mic, ASR, timers,
 //! focus reads) carry the utterance generation they belong to; stale ones are dropped.
 use crate::actions::{self, Action, Parsed};
-use crate::llm::{self, Endpoint};
+use crate::llm::{self, Endpoint, Level};
 use crate::rules::Rules;
 use crate::session::{Event, Session};
 use crate::store::{Record, Store};
@@ -1113,12 +1113,14 @@ impl Controller {
         (!ep.base.is_empty()).then_some(ep)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn llm_request(
         &self,
         ep: &Endpoint,
         text: &str,
         app: &str,
         history: &[String],
+        light: bool,
         timeout: Duration,
         p: &mut impl Platform,
     ) -> Result<llm::Request, String> {
@@ -1130,6 +1132,7 @@ impl Controller {
             history,
             hotwords: &hotwords,
             fixes: &self.store.fixes(),
+            light,
         };
         llm::refine_request(|k| p.setting(k), ep, key.as_deref(), &fill, timeout)
     }
@@ -1137,7 +1140,13 @@ impl Controller {
     /// Optional LLM pass between the ASR final and the paste. Fails open: errors and timeouts paste the raw text.
     fn refine_or_deliver(&mut self, asr: String, p: &mut impl Platform) {
         let asr_at = Instant::now();
-        let raw = Rules::load(|k| p.setting(k)).apply(&asr);
+        let app = self.u.as_ref().and_then(|u| u.app.clone());
+        let level = llm::level(|k| p.setting(k), app.as_deref());
+        let raw = if level == Level::Raw {
+            asr.clone()
+        } else {
+            Rules::load(|k| p.setting(k)).apply(&asr)
+        };
         if raw != asr {
             p.log(&format!(
                 "rules: {} → {} chars",
@@ -1148,7 +1157,7 @@ impl Controller {
                 u.asr = Some(asr);
             }
         }
-        if p.setting("llmEnabled").as_deref() != Some("1") {
+        if level <= Level::Off {
             return self.deliver(&raw, &raw, "off", None, asr_at, true, p);
         }
         let min = p
@@ -1180,7 +1189,8 @@ impl Controller {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(4000),
         );
-        match self.llm_request(&ep, &raw, &app, &history, timeout, p) {
+        let light = level == Level::Light;
+        match self.llm_request(&ep, &raw, &app, &history, light, timeout, p) {
             Err(e) => self.deliver(&raw, &raw, &e, Some(0), asr_at, true, p),
             Ok(req) => {
                 self.llm_seq += 1;
@@ -1295,7 +1305,7 @@ impl Controller {
             if !self.store.all.iter().any(|r| r.at == id) {
                 continue;
             }
-            match self.llm_request(&ep, &raw, "", &[], LEARN_TIMEOUT, p) {
+            match self.llm_request(&ep, &raw, "", &[], false, LEARN_TIMEOUT, p) {
                 Ok(req) => {
                     self.llm_seq += 1;
                     self.learn.running = Some((self.llm_seq, id, raw));
@@ -1759,6 +1769,38 @@ mod tests {
         let mut t = T::new();
         t.p.settings.push(("llmMinChars", "0"));
         let out = refining(&mut t, 1, "先就这样吧。");
+        assert!(has(&out, "llm 1"), "{out:?}");
+    }
+
+    #[test]
+    fn per_app_levels_override_the_global_one() {
+        // Notes (the fake front app) set to 原文: no rules, no LLM.
+        let mut t = T::new();
+        t.p.settings.extend([
+            ("ruleFillers", "1"),
+            ("llmMinChars", "0"),
+            ("llmApps", "Slack\tlight\nnotes\traw"),
+        ]);
+        let out = refining(&mut t, 1, "嗯，先就这样吧。");
+        assert!(
+            has(&out, "verify 1 嗯，先就这样吧。") && !has(&out, "llm 1"),
+            "{out:?}"
+        );
+        // LLM off globally, Notes set to 轻度: refined.
+        let mut t = T::new();
+        t.p.settings
+            .extend([("llmMinChars", "0"), ("llmApps", "Notes\tlight")]);
+        t.p.settings.retain(|(k, _)| *k != "llmEnabled");
+        t.p.settings.push(("llmEnabled", "0"));
+        t.p.settings
+            .extend([("llmBaseUrl", "http://127.0.0.1:1/v1"), ("llmModel", "m")]);
+        t.key(StartHold);
+        t.send(Msg::Field {
+            generation: 1,
+            before: None,
+            window: None,
+        });
+        let out = t.done(1, Ok("先就这样吧。"));
         assert!(has(&out, "llm 1"), "{out:?}");
     }
 

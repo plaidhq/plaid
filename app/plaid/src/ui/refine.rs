@@ -1,7 +1,7 @@
 //! 文字: local text rules with a live preview, then the LLM pass between the ASR result and the paste.
 use super::key_field::KeyField;
 use super::mav::*;
-use super::{Model, bool_str, field, on_if_one, on_unless_zero, pick_list};
+use super::{Model, bool_str, drop_menu, field, on_if_one, on_unless_zero, pick_list};
 use crate::{config, secret};
 use gpui_kit::base::input::{
     InputBaseState, InputEvent, InputModeKind, InputState, Textarea, TextareaState,
@@ -113,7 +113,17 @@ fn pill(text: &'static str) -> Div {
 enum Menu {
     Preset,
     Format,
+    /// The level tag of one 按应用 row.
+    App(usize),
+    AddApp,
 }
+
+/// The global levels with their subtitles (原文 is per-app only).
+const LEVELS: [(llm::Level, &str); 3] = [
+    (llm::Level::Off, "只用本地规则"),
+    (llm::Level::Light, "补标点、修错字，不改说法"),
+    (llm::Level::Fluent, "整理成书面语，可能改语序"),
+];
 
 /// A prompt editor with its default (system prompt, user message template).
 struct Prompt {
@@ -142,7 +152,7 @@ pub struct Refine {
     extra: Entity<TextareaState>,
     timeout: Entity<InputState>,
     context: Entity<TextareaState>,
-    prompts: [Prompt; 2],
+    prompts: [Prompt; 3],
     sample: Entity<TextareaState>,
     test: Test,
 }
@@ -203,9 +213,18 @@ impl Refine {
             prompt(
                 "llmPrompt",
                 "prompt",
-                "系统提示词",
+                "系统提示词 · 通顺",
                 llm::DEFAULT_PROMPT,
                 (12, 30),
+                window,
+                cx,
+            ),
+            prompt(
+                "llmPromptLight",
+                "prompt-light",
+                "系统提示词 · 轻度",
+                llm::LIGHT_PROMPT,
+                (8, 24),
                 window,
                 cx,
             ),
@@ -377,6 +396,7 @@ impl Refine {
             history: &[],
             hotwords: &config::terms(true).join(", "),
             fixes: &self.model.read(cx).store.fixes(),
+            light: llm::global_level(config::value) == llm::Level::Light,
         };
         llm::refine_request(
             config::value,
@@ -389,7 +409,7 @@ impl Refine {
 
     fn status(&self, cx: &App) -> String {
         if !on_if_one("llmEnabled") {
-            return "关闭时识别结果原样粘贴".into();
+            return "关：识别结果只过本地规则就粘贴".into();
         }
         let s = "出错或超时直接粘贴原文；润色中光带变紫，按 esc 跳过";
         let all = &self.model.read(cx).store.all;
@@ -427,6 +447,162 @@ impl Refine {
                 cx.notify();
             });
         }
+    }
+
+    fn set_apps(&self, apps: &[(String, llm::Level)], cx: &mut Context<Self>) {
+        let v = llm::format_app_levels(apps);
+        self.model.update(cx, |m, cx| m.set("llmApps", v, cx));
+    }
+
+    /// 按应用: apps that refine differently from the global level.
+    fn apps_card(&self, cx: &mut Context<Self>) -> Div {
+        let apps = llm::app_levels(&config::raw("llmApps").unwrap_or_default());
+        // Candidates: apps dictated into, most used first.
+        let mut seen: Vec<(String, usize)> = vec![];
+        for r in &self.model.read(cx).store.all {
+            if let Some(a) = &r.app {
+                match seen.iter_mut().find(|(s, _)| s == a) {
+                    Some(e) => e.1 += 1,
+                    None => seen.push((a.clone(), 1)),
+                }
+            }
+        }
+        seen.sort_by_key(|e| std::cmp::Reverse(e.1));
+        let candidates: Vec<String> = seen
+            .into_iter()
+            .map(|(a, _)| a)
+            .filter(|a| !apps.iter().any(|(x, _)| x.eq_ignore_ascii_case(a)))
+            .take(12)
+            .collect();
+        let mut rows = vec![];
+        for (i, (app, l)) in apps.iter().enumerate() {
+            let open = self.menu == Some(Menu::App(i));
+            let this = cx.entity().downgrade();
+            let list = apps.clone();
+            let tag = drop_menu(
+                format!("llmApp-{i}"),
+                level_tag(format!("llmApp-{i}"), *l),
+                110.,
+                llm::Level::ALL
+                    .iter()
+                    .map(|x| MenuEntry {
+                        label: level_menu_label(*x).into(),
+                        checked: x == l,
+                        rule: false,
+                    })
+                    .collect(),
+                open,
+                self.menu_toggle(Menu::App(i), open, cx),
+                self.menu_close(cx),
+                move |k, _, cx| {
+                    let mut list = list.clone();
+                    list[i].1 = llm::Level::ALL[k];
+                    let _ = this.update(cx, |this, cx| {
+                        this.menu = None;
+                        this.set_apps(&list, cx);
+                    });
+                },
+            );
+            let this = cx.entity().downgrade();
+            let list = apps.clone();
+            let remove = hit(SharedString::from(format!("llmApp-{i}-remove")))
+                .size(px(22.))
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.))
+                .hover(|s| s.bg(hex(HOVER)))
+                .child(icon("plaid/xmark.svg", 10., hex(TEXT3)))
+                .on_click(move |_, _, cx| {
+                    let mut list = list.clone();
+                    list.remove(i);
+                    let _ = this.update(cx, |this, cx| this.set_apps(&list, cx));
+                });
+            rows.push(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .h(px(34.))
+                    .when(i > 0, |d| d.border_t_1().border_color(hexa(LINE)))
+                    .child(app_badge(app))
+                    .child(div().flex_1().min_w_0().truncate().child(app.clone()))
+                    .child(tag)
+                    .child(remove),
+            );
+        }
+        let open = self.menu == Some(Menu::AddApp);
+        let this = cx.entity().downgrade();
+        let list = apps.clone();
+        let picks = candidates.clone();
+        // A new app starts at the opposite of the global choice: 关 under an LLM level, 轻度 under 关.
+        let fresh = if llm::global_level(config::value) > llm::Level::Off {
+            llm::Level::Off
+        } else {
+            llm::Level::Light
+        };
+        let face = small_button("llmApps-add", "+ 添加", |_, _, _| {});
+        let add = if candidates.is_empty() {
+            disabled(face).into_any_element()
+        } else {
+            drop_menu(
+                "llmApps-add",
+                face,
+                160.,
+                candidates
+                    .iter()
+                    .map(|a| MenuEntry {
+                        label: a.clone().into(),
+                        checked: false,
+                        rule: false,
+                    })
+                    .collect(),
+                open,
+                self.menu_toggle(Menu::AddApp, open, cx),
+                self.menu_close(cx),
+                move |k, _, cx| {
+                    let mut list = list.clone();
+                    list.push((picks[k].clone(), fresh));
+                    let _ = this.update(cx, |this, cx| {
+                        this.menu = None;
+                        this.set_apps(&list, cx);
+                    });
+                },
+            )
+            .into_any_element()
+        };
+        group_body()
+            .gap(px(10.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(15.))
+                            .font_weight(medium())
+                            .child("按应用"),
+                    )
+                    .child(add),
+            )
+            .child(hint("在这些应用里改用单独的方式；原文连本地规则也不用"))
+            .when(
+                apps.iter().any(|(_, l)| *l >= llm::Level::Light)
+                    && config::value("llmBaseUrl").is_none(),
+                |d| {
+                    d.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(hex(AMBER))
+                            .child("还没配置 LLM 服务：轻度和通顺会直接粘贴原文"),
+                    )
+                },
+            )
+            .when(!rows.is_empty(), |d| {
+                d.child(div().flex().flex_col().children(rows))
+            })
     }
 
     fn provider_rows(&self, window: &Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -832,6 +1008,130 @@ fn preview() -> Div {
 }
 
 /// One rule as a tile: title, a dot that lights when on, the example underneath. The tile toggles the rule.
+/// One global level: violet bar and wash when picked.
+fn level_card(
+    l: llm::Level,
+    sub: &'static str,
+    picked: bool,
+    model: &Entity<Model>,
+) -> Stateful<Div> {
+    let model = model.clone();
+    hit(SharedString::from(format!("llmLevel-{}", l.key())))
+        .relative()
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .pl(px(14.))
+        .pr(px(12.))
+        .py(px(8.))
+        .rounded(px(8.))
+        .border_1()
+        .overflow_hidden()
+        .map(|d| {
+            if picked {
+                d.bg(tint(VIOLET, 0x1a)).border_color(tint(VIOLET, 0x55))
+            } else {
+                d.border_color(hexa(LINE)).hover(|s| s.bg(hex(HOVER)))
+            }
+        })
+        .when(picked, |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(3.))
+                    .bg(hex(VIOLET))
+                    .shadow(vec![glow(VIOLET, 8., 0x99)]),
+            )
+        })
+        .child(
+            div()
+                .text_size(px(13.))
+                .font_weight(medium())
+                .text_color(hex(if picked { TEXT } else { TEXT2 }))
+                .child(l.label()),
+        )
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(hex(if picked { TEXT2 } else { TEXT3 }))
+                .child(sub),
+        )
+        .on_click(move |_, _, cx| {
+            model.update(cx, |m, cx| {
+                if l == llm::Level::Off {
+                    m.set("llmEnabled", bool_str(false), cx);
+                } else {
+                    m.set("llmEnabled", bool_str(true), cx);
+                    m.set("llmLevel", l.key(), cx);
+                }
+            })
+        })
+}
+
+fn level_menu_label(l: llm::Level) -> &'static str {
+    match l {
+        llm::Level::Raw => "原文",
+        llm::Level::Off => "关 · 只用规则",
+        llm::Level::Light => "轻度",
+        llm::Level::Fluent => "通顺",
+    }
+}
+
+/// The per-app level as a small tag: violet when it calls the LLM.
+fn level_tag(id: String, l: llm::Level) -> Stateful<Div> {
+    let llm = l >= llm::Level::Light;
+    hit(SharedString::from(id))
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(4.))
+        .h(px(22.))
+        .pl(px(8.))
+        .pr(px(6.))
+        .rounded(px(6.))
+        .text_size(px(12.))
+        .map(|d| {
+            if llm {
+                d.bg(tint(VIOLET, 0x22)).text_color(hex(VIOLET))
+            } else {
+                d.bg(hex(RAISED2)).text_color(hex(TEXT2))
+            }
+        })
+        .hover(|s| s.bg(hex(HOVER)))
+        .child(l.label())
+        .child(icon(
+            "plaid/chev-down.svg",
+            9.,
+            hex(if llm { VIOLET } else { TEXT3 }),
+        ))
+}
+
+/// First letter of an app in a small mono square.
+fn app_badge(app: &str) -> Div {
+    let c: String = app
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().collect())
+        .unwrap_or_default();
+    div()
+        .size(px(22.))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.))
+        .bg(hex(RAISED2))
+        .border_1()
+        .border_color(hexa(LINE2))
+        .font(mono())
+        .text_size(px(11.))
+        .text_color(hex(TEXT2))
+        .child(c)
+}
+
 fn rule_tile(i: usize, model: &Entity<Model>) -> Stateful<Div> {
     let key = KEYS[i];
     let (title, example) = RULE_TILES[i];
@@ -915,9 +1215,8 @@ impl Render for Refine {
             .iter()
             .position(|&n| n == min_chars())
             .unwrap_or(1);
+        let level = llm::global_level(config::value);
         let llm = group_body()
-            .w(px(300.))
-            .flex_none()
             .gap(px(12.))
             .child(
                 div()
@@ -937,20 +1236,15 @@ impl Render for Refine {
                             .text_size(px(15.))
                             .font_weight(medium())
                             .child("LLM 润色"),
-                    )
-                    .child({
-                        let model = self.model.clone();
-                        hit("llmEnabled")
-                            .child(switch(enabled))
-                            .on_click(move |_, _, cx| {
-                                model
-                                    .update(cx, |m, cx| m.set("llmEnabled", bool_str(!enabled), cx))
-                            })
-                    }),
+                    ),
             )
-            .child(hint(
-                "粘贴前用 LLM 整理：去口癖、修正改口、统一术语。比本地规则更聪明，也更慢。",
-            ))
+            .child(
+                div().flex().flex_col().gap(px(6.)).children(
+                    LEVELS
+                        .iter()
+                        .map(|&(l, sub)| level_card(l, sub, l == level, &self.model)),
+                ),
+            )
             .child(
                 div()
                     .flex()
@@ -976,8 +1270,15 @@ impl Render for Refine {
                     })
                     .child(hint("更短的句子只走本地规则，识别完直接粘贴")),
             )
-            .child(hint(self.status(cx)))
-            .when(!enabled, |d| d.opacity(0.75));
+            .child(hint(self.status(cx)));
+        let llm = div()
+            .w(px(300.))
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(llm)
+            .child(self.apps_card(cx));
         super::page_body("refine")
             .child(
                 div()
@@ -1013,17 +1314,44 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     ui.shot("refine")?;
 
     let before = config::raw("llmEnabled");
-    ui.click("llmEnabled")?;
+    ui.click("llmLevel-off")?;
     expect(
-        "llmEnabled off",
+        "level off",
         config::raw("llmEnabled").as_deref() == Some("0"),
         &before,
     )?;
     ui.shot("refine-off")?;
-    ui.click("llmEnabled")?;
+    ui.click("llmLevel-light")?;
     expect(
-        "llmEnabled on",
-        config::raw("llmEnabled").as_deref() == Some("1"),
+        "level light",
+        config::raw("llmEnabled").as_deref() == Some("1")
+            && config::raw("llmLevel").as_deref() == Some("light"),
+        &None,
+    )?;
+    ui.click("llmApps-add")?;
+    ui.shot("refine-apps-add")?;
+    ui.click("llmApps-add-menu-0")?;
+    ui.click("llmApps-add")?;
+    ui.click("llmApps-add-menu-0")?;
+    ui.click("llmApp-1")?;
+    ui.click("llmApp-1-menu-0")?;
+    let apps = llm::app_levels(&config::raw("llmApps").unwrap_or_default());
+    expect(
+        "two apps: 关 then 原文",
+        apps.len() == 2 && apps[0].1 == llm::Level::Off && apps[1].1 == llm::Level::Raw,
+        &config::raw("llmApps"),
+    )?;
+    ui.shot("refine-apps")?;
+    ui.click("llmApp-0-remove")?;
+    expect(
+        "one app left",
+        llm::app_levels(&config::raw("llmApps").unwrap_or_default()).len() == 1,
+        &config::raw("llmApps"),
+    )?;
+    ui.click("llmLevel-fluent")?;
+    expect(
+        "level fluent",
+        config::raw("llmLevel").as_deref() == Some("fluent"),
         &None,
     )?;
 
@@ -1114,6 +1442,7 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &None,
     )?;
 
+    ui.scroll("llmAppContext", -300.)?;
     ui.click("prompt-open")?;
     expect("prompt editor shown", ui.has("prompt-reset"), &None)?;
     ui.click("prompt")?;

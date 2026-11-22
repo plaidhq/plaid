@@ -306,10 +306,35 @@ pub fn pick_list(
     close: impl Fn(&mut Window, &mut App) + 'static,
     pick: impl Fn(usize, &mut Window, &mut App) + 'static,
 ) -> Div {
+    drop_menu(
+        id,
+        popup(id, current, width),
+        width,
+        items,
+        open,
+        toggle,
+        close,
+        pick,
+    )
+}
+
+/// `pick_list` with any face: the menu named `{id}-menu` opens over `face`.
+#[allow(clippy::too_many_arguments)]
+pub fn drop_menu(
+    id: impl Into<SharedString>,
+    face: Stateful<Div>,
+    width: f32,
+    items: Vec<MenuEntry>,
+    open: bool,
+    toggle: impl Fn(&mut Window, &mut App) + 'static,
+    close: impl Fn(&mut Window, &mut App) + 'static,
+    pick: impl Fn(usize, &mut Window, &mut App) + 'static,
+) -> Div {
+    let id: SharedString = id.into();
     div()
         .flex()
         .flex_col()
-        .child(popup(id, current, width).on_click(move |_, w, cx| toggle(w, cx)))
+        .child(face.on_click(move |_, w, cx| toggle(w, cx)))
         .when(open, |d| {
             // The menu opens with the checked item over the button face.
             let lift = items.iter().position(|i| i.checked).unwrap_or(0) as f32 * MENU_ROW + 5.;

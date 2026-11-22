@@ -71,7 +71,10 @@ Top tabs 今天, 报告, 历史 | 声音, 文字, 词典, 命令 | 设置. Space
 microphone list with a live meter, recognition options and HUD states; 设置 holds the Volc key and data folder.
 文字 adds six local text rules (core/rules.rs: fillers, repeats, corrections, final 。, CJK–Latin spacing, Chinese
 numerals), all off by default, applied before the LLM pass and without it, so short sentences get them too; then
-the LLM pass and its threshold (`llmMinChars`).
+the LLM level and its threshold (`llmMinChars`): 关 (rules only, `llmEnabled` 0), 轻度 (`llmLevel` light: a
+punctuation-and-typos prompt, `llmPromptLight`) or 通顺 (the Swift prompt). 按应用 (`llmApps`, `app<TAB>level`
+lines, matched case-insensitively on the frontmost app name) overrides the level per app, including 原文 (no rules,
+no LLM). Drawn menus occlude, so a click on an entry never reaches the control under it.
 Checked offscreen only: `plaid --ui-check <dir>` (snapshot feature, fixture data, no window shown, no device or
 key access) clicks through every page and writes PNGs. Differences from Swift:
 
