@@ -22,11 +22,6 @@ const LATENCY_W: f32 = 290.;
 const STATUS_W: f32 = 78.;
 const DURATION_W: f32 = 58.;
 
-const SAVED_COLOR: u32 = 0xa85a00;
-const FAILED_COLOR: u32 = 0xc0281f;
-const PASTED_COLOR: u32 = 0x555555;
-const WARN_COLOR: u32 = 0xb35c00;
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Filter {
     All,
@@ -409,12 +404,11 @@ impl History {
             .gap(px(5.))
             .px(px(9.))
             .rounded(px(11.))
-            .bg(hex(0xffffff))
+            .bg(hex(WELL))
             .border_1()
-            .border_color(hex(0x9c9c9c))
-            .shadow(vec![shadow(0., 1., 1., 0., 0x00000024, true)])
+            .border_color(hexa(LINE2))
             .text_size(px(12.))
-            .child(icon("plaid/search.svg", 12., hex(0x666666)))
+            .child(icon("plaid/search.svg", 12., hex(TEXT2)))
             .child(div().flex_1().min_w_0().child(Input::new(&self.search)))
             .when(typed, |d| {
                 d.child(
@@ -427,7 +421,7 @@ impl History {
                 .child(
                     hit("history-search-clear")
                         .flex_none()
-                        .child(icon("plaid/xcircle.svg", 12., hex(0xa3a3a3)))
+                        .child(icon("plaid/xcircle.svg", 12., hex(TEXT3)))
                         .on_click(move |_, w, cx| {
                             search.update(cx, |s, cx| s.set_value("", w, cx));
                         }),
@@ -464,13 +458,12 @@ impl History {
             .h(px(21.))
             .px(px(7.))
             .rounded(px(4.))
-            .bg(vgrad(0xffffff, 0xf0f0f0))
+            .bg(hex(RAISED2))
             .border_1()
-            .border_color(hex(0xa5a5a5))
-            .shadow(vec![shadow(0., 1., 1., 0., 0x00000012, false)])
-            .active(|s| s.bg(vgrad(0xd9d9d9, 0xc9c9c9)))
-            .child(icon("plaid/action.svg", 14., hex(0x3a3a3a)))
-            .child(icon("plaid/tri-down.svg", 6., hex(0x3a3a3a)))
+            .border_color(hexa(LINE2))
+            .hover(|s| s.bg(hex(HOVER)))
+            .child(icon("plaid/action.svg", 14., hex(TEXT)))
+            .child(icon("plaid/tri-down.svg", 6., hex(TEXT2)))
             .on_click(move |_, _, cx| {
                 let _ = toggle.update(cx, |h, cx| {
                     h.actions = !h.actions;
@@ -535,8 +528,8 @@ impl History {
                 .gap(px(6.))
                 .px(px(14.))
                 .pb(px(6.))
-                .when(busy, |d| d.child(spinner(11., 0x555555, 0)))
-                .child(hint(text).text_color(hex(0x333333))),
+                .when(busy, |d| d.child(spinner(11., TEXT2, 0)))
+                .child(hint(text).text_color(hex(TEXT))),
         )
     }
 
@@ -547,7 +540,7 @@ impl History {
         }
         cols.push(("状态", STATUS_W));
         cols.push(("用时", DURATION_W));
-        table_header(&cols).text_color(hex(0x222222))
+        table_header(&cols)
     }
 
     fn table(
@@ -561,7 +554,6 @@ impl History {
             .flex_1()
             .min_h_0()
             .mx(px(12.))
-            .border_color(hex(0x9f9f9f))
             .child(Self::header(latency));
         if let Some((title, body)) = empty {
             return well.child(
@@ -575,7 +567,7 @@ impl History {
                     .child(
                         div()
                             .font_weight(bold())
-                            .text_color(hex(0x555555))
+                            .text_color(hex(TEXT2))
                             .child(title),
                     )
                     .child(hint(body)),
@@ -694,9 +686,9 @@ impl History {
             .px(px(16.))
             .py(px(12.))
             .rounded(px(5.))
-            .bg(hexa(0x0000000a))
+            .bg(hex(SURFACE))
             .border_1()
-            .border_color(hexa(0x00000024));
+            .border_color(hexa(LINE));
         if self.selected.len() > 1 {
             let n = self.selected.len();
             let ids = self.selected.clone();
@@ -850,18 +842,12 @@ impl History {
                                     .font_weight(bold())
                                     .child(format!("{} · {app}", local.format("%H:%M"))),
                             )
-                            .child(
-                                hint(state)
-                                    .when(r.is_failure(), |d| d.text_color(hex(FAILED_COLOR))),
-                            ),
+                            .child(hint(state).when(r.is_failure(), |d| d.text_color(hex(RED)))),
                     )
                     .child(if text.is_empty() {
-                        div().text_color(hex(0x8a8a8a)).child("没有识别结果")
+                        div().text_color(hex(TEXT3)).child("没有识别结果")
                     } else {
-                        div()
-                            .line_height(px(20.))
-                            .text_color(hex(0x1a1a1a))
-                            .child(text)
+                        div().line_height(px(20.)).text_color(hex(TEXT)).child(text)
                     })
                     .child(
                         div()
@@ -873,7 +859,7 @@ impl History {
                                 div().flex().flex_col().gap(px(1.)).child(hint(k)).child(
                                     div()
                                         .font_weight(bold())
-                                        .text_color(hex(if warn { WARN_COLOR } else { 0x222222 }))
+                                        .text_color(hex(if warn { AMBER } else { TEXT }))
                                         .child(v),
                                 )
                             }))
@@ -917,11 +903,7 @@ impl History {
                                         div()
                                             .flex_1()
                                             .min_w_0()
-                                            .text_color(hex(if warn {
-                                                WARN_COLOR
-                                            } else {
-                                                0x222222
-                                            }))
+                                            .text_color(hex(if warn { AMBER } else { TEXT }))
                                             .child(v),
                                     )
                             }),
@@ -942,8 +924,7 @@ impl History {
             .mt(px(10.))
             .px(px(10.))
             .gap(px(10.))
-            .border_color(hex(0x9f9f9f))
-            .child(hint(text).text_color(hex(0x333333)))
+            .child(hint(text))
             .child(div().flex_1())
             .child(enabled(
                 n > 0,
@@ -968,7 +949,7 @@ impl History {
             Sheet::Retry(_) => (
                 "history-retry",
                 "重新识别这段录音？".to_string(),
-                "这段录音将上传到当前云端识别服务。结果保存到原记录，不自动粘贴，也不运行优化或命令。",
+                "这段录音将上传到当前云端识别服务。结果保存到原记录，不自动粘贴，也不运行润色或命令。",
                 "重新识别",
             ),
         };
@@ -996,10 +977,10 @@ impl History {
                     .px(px(20.))
                     .pt(px(16.))
                     .pb(px(14.))
-                    .bg(hex(0xececec))
+                    .bg(hex(RAISED))
                     .border_1()
                     .border_t_0()
-                    .border_color(hexa(0x00000066))
+                    .border_color(hexa(LINE2))
                     .rounded_b(px(5.))
                     .shadow(vec![shadow(0., 8., 24., 0., 0x00000066, false)])
                     .child(div().font_weight(bold()).child(title))
@@ -1007,7 +988,7 @@ impl History {
                         div()
                             .text_size(px(11.))
                             .line_height(px(15.))
-                            .text_color(hex(0x333333))
+                            .text_color(hex(TEXT2))
                             .child(body),
                     )
                     .child(
@@ -1105,12 +1086,12 @@ fn day_row(label: String) -> Div {
         .flex()
         .items_center()
         .px(px(6.))
-        .bg(vgrad(0xf6f6f6, 0xebebeb))
+        .bg(hex(RAISED))
         .border_b_1()
-        .border_color(hex(0xdcdcdc))
+        .border_color(hexa(LINE))
         .text_size(px(11.))
         .font_weight(bold())
-        .text_color(hex(0x6b6b6b))
+        .text_color(hex(TEXT2))
         .child(label)
 }
 
@@ -1122,18 +1103,18 @@ fn record_row(
     retrying: bool,
 ) -> Stateful<Div> {
     let local = r.at.with_timezone(&Local);
-    let color = |c: u32| if selected { hex(0xffffff) } else { hex(c) };
+    let color = hex;
     let (status, status_color) = if retrying {
-        ("重新识别中…", PASTED_COLOR)
+        ("重新识别中…", TEXT2)
     } else if r.is_failure() {
-        ("识别失败", FAILED_COLOR)
+        ("识别失败", RED)
     } else if r.outcome.as_deref() == Some("saved") {
-        ("未粘贴", SAVED_COLOR)
+        ("未粘贴", AMBER)
     } else {
-        ("已粘贴", PASTED_COLOR)
+        ("已粘贴", TEXT2)
     };
     let text = if r.text.is_empty() {
-        div().text_color(color(0x8a8a8a)).child("没有识别结果")
+        div().text_color(color(TEXT3)).child("没有识别结果")
     } else {
         div().child(r.text.replace('\n', " "))
     };
@@ -1160,7 +1141,7 @@ fn record_row(
         d.child(
             cell(LATENCY_W)
                 .text_size(px(11.))
-                .text_color(color(if bad { WARN_COLOR } else { 0x555555 }))
+                .text_color(color(if bad { AMBER } else { TEXT2 }))
                 .child(
                     div()
                         .truncate()
@@ -1175,7 +1156,7 @@ fn record_row(
             .gap(px(3.))
             .text_color(color(status_color))
             .when(r.edited.is_some() && delivered, |d| {
-                d.child(icon("plaid/pencil.svg", 10., color(0x6b6b6b)))
+                d.child(icon("plaid/pencil.svg", 10., color(TEXT2)))
             })
             .child(div().truncate().child(status)),
     )

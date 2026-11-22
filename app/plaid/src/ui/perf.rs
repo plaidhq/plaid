@@ -13,11 +13,6 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 const RANGES: [i64; 3] = [50, 200, 0];
-const ORANGE: u32 = 0xb25e00;
-const BLUE: u32 = 0x3b7ccf;
-const GRAY: u32 = 0x8a8a8a;
-const PURPLE: u32 = 0x8e5ad6;
-const AMBER: u32 = 0xe8892c;
 const STAGES: usize = 60;
 const EVENTS: usize = 500;
 const ROW_H: f32 = 20.;
@@ -464,7 +459,7 @@ impl Perf {
             .items_center()
             .justify_between()
             .gap(px(10.))
-            .child(div().text_color(hex(0x333333)).min_w_0().child(format!(
+            .child(div().text_color(hex(TEXT)).min_w_0().child(format!(
                 "最近 {} 句的延迟、电平、LLM 结果和原始数据，用来排查慢和漏字",
                 self.rows.len()
             )))
@@ -509,7 +504,7 @@ impl Perf {
                         .child(name.to_string())
                         .child(hint(sub)),
                 )
-                .child(div().flex_none().text_color(hex(0x333333)).child(value))
+                .child(div().flex_none().text_color(hex(TEXT)).child(value))
         };
         let audio = if self.audio_size > 0 {
             bytes(self.audio_size, 1000.)
@@ -561,7 +556,7 @@ impl Perf {
         let t = samples.iter().filter(|r| r.llm == "timeout").count();
         let s = samples.iter().filter(|r| r.llm == "skipped").count();
         let fallback = if calls == 0 {
-            tile("LLM 回退", "–", None, "优化未启用".into())
+            tile("LLM 回退", "–", None, "润色未启用".into())
         } else {
             tile(
                 "LLM 回退",
@@ -598,7 +593,7 @@ impl Perf {
                 ))
                 .child(fallback),
             Some(
-                "中位数；小字为 p90 和句数。首字：按下到第一个字。识别：松键到最终结果（按 esc 跳过优化时含等待）。LLM：优化耗时，只算成功的。粘贴：松键到粘贴完成。",
+                "中位数；小字为 p90 和句数。首字：按下到第一个字。识别：松键到最终结果（按 esc 跳过润色时含等待）。LLM：润色耗时，只算成功的。粘贴：松键到粘贴完成。",
             ),
         )
     }
@@ -634,8 +629,8 @@ impl Perf {
         let h = 164.;
         let (lines, labels) = grid(step, top, h);
         let series: Vec<(Vec<Option<i64>>, u32)> = vec![
-            (days.iter().map(|d| d.asr.map(|v| v.0)).collect(), BLUE),
-            (days.iter().map(|d| d.tot.map(|v| v.0)).collect(), GRAY),
+            (days.iter().map(|d| d.asr.map(|v| v.0)).collect(), CYAN),
+            (days.iter().map(|d| d.tot.map(|v| v.0)).collect(), TEXT2),
         ];
         let plot = canvas(
             |_, _, _| {},
@@ -691,7 +686,7 @@ impl Perf {
             hit(SharedString::from(format!("perf-trend-{i}")))
                 .flex_1()
                 .h_full()
-                .when(self.hover_trend == Some(i), |c| c.bg(hexa(0x0000000f)))
+                .when(self.hover_trend == Some(i), |c| c.bg(hexa(0xffffff08)))
                 .on_hover(cx.listener(move |this, on: &bool, _, cx| {
                     if *on {
                         this.hover_trend = Some(i);
@@ -721,7 +716,7 @@ impl Perf {
                 .gap(px(6.))
                 .child(caption_line(
                     caption,
-                    legend(&[("识别", BLUE), ("粘贴", GRAY)]),
+                    legend(&[("识别", CYAN), ("粘贴", TEXT2)]),
                 ))
                 .child(plot_frame(labels, lines, h, |d| {
                     d.child(div().absolute().inset_0().flex().children(columns))
@@ -805,10 +800,10 @@ impl Perf {
                     }
                     cx.notify();
                 }))
-                .child(seg(rest, 0xbdbdbd))
+                .child(seg(rest, TEXT3))
                 .child(seg(bad, AMBER))
-                .child(seg(good, PURPLE))
-                .child(seg(asr, 0x4a8ae0))
+                .child(seg(good, VIOLET))
+                .child(seg(asr, CYAN))
         });
         card(
             "阶段拆分",
@@ -820,10 +815,10 @@ impl Perf {
                 .child(caption_line(
                     caption,
                     legend(&[
-                        ("识别", 0x4a8ae0),
-                        ("LLM", PURPLE),
+                        ("识别", CYAN),
+                        ("LLM", VIOLET),
                         ("LLM 失败", AMBER),
-                        ("其余", 0xbdbdbd),
+                        ("其余", TEXT3),
                     ]),
                 ))
                 .child(plot_frame(labels, lines, h, |d| {
@@ -867,7 +862,7 @@ impl Perf {
             .h(px(18.))
             .items_center()
             .border_b_1()
-            .border_color(hexa(0x00000024))
+            .border_color(hexa(LINE))
             .child(div().flex_1())
             .children(cols.iter().map(|c| {
                 hint(c.to_string())
@@ -887,7 +882,7 @@ impl Perf {
                             .pb(px(2.))
                             .text_size(px(11.))
                             .font_weight(bold())
-                            .text_color(hex(0x555555))
+                            .text_color(hex(TEXT2))
                             .child(title.to_string()),
                     )
                     .children(rows.into_iter().map(|(name, rs)| {
@@ -951,8 +946,8 @@ impl Perf {
                 .px(px(1.))
                 .flex()
                 .items_end()
-                .child(bar(noise[i], 0xa9a9a9))
-                .child(bar(speech[i], 0x4a8ae0))
+                .child(bar(noise[i], TEXT3))
+                .child(bar(speech[i], CYAN))
         });
         let mark = |v: f64, color: u32| {
             div()
@@ -999,7 +994,7 @@ impl Perf {
                     pct(&nz, 0.5).unwrap_or(0)
                 )))
                 .when(sp50 < QUIET_RMS, |d| {
-                    d.child(hint(" · 语音电平偏低").ml(px(-10.)).text_color(hex(ORANGE)))
+                    d.child(hint(" · 语音电平偏低").ml(px(-10.)).text_color(hex(AMBER)))
                 })
         });
         card(
@@ -1014,12 +1009,12 @@ impl Perf {
                         "静音阈值 {}（橙线）· 语音过低 {QUIET_RMS}（灰线）",
                         silence as i64
                     ),
-                    legend(&[("噪声", 0xa9a9a9), ("语音", 0x4a8ae0)]),
+                    legend(&[("噪声", TEXT3), ("语音", CYAN)]),
                 ))
                 .child(plot_frame(labels, lines, h, |d| {
                     d.child(div().absolute().inset_0().flex().items_end().children(bins))
                         .child(mark(silence, AMBER))
-                        .child(mark(QUIET_RMS as f64, 0x777777))
+                        .child(mark(QUIET_RMS as f64, TEXT2))
                 }))
                 .child(
                     div()
@@ -1050,7 +1045,7 @@ impl Perf {
         let llm: (String, Option<u32>) = match r.llm.as_str() {
             "ok" => (num(r.llm_ms), None),
             "off" => ("–".into(), None),
-            other => (other.to_string(), Some(ORANGE)),
+            other => (other.to_string(), Some(AMBER)),
         };
         let prefix = if r.is_failure() {
             "[失败] "
@@ -1111,9 +1106,9 @@ impl Perf {
             .flex()
             .flex_none()
             .h(px(17.))
-            .bg(vgrad(0xffffff, 0xe9e9e9))
+            .bg(hex(RAISED))
             .border_b_1()
-            .border_color(hex(0xb1b1b1))
+            .border_color(hexa(LINE))
             .text_size(px(11.))
             .children(COLUMNS.iter().enumerate().map(|(i, (label, w))| {
                 let c = hit(SharedString::from(format!("perf-sort-{i}")))
@@ -1121,8 +1116,8 @@ impl Perf {
                     .items_center()
                     .justify_between()
                     .px(px(6.))
-                    .when(i > 0, |d| d.border_l_1().border_color(hex(0xd0d0d0)))
-                    .when(i == col, |d| d.bg(vgrad(0xdfe8f5, 0xc5d5ee)))
+                    .when(i > 0, |d| d.border_l_1().border_color(hexa(LINE)))
+                    .when(i == col, |d| d.bg(tint(CYAN, 0x1f)))
                     .child(div().whitespace_nowrap().child(label.to_string()))
                     .when(i == col, |d| {
                         d.child(icon(
@@ -1132,7 +1127,7 @@ impl Perf {
                                 "plaid/up.svg"
                             },
                             7.,
-                            hex(0x555555),
+                            hex(TEXT2),
                         ))
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1281,15 +1276,15 @@ impl Perf {
             }
             fields.push(field(
                 "状态",
-                div().text_color(hex(ORANGE)).child(s).into_any_element(),
+                div().text_color(hex(AMBER)).child(s).into_any_element(),
             ));
         }
         if r.raw != r.text {
             let style = HighlightStyle {
-                color: Some(hex(0x9a3b2e)),
+                color: Some(hex(RED)),
                 strikethrough: Some(StrikethroughStyle {
                     thickness: px(1.),
-                    color: Some(hex(0x9a3b2e)),
+                    color: Some(hex(RED)),
                 }),
                 ..Default::default()
             };
@@ -1302,8 +1297,8 @@ impl Perf {
         }
         if !r.text.is_empty() {
             let style = HighlightStyle {
-                color: Some(hex(0x1f7a2e)),
-                background_color: Some(hexa(0x34c75926)),
+                color: Some(hex(GREEN)),
+                background_color: Some(tint(GREEN, 0x26)),
                 ..Default::default()
             };
             fields.push(field(
@@ -1320,7 +1315,7 @@ impl Perf {
             fields.push(field(
                 "LLM",
                 div()
-                    .text_color(hex(ORANGE))
+                    .text_color(hex(AMBER))
                     .child(r.llm.clone())
                     .into_any_element(),
             ));
@@ -1374,10 +1369,10 @@ impl Perf {
                         .max_h(px(260.))
                         .overflow_y_scroll()
                         .p(px(8.))
-                        .bg(hex(0xffffff))
+                        .bg(hex(WELL))
                         .border_1()
-                        .border_color(hex(0xc8c8c8))
-                        .font_family("Menlo")
+                        .border_color(hexa(LINE2))
+                        .font(mono())
                         .text_size(px(11.))
                         .child(hit("perf-json-body").child(pretty)),
                 )
@@ -1418,12 +1413,12 @@ impl Perf {
                     div()
                         .px(px(8.))
                         .py(px(2.))
-                        .bg(vgrad(0xf4f4f4, 0xe8e8e8))
+                        .bg(hex(RAISED))
                         .border_b_1()
-                        .border_color(hex(0xd8d8d8))
+                        .border_color(hexa(LINE))
                         .text_size(px(11.))
                         .font_weight(bold())
-                        .text_color(hex(0x555555))
+                        .text_color(hex(TEXT2))
                         .child(day_label(e.day))
                         .into_any_element(),
                 );
@@ -1443,7 +1438,7 @@ impl Perf {
                     .child(
                         div()
                             .flex_none()
-                            .font_family("Menlo")
+                            .font(mono())
                             .text_color(hex(HINT))
                             .child(e.time.clone()),
                     )
@@ -1451,7 +1446,7 @@ impl Perf {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .when(e.kind == Kind::Error, |d| d.text_color(hex(ORANGE)))
+                            .when(e.kind == Kind::Error, |d| d.text_color(hex(AMBER)))
                             .child(e.msg.clone()),
                     )
                     .into_any_element(),
@@ -1465,9 +1460,9 @@ impl Perf {
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .bg(hex(0xffffff))
+            .bg(hex(WELL))
             .border_1()
-            .border_color(hex(0xa8a8a8));
+            .border_color(hexa(LINE2));
         let well = if empty {
             well.items_center()
                 .justify_center()
@@ -1620,7 +1615,7 @@ fn plot_frame(labels: Vec<Div>, lines: Vec<Div>, h: f32, fill: impl FnOnce(Div) 
                 .relative()
                 .h(px(h))
                 .border_b_1()
-                .border_color(hex(0x9a9a9a))
+                .border_color(hexa(LINE2))
                 .children(lines),
         ))
 }
@@ -1647,11 +1642,11 @@ fn icon_button(
         .w(px(24.))
         .h(px(20.))
         .rounded(px(4.))
-        .bg(vgrad(0xffffff, 0xf0f0f0))
+        .bg(hex(RAISED2))
         .border_1()
-        .border_color(hex(0xa5a5a5))
-        .active(|s| s.bg(vgrad(0xd9d9d9, 0xc9c9c9)))
-        .child(icon(path, 12., hex(0x444444)))
+        .border_color(hexa(LINE2))
+        .hover(|s| s.bg(hex(HOVER)))
+        .child(icon(path, 12., hex(TEXT)))
         .on_click(on_click)
 }
 
@@ -1756,6 +1751,7 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     // Newest first, the fifth row is a hand-corrected fixture record: raw vs pasted diff plus 修改后.
     bring(ui, "perf-raw-more")?;
     ui.shot("perf-raw")?;
+    bring(ui, "perf-row-4")?;
     ui.click("perf-row-4")?;
     expect("row opens the inspector", ui.has("perf-inspector"), &None)?;
     bring(ui, "perf-inspector")?;

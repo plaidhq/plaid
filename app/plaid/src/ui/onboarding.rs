@@ -75,23 +75,18 @@ impl Onboarding {
                 div()
                     .size(px(72.))
                     .rounded(px(16.))
-                    .bg(vgrad(0x7fb2ec, 0x2f6fc4))
+                    .bg(hex(RAISED2))
                     .shadow(vec![
-                        shadow(0., 1., 0., 0., 0xffffff80, true),
-                        shadow(0., -1., 0., 0., 0x00000033, true),
-                        shadow(0., 2., 6., 0., 0x0000004d, false),
+                        shadow(0., 0., 0., 1., LINE2, true),
+                        glow(CYAN, 18., 0x26),
                     ])
                     .flex()
                     .items_center()
                     .justify_center()
                     .gap(px(4.))
-                    .children(bars.map(|h| {
-                        div()
-                            .w(px(3.5))
-                            .h(px(h + 3.))
-                            .rounded(px(2.))
-                            .bg(hex(0xffffff))
-                    })),
+                    .children(
+                        bars.map(|h| div().w(px(3.5)).h(px(h + 3.)).rounded(px(2.)).bg(hex(CYAN))),
+                    ),
             )
             .child(h2("欢迎使用 Plaid"))
             .child(para(
@@ -227,15 +222,15 @@ impl Onboarding {
                 ))
                 .child(
                     div()
-                        .bg(hex(0xfdf7e3))
+                        .bg(tint(AMBER, 0x14))
                         .border_1()
-                        .border_color(hex(0xe3d29a))
+                        .border_color(tint(AMBER, 0x40))
                         .rounded(px(4.))
                         .px(px(12.))
                         .py(px(9.))
                         .text_size(px(12.))
                         .line_height(px(19.))
-                        .text_color(hex(0x4b3d10))
+                        .text_color(hex(AMBER))
                         .child("以管理员身份运行的窗口（例如任务管理器、注册表编辑器）处于前台时，快捷键和粘贴都不起作用。这是 Windows 的权限隔离，不是故障。"),
                 )
         }
@@ -289,11 +284,11 @@ impl Onboarding {
                     .mt(px(6.))
                     .border_1()
                     .border_dashed()
-                    .border_color(hex(0xb9b9b9))
+                    .border_color(hexa(LINE3))
                     .rounded(px(5.))
                     .px(px(16.))
                     .py(px(14.))
-                    .bg(hex(0xfafafa))
+                    .bg(hex(WELL))
                     .flex()
                     .flex_col()
                     .gap(px(8.))
@@ -327,11 +322,8 @@ impl Onboarding {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .shadow(vec![
-                        shadow(0., 0., 0., 1., 0x0000004d, true),
-                        shadow(0., 2., 4., 0., 0x00000033, false),
-                    ])
-                    .child(icon("plaid/check.svg", 26., hex(0xffffff))),
+                    .shadow(vec![glow(GREEN, 18., 0x40)])
+                    .child(icon("plaid/check.svg", 26., hex(BG))),
             )
             .child(h2("准备好了"))
             .child(
@@ -344,7 +336,7 @@ impl Onboarding {
                     .child(keycap(key_name(hold)))
                     .child("说话即可。"),
             )
-            .child(para("热词、LLM 优化和语音命令可以稍后在设置里打开。"))
+            .child(para("热词、LLM 润色和语音命令可以稍后在设置里打开。"))
     }
 }
 
@@ -407,17 +399,19 @@ impl Render for Onboarding {
                                     .size(px(11.))
                                     .flex_none()
                                     .rounded_full()
-                                    .shadow(vec![shadow(0., 0., 0., 1., 0x00000047, true)]);
+                                    .shadow(vec![shadow(0., 0., 0., 1., LINE3, true)]);
                                 let d = match i.cmp(&step) {
-                                    std::cmp::Ordering::Equal => d.bg(vgrad(0xb8d8fb, 0x2a63b5)),
-                                    std::cmp::Ordering::Less => d.bg(hex(0x8a8a8a)),
-                                    std::cmp::Ordering::Greater => d.bg(vgrad(0xfafafa, 0xdcdcdc)),
+                                    std::cmp::Ordering::Equal => {
+                                        d.bg(hex(CYAN)).shadow(vec![glow(CYAN, 8., 0x66)])
+                                    }
+                                    std::cmp::Ordering::Less => d.bg(hex(TEXT3)),
+                                    std::cmp::Ordering::Greater => d.bg(hex(RAISED2)),
                                 };
                                 div()
                                     .flex()
                                     .items_center()
                                     .gap(px(9.))
-                                    .text_color(hex(if i == step { 0x000000 } else { 0x555555 }))
+                                    .text_color(hex(if i == step { TEXT } else { TEXT2 }))
                                     .when(i == step, |d| d.font_weight(bold()))
                                     .child(d)
                                     .child(*name)
@@ -429,10 +423,9 @@ impl Render for Onboarding {
                             .min_w_0()
                             .mt(px(20.))
                             .mr(px(20.))
-                            .bg(hex(0xffffff))
+                            .bg(hex(SURFACE))
                             .border_1()
-                            .border_color(hex(0xa9a9a9))
-                            .shadow(vec![shadow(0., 1., 2., 0., 0x00000014, true)])
+                            .border_color(hexa(LINE))
                             .px(px(32.))
                             .py(px(28.))
                             .overflow_hidden()
@@ -463,15 +456,12 @@ fn h2(text: &'static str) -> Div {
         .text_size(px(17.))
         .line_height(px(22.))
         .font_weight(bold())
-        .text_color(hex(0x222222))
+        .text_color(hex(TEXT))
         .child(text)
 }
 
 fn para(text: &'static str) -> Div {
-    div()
-        .line_height(px(21.))
-        .text_color(hex(0x222222))
-        .child(text)
+    div().line_height(px(21.)).text_color(hex(TEXT)).child(text)
 }
 
 /// Permission row: icon, name with explanation, and the action with its status underneath.
@@ -488,9 +478,9 @@ fn perm(
         .gap(px(12.))
         .py(px(12.))
         .border_t_1()
-        .border_color(hex(0xe1e1e1))
+        .border_color(hexa(LINE))
         .when(last, |d| d.border_b_1())
-        .child(icon(glyph, 32., hex(0x3b6fb6)))
+        .child(icon(glyph, 32., hex(CYAN)))
         .child(
             div()
                 .flex_1()

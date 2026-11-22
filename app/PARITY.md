@@ -18,9 +18,9 @@ removed afterwards (migrate.rs, commit fa9d596).
 | Learner.swift, Field.swift (EditWatch) | controller Learner, driver `Watch` | |
 | Actions.swift | core/actions.rs, plaid/run.rs | Same env vars, including PLAID_BUNDLE. |
 | Paste.swift | plaid/paste.rs, paste_win.rs, driver `verify_target` | The clipboard is restored on quit as well. |
-| Mic.swift `micDevice` | audio.rs `input_device`, 设置 page picker | Same Core Audio UID; falls back to the default input. |
+| Mic.swift `micDevice` | audio.rs `input_device`, 声音 page picker | Same Core Audio UID; falls back to the default input. |
 | Recovery.swift | controller `recover`, driver `recognize`, 历史 重试 | Also `plaid --recover [at]`; status goes to the HUD. |
-| Settings.swift and its pages | plaid/ui/*.rs | Mac OS X 10.9 look drawn in GPUI (ui/mav.rs); see **Settings window** below. |
+| Settings.swift and its pages | plaid/ui/*.rs | Redesigned dark-only "Edge Light" look drawn in GPUI (ui/mav.rs); see **Settings window** below. |
 | HUD | plaid/hud | Same states; restyled as a 10.9 HUD panel. |
 | Onboarding | ui/onboarding.rs | Opens at launch until a Volc key is saved and accessibility is granted. |
 
@@ -65,7 +65,13 @@ removed afterwards (migrate.rs, commit fa9d596).
 
 ## Settings window
 
-Pages 概览, 历史, 词典, 优化, 命令, 设置 and 性能 follow the Swift pages. Tray 历史/设置 open the window on that page.
+Top tabs 今天, 报告, 历史 | 声音, 文字, 词典, 命令 | 设置. Space Grotesk and JetBrains Mono are bundled
+(resources/fonts); CJK falls back to the system font. Tray 历史/设置 open the window on that page.
+今天/报告/历史/词典/命令 carry over the Swift pages (概览, 性能, 历史, 词典, 命令). 声音 holds the shortcut,
+microphone list with a live meter, recognition options and HUD states; 设置 holds the Volc key and data folder.
+文字 adds six local text rules (core/rules.rs: fillers, repeats, corrections, final 。, CJK–Latin spacing, Chinese
+numerals), all off by default, applied before the LLM pass and without it, so short sentences get them too; then
+the LLM pass and its threshold (`llmMinChars`).
 Checked offscreen only: `plaid --ui-check <dir>` (snapshot feature, fixture data, no window shown, no device or
 key access) clicks through every page and writes PNGs. Differences from Swift:
 

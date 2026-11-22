@@ -43,8 +43,12 @@ pub struct Record {
     pub llm: String,
     /// Release → paste.
     pub total_ms: i64,
+    /// ASR final after the local rules (what the LLM sees).
     pub raw: String,
     pub text: String,
+    /// ASR final before the local rules, when they changed it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asr: Option<String>,
     /// File name under audio/.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio: Option<String>,
@@ -298,6 +302,7 @@ impl Store {
         self.update(id, |r| {
             r.raw = text.clone();
             r.text = text;
+            r.asr = None;
             r.outcome = Some("saved".into());
             r.error = None;
         });

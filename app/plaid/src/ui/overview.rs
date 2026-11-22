@@ -13,7 +13,6 @@ const TYPING_CPM: f64 = 50.;
 const RANGES: [i64; 3] = [7, 30, 90];
 /// Plot area; with the 16 px date axis this is Swift's 190 pt chart frame.
 const PLOT_H: f32 = 174.;
-const ORANGE: u32 = 0xb25e00;
 
 /// Counts for the 个性化 card; read from disk, so computed when the model changes, not per frame.
 #[derive(Default)]
@@ -209,10 +208,6 @@ pub(super) fn ticks(max: f64) -> (f64, f64) {
     (step, (max / step).ceil() * step)
 }
 
-pub(super) fn inset_white() -> BoxShadow {
-    shadow(0., 1., 0., 0., 0xffffffff, true)
-}
-
 /// Canvas `.stat`: title, big number with small units, caption.
 pub(super) fn tile(
     title: &str,
@@ -238,13 +233,12 @@ pub(super) fn tile(
         .flex_col()
         .gap(px(2.))
         .px(px(14.))
-        .py(px(10.))
-        .rounded(px(5.))
-        .bg(vgrad(0xfbfbfb, 0xefefef))
+        .py(px(12.))
+        .rounded(px(10.))
+        .bg(hex(SURFACE))
         .border_1()
-        .border_color(hexa(0x00000029))
-        .shadow(vec![inset_white()])
-        .child(hint(title.to_string()))
+        .border_color(hexa(LINE))
+        .child(hint(title.to_string()).text_size(px(11.)))
         .child(
             div()
                 .flex()
@@ -254,15 +248,16 @@ pub(super) fn tile(
                 .children(parts.into_iter().map(|(t, num)| {
                     if num {
                         div()
+                            .font(mono())
                             .text_size(px(24.))
-                            .line_height(px(30.))
-                            .font_weight(bold())
-                            .text_color(hex(0x2b2b2b))
+                            .line_height(px(32.))
+                            .font_weight(medium())
+                            .text_color(hex(TEXT))
                             .child(t)
                     } else {
                         div()
                             .text_size(px(12.))
-                            .text_color(hex(0x555555))
+                            .text_color(hex(TEXT2))
                             .ml(px(3.))
                             .mr(px(3.))
                             .child(t)
@@ -288,7 +283,8 @@ pub(super) fn boxed(title: impl Into<SharedString>, trailing: Option<AnyElement>
         .child(
             div()
                 .text_size(px(11.))
-                .text_color(hex(0x3a3a3a))
+                .font_weight(medium())
+                .text_color(hex(TEXT2))
                 .child(title.into()),
         )
         .children(trailing);
@@ -298,31 +294,20 @@ pub(super) fn boxed(title: impl Into<SharedString>, trailing: Option<AnyElement>
         .gap(px(8.))
         .px(px(16.))
         .py(px(12.))
-        .rounded(px(5.))
-        .bg(hexa(0x0000000a))
+        .rounded(px(10.))
+        .bg(hex(SURFACE))
         .border_1()
-        .border_color(hexa(0x00000024));
+        .border_color(hexa(LINE));
     (head, body)
 }
 
-/// The canvas `.bar`: a glossy vertical cylinder, lit in the middle.
+/// A plot column: cyan, brightest at the top.
 pub(super) fn bar() -> Div {
-    div()
-        .flex()
-        .rounded_t(px(2.))
-        .overflow_hidden()
-        .border_1()
-        .border_color(hexa(0x1e468c59))
-        .child(div().flex_1().h_full().bg(linear_gradient(
-            90.,
-            linear_color_stop(hex(0x4f8fdd), 0.),
-            linear_color_stop(hex(0x9fcaf6), 1.),
-        )))
-        .child(div().flex_1().h_full().bg(linear_gradient(
-            90.,
-            linear_color_stop(hex(0x5c9ae3), 0.),
-            linear_color_stop(hex(0x3b7ccf), 1.),
-        )))
+    div().rounded_t(px(3.)).bg(linear_gradient(
+        180.,
+        linear_color_stop(hex(CYAN), 0.),
+        linear_color_stop(tint(CYAN, 0x59), 1.),
+    ))
 }
 
 /// Gridlines and their labels for a plot `h` high with values up to `top`.
@@ -337,7 +322,7 @@ pub(super) fn grid(step: f64, top: f64, h: f32) -> (Vec<Div>, Vec<Div>) {
                 .right_0()
                 .top(px(y))
                 .h(px(1.))
-                .bg(hexa(0x00000014))
+                .bg(hexa(LINE))
         })
         .collect();
     let labels = (0..=n)
@@ -347,9 +332,10 @@ pub(super) fn grid(step: f64, top: f64, h: f32) -> (Vec<Div>, Vec<Div>) {
                 .absolute()
                 .right(px(6.))
                 .top(px(y - 7.))
+                .font(mono())
                 .text_size(px(10.))
                 .line_height(px(13.))
-                .text_color(hex(HINT))
+                .text_color(hex(TEXT3))
                 .child(thousands((k as f64 * step) as i64))
         })
         .collect();
@@ -366,24 +352,25 @@ pub(super) fn axis_label(text: impl Into<SharedString>, last: bool) -> Div {
         .flex()
         .when(last, |d| d.justify_end())
         .when(!last, |d| d.justify_center())
+        .font(mono())
         .text_size(px(10.))
-        .text_color(hex(HINT))
+        .text_color(hex(TEXT3))
         .whitespace_nowrap()
         .child(text.into())
 }
 
-fn pill(path: &'static str, text: impl Into<SharedString>, color: u32, fill: u32) -> Div {
+fn pill(path: &'static str, text: impl Into<SharedString>, color: u32) -> Div {
     div()
         .flex()
         .flex_none()
         .items_center()
         .gap(px(4.))
-        .h(px(19.))
-        .px(px(8.))
+        .h(px(22.))
+        .px(px(9.))
         .rounded_full()
-        .bg(hexa(fill))
+        .bg(tint(color, 0x14))
         .border_1()
-        .border_color(hexa((color << 8) | 0x40))
+        .border_color(tint(color, 0x40))
         .text_size(px(11.))
         .text_color(hex(color))
         .whitespace_nowrap()
@@ -407,17 +394,12 @@ impl Overview {
             .items_center()
             .gap(px(6.))
             .when(streak > 1, |d| {
-                d.child(pill(
-                    "plaid/flame.svg",
-                    format!("连续 {streak} 天"),
-                    0xb8590a,
-                    0xf0882a1c,
-                ))
+                d.child(pill("plaid/flame.svg", format!("连续 {streak} 天"), AMBER))
             })
-            .child(pill("plaid/cloud.svg", "火山引擎", 0x2a62c9, 0x2a62c91a))
-            .child(pill("plaid/mic.svg", mic, 0x555555, 0x00000010))
+            .child(pill("plaid/cloud.svg", "火山引擎", CYAN))
+            .child(pill("plaid/mic.svg", mic, TEXT2))
             .when(super::on_if_one("llmEnabled"), |d| {
-                d.child(pill("plaid/refine.svg", "LLM 优化", 0x7a3db8, 0x7a3db81a))
+                d.child(pill("plaid/refine.svg", "LLM 润色", VIOLET))
             })
     }
 
@@ -575,7 +557,7 @@ impl Overview {
                                 .relative()
                                 .h(px(PLOT_H))
                                 .border_b_1()
-                                .border_color(hex(0x9a9a9a))
+                                .border_color(hexa(LINE3))
                                 .children(lines)
                                 .child(
                                     div()
@@ -636,26 +618,22 @@ impl Overview {
                             .child(
                                 div()
                                     .flex_1()
-                                    .h(px(10.))
-                                    .rounded(px(5.))
-                                    .bg(vgrad(0xcfcfcf, 0xe6e6e6))
-                                    .shadow(vec![shadow(0., 1., 1., 0., 0x00000040, true)])
+                                    .h(px(6.))
+                                    .rounded(px(3.))
+                                    .bg(hex(RAISED2))
                                     .overflow_hidden()
                                     .child(
                                         div()
                                             .h_full()
                                             .w(relative(share as f32))
                                             .min_w(px(6.))
-                                            .rounded(px(5.))
-                                            .overflow_hidden()
-                                            .flex()
-                                            .flex_col()
-                                            .child(div().flex_1().bg(vgrad(0xa7cdf7, 0x4b8fe2)))
-                                            .child(div().flex_1().bg(vgrad(0x3a80dc, 0x77b2f2))),
+                                            .rounded(px(3.))
+                                            .bg(hgrada((CYAN << 8) | 0x80, (CYAN << 8) | 0xff)),
                                     ),
                             )
                             .child(
                                 hint(format!("{}%", (share * 100.).round() as i64))
+                                    .font(mono())
                                     .w(px(40.))
                                     .flex_none()
                                     .flex()
@@ -683,7 +661,7 @@ impl Overview {
                 .child(
                     div()
                         .flex_1()
-                        .font_weight(bold())
+                        .font(mono())
                         .text_color(hex(color))
                         .child(value),
                 )
@@ -697,13 +675,13 @@ impl Overview {
             .child(
                 body.flex_1()
                     .gap(px(10.))
-                    .child(line("热词", format!("{} 个", l.hotwords), 0x000000))
-                    .child(line("自动规则", format!("{} 条", l.auto), 0x000000))
-                    .child(line("手动修改", format!("{} 句", l.edits), 0x000000))
+                    .child(line("热词", format!("{} 个", l.hotwords), TEXT))
+                    .child(line("自动规则", format!("{} 条", l.auto), TEXT))
+                    .child(line("手动修改", format!("{} 句", l.edits), TEXT))
                     .child(line(
                         "待处理建议",
                         format!("{} 条", l.pending),
-                        if l.pending > 0 { ORANGE } else { 0x000000 },
+                        if l.pending > 0 { AMBER } else { TEXT },
                     )),
             )
     }
@@ -724,8 +702,9 @@ impl Render for Overview {
                 .gap(px(10.))
                 .child(
                     div()
-                        .font_weight(bold())
-                        .text_color(hex(0x333333))
+                        .text_size(px(20.))
+                        .font_weight(medium())
+                        .text_color(hex(TEXT))
                         .truncate()
                         .child(headline),
                 )

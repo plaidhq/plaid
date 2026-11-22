@@ -34,6 +34,8 @@ fn icon(name: &str) -> Option<String> {
         "accessibility" => {
             r##"<circle cx="8" cy="8" r="6.6"/><circle cx="8" cy="4.6" r="1" fill="#000" stroke="none"/><path d="M4.6 6.8l3.4.7 3.4-.7M8 7.5v2.5l-1.7 2.9M8 10l1.7 2.9"/>"##
         }
+        "chev-down" => r##"<path d="M4 6l4 4 4-4" stroke-width="1.8"/>"##,
+        "chev-right" => r##"<path d="M6 4l4 4-4 4" stroke-width="1.8"/>"##,
         "spoke" => r##"<path d="M8 1v4.4" stroke-width="1.8"/>"##,
         "exclaim" => {
             r##"<path d="M8 2.5v7" stroke-width="2.6"/><circle cx="8" cy="13" r="1.5" fill="#000" stroke="none"/>"##

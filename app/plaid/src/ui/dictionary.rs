@@ -16,13 +16,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 
-const ORANGE: u32 = 0xc25e00;
-const GREEN: u32 = 0x2e9d48;
-const PURPLE: u32 = 0x8a46b0;
-
 const TABS: [&str; 4] = ["全部", "热词", "读音别名", "替换"];
 const TAB_HINTS: [&str; 4] = [
-    "热词用于识别和优化；替换规则按原文匹配，不区分大小写。改动自动保存，下次录音生效。",
+    "热词用于识别和润色；替换规则按原文匹配，不区分大小写。改动自动保存，下次录音生效。",
     "识别时优先选这些词。专有名词、英文术语、人名放这里。",
     "别名：读音相近的片段改成想要的；附近出现排除词时不改。",
     "原文匹配，不区分大小写；右侧留空表示删除。",
@@ -708,7 +704,7 @@ impl Dictionary {
                 .h(px(22.))
                 .px(px(5.))
                 .gap(px(4.))
-                .child(icon("plaid/search.svg", 11., hex(0x8a8a8a)))
+                .child(icon("plaid/search.svg", 11., hex(TEXT3)))
                 .child(div().flex_1().min_w_0().child(Input::new(&self.search)))
                 .when(!query.is_empty(), |d| {
                     let this = this.clone();
@@ -720,8 +716,8 @@ impl Dictionary {
                             .items_center()
                             .justify_center()
                             .rounded_full()
-                            .bg(hex(0xa8a8a8))
-                            .child(icon("plaid/xmark.svg", 7., hex(0xffffff)))
+                            .bg(hex(TEXT3))
+                            .child(icon("plaid/xmark.svg", 7., hex(BG)))
                             .on_click(move |_, w, cx| {
                                 let _ = this.update(cx, |this, cx| {
                                     this.search.update(cx, |s, cx| s.set_value("", w, cx));
@@ -766,7 +762,7 @@ impl Dictionary {
                 .children(shown.iter().enumerate().map(|(n, (i, shape))| {
                     let i = *i;
                     let selected = self.selected == Some(i);
-                    let sub = if selected { 0xdfe9fa } else { HINT };
+                    let sub = HINT;
                     let (pick, edit, del) = (this.clone(), this.clone(), this.clone());
                     let title = shape.title(lines[i]);
                     let raw = matches!(shape, Shape::Raw);
@@ -786,7 +782,7 @@ impl Dictionary {
                                             None => d.flex_1(),
                                         })
                                         .truncate()
-                                        .when(raw, |d| d.font_family("Menlo").text_size(px(11.)))
+                                        .when(raw, |d| d.font(mono()).text_size(px(11.)))
                                         .child(title),
                                 )
                                 .when_some(shape.block(), |d, b| {
@@ -819,7 +815,7 @@ impl Dictionary {
                                         .child(icon(
                                             "plaid/pencil.svg",
                                             11.,
-                                            hex(if selected { 0xffffff } else { 0x555555 }),
+                                            hex(if selected { TEXT } else { TEXT2 }),
                                         ))
                                         .on_click(move |_, w, cx| {
                                             cx.stop_propagation();
@@ -833,7 +829,7 @@ impl Dictionary {
                                         .child(icon(
                                             "plaid/xmark.svg",
                                             10.,
-                                            hex(if selected { 0xffffff } else { 0x555555 }),
+                                            hex(if selected { TEXT } else { TEXT2 }),
                                         ))
                                         .on_click(move |_, _, cx| {
                                             cx.stop_propagation();
@@ -862,7 +858,6 @@ impl Dictionary {
                 table_well()
                     .flex_1()
                     .min_h_0()
-                    .border_color(hex(0x9f9f9f))
                     .child(table_header(&[("条目", 0.), ("说明", 150.), ("", 46.)]))
                     .child(body),
             )
@@ -870,8 +865,8 @@ impl Dictionary {
                 bottom_bar()
                     .border_1()
                     .border_t_0()
-                    .border_color(hex(0x9f9f9f))
-                    .bg(vgrad(0xfdfdfd, 0xececec))
+                    .border_color(hexa(LINE))
+                    .bg(hex(SURFACE))
                     .child(bar_button("dict-add", "plaid/plus.svg", move |_, w, cx| {
                         let _ = add.update(cx, |this, cx| this.open_sheet(None, w, cx));
                     }))
@@ -927,7 +922,7 @@ impl Dictionary {
                         .size_full()
                         .items_start()
                         .p(px(5.))
-                        .font_family("Menlo")
+                        .font(mono())
                         .text_size(px(12.))
                         .child(div().size_full().child(Textarea::new(&self.raw_input))),
                 ),
@@ -945,7 +940,7 @@ impl Dictionary {
                                 div()
                                     .w(px(210.))
                                     .flex_none()
-                                    .font_family("Menlo")
+                                    .font(mono())
                                     .text_size(px(11.))
                                     .child(code),
                             )
@@ -982,9 +977,9 @@ impl Dictionary {
                     .px(px(14.))
                     .pb(px(14.))
                     .rounded(px(5.))
-                    .bg(hexa(0x0000000a))
+                    .bg(hex(SURFACE))
                     .border_1()
-                    .border_color(hexa(0x00000024))
+                    .border_color(hexa(LINE))
                     .child(hint(TAB_HINTS[self.tab]))
                     .child(content)
                     .child(div().flex().justify_end().child(button(
@@ -1051,7 +1046,7 @@ impl Dictionary {
                 .gap(px(5.))
                 .py(px(8.))
                 .when(i == 0, |d| d.pt_0())
-                .when(i > 0, |d| d.border_t_1().border_color(hexa(0x0000001a)))
+                .when(i > 0, |d| d.border_t_1().border_color(hexa(LINE)))
                 .child(
                     div()
                         .flex()
@@ -1069,7 +1064,7 @@ impl Dictionary {
                                 .child(
                                     div()
                                         .line_through()
-                                        .text_color(hex(0x7a7a7a))
+                                        .text_color(hex(TEXT3))
                                         .child(f.from.clone()),
                                 )
                                 .child(div().text_color(hex(GREEN)).child("→"))
@@ -1126,9 +1121,9 @@ impl Dictionary {
             .gap(px(8.))
             .pt(px(8.))
             .border_t_1()
-            .border_color(hexa(0x0000001a))
+            .border_color(hexa(LINE))
             .child(hint(
-                "别名会将读音相近的错法改为目标词；最近 10 条建议也会作为 {{corrections}} 交给优化。",
+                "别名会将读音相近的错法改为目标词；最近 10 条建议也会作为 {{corrections}} 交给润色。",
             ).w_full())
             .when(d.fixes.len() > 1, |el| {
                 el.child(pick_list(
@@ -1179,15 +1174,15 @@ impl Dictionary {
                 .flex()
                 .items_center()
                 .gap(px(6.))
-                .child(div().text_color(hex(0x7a7a7a)).child(from.clone()))
-                .child(div().text_color(hex(PURPLE)).font_weight(bold()).child("→"))
+                .child(div().text_color(hex(TEXT3)).child(from.clone()))
+                .child(div().text_color(hex(VIOLET)).font_weight(bold()).child("→"))
                 .child(div().font_weight(bold()).child(to.clone()))
                 .child(hint(format!("{n} 次")))
                 .child(
                     hit(SharedString::from(format!("auto-dismiss-{i}")))
                         .ml_auto()
                         .p(px(3.))
-                        .child(icon("plaid/xmark.svg", 9., hex(0x666666)))
+                        .child(icon("plaid/xmark.svg", 9., hex(TEXT2)))
                         .on_click(move |_, _, cx| {
                             let _ = this.update(cx, |this, cx| this.dismiss_auto(key.clone(), cx));
                         }),
@@ -1225,17 +1220,17 @@ impl Dictionary {
                 .flex_col()
                 .items_start()
                 .gap(px(6.))
-                .child(hint("没有可用的 LLM：在「优化」里填好接口和 key").text_color(hex(ORANGE)))
+                .child(hint("没有可用的 LLM：在「文字」里填好接口和 key").text_color(hex(AMBER)))
                 .child(small_button(
                     "open-refine",
-                    "打开优化",
+                    "打开文字",
                     move |_, _, cx| {
                         let _ = nav.update(cx, |s, cx| s.show(Page::Refine, cx));
                     },
                 ))
                 .into_any_element()
         } else {
-            hint("独立于优化开关：优化关闭时，仍将每句文本发送到配置的 LLM 校对，只用来发现规则，不改粘贴结果")
+            hint("独立于润色开关：润色关闭时，仍将每句文本发送到配置的 LLM 校对，只用来发现规则，不改粘贴结果")
                 .into_any_element()
         };
         let _ = cx;
@@ -1262,7 +1257,7 @@ impl Dictionary {
             Kind::Word => {
                 fields.push(label("目标词").into_any_element());
                 fields.push(input("entry-word", &sheet.word).into_any_element());
-                fields.push(hint("用于语音识别和优化，也参与读音相近的纠错。").into_any_element());
+                fields.push(hint("用于语音识别和润色，也参与读音相近的纠错。").into_any_element());
             }
             Kind::Replace => {
                 fields.push(label("识别到的原文").into_any_element());
@@ -1278,7 +1273,7 @@ impl Dictionary {
                 if !trim_ws(&from).is_empty() && trim_ws(&to).is_empty() {
                     fields.push(
                         hint("⚠ 替换内容为空，匹配到的原文会被删除。")
-                            .text_color(hex(ORANGE))
+                            .text_color(hex(AMBER))
                             .into_any_element(),
                     );
                 }
@@ -1286,7 +1281,7 @@ impl Dictionary {
             Kind::Advanced => {
                 fields.push(
                     input("entry-line", &sheet.raw)
-                        .font_family("Menlo")
+                        .font(mono())
                         .into_any_element(),
                 );
                 fields.push(
@@ -1297,7 +1292,7 @@ impl Dictionary {
         }
         let validation = sheet.validation(cx);
         let message = match (sheet.error, validation) {
-            (Some(e), _) => Some(hint(e).text_color(hex(ORANGE))),
+            (Some(e), _) => Some(hint(e).text_color(hex(AMBER))),
             (None, Some(v)) => Some(hint(v)),
             _ => None,
         };
@@ -1330,7 +1325,7 @@ impl Dictionary {
             )))
             .child(div().flex().flex_col().gap(px(6.)).children(fields))
             .children(message)
-            .child(div().h(px(1.)).bg(hexa(0x0000001f)))
+            .child(div().h(px(1.)).bg(hexa(LINE)))
             .child(
                 div()
                     .flex()
@@ -1389,12 +1384,12 @@ fn sheet_frame(id: &'static str) -> Stateful<Div> {
         .px(px(20.))
         .pt(px(18.))
         .pb(px(16.))
-        .bg(hex(WINDOW))
+        .bg(hex(RAISED))
         .border_1()
         .border_t_0()
-        .border_color(hexa(0x00000040))
+        .border_color(hexa(LINE2))
         .rounded_b(px(6.))
-        .shadow(vec![shadow(0., 8., 24., 0., 0x00000059, false)])
+        .shadow(vec![shadow(0., 8., 24., 0., 0x00000066, false)])
 }
 
 impl Render for Dictionary {
@@ -1438,14 +1433,14 @@ impl Render for Dictionary {
                         .px(px(10.))
                         .py(px(6.))
                         .rounded(px(5.))
-                        .bg(hexa(0xff9f0a1f))
+                        .bg(tint(AMBER, 0x1f))
                         .border_1()
-                        .border_color(hexa(0xc25e0066))
+                        .border_color(tint(AMBER, 0x66))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .text_color(hex(0x8a4300))
+                                .text_color(hex(AMBER))
                                 .child(format!("热词保存失败：{e}。草稿已保留。")),
                         )
                         .child(button("dict-retry", "重试", move |_, _, cx| {
@@ -1487,7 +1482,7 @@ impl Render for Dictionary {
                         .absolute()
                         .inset_0()
                         .occlude()
-                        .bg(hexa(0x00000010))
+                        .bg(hexa(0x00000066))
                         .flex()
                         .items_start()
                         .justify_center()
@@ -1585,7 +1580,7 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &None,
     )?;
     expect("learned rule listed", ui.has("auto-dismiss-0"), &None)?;
-    expect("no-LLM hint with 打开优化", ui.has("open-refine"), &None)?;
+    expect("no-LLM hint with 打开文字", ui.has("open-refine"), &None)?;
 
     // Batch menu → 全部忽略 asks first; cancel leaves dismissedFixes alone.
     ui.click("fix-batch")?;
@@ -1820,7 +1815,7 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     ui.click(&format!("entry-del-{zed}"))?;
     expect("delete pending before page switch", has_line("Zed"), &None)?;
     ui.click("open-refine")?;
-    expect("打开优化 leaves the page", !ui.has("dict-add"), &None)?;
+    expect("打开文字 leaves the page", !ui.has("dict-add"), &None)?;
     executor
         .borrow()
         .as_ref()

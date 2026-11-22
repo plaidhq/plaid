@@ -1,4 +1,4 @@
-//! 设置: shortcuts, microphone, Volcengine ASR, data.
+//! 声音 (shortcuts, microphone, recognition) and 设置 (API key, data): one view, two pages.
 use super::key_field::KeyField;
 use super::mav::*;
 use super::{Live, Model, bool_str, data_dir_label, field, on_unless_zero, pick_list, reveal};
@@ -186,7 +186,6 @@ impl Shortcut {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Menu {
     Key(Shortcut),
-    Mic,
 }
 
 /// A numeric setting edited as text with a stepper; stored as a string rounded to 10.
@@ -213,6 +212,8 @@ impl Number {
 
 pub struct General {
     model: Entity<Model>,
+    /// The 声音 page; otherwise 设置.
+    voice: bool,
     key: Entity<KeyField>,
     menu: Option<Menu>,
     recording: Option<Shortcut>,
@@ -222,7 +223,12 @@ pub struct General {
 }
 
 impl General {
-    pub fn new(model: Entity<Model>, window: &mut Window, cx: &mut Context<Self>) -> General {
+    pub fn new(
+        model: Entity<Model>,
+        voice: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> General {
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
         let m = model.clone();
         let key = cx.new(|cx| KeyField::new(m, || "apiKey".into(), window, cx));
@@ -230,6 +236,7 @@ impl General {
         let tail = Self::number("tailMs", 100, 1000, 300, window, cx);
         General {
             model,
+            voice,
             key,
             menu: None,
             recording: None,
@@ -415,124 +422,150 @@ impl General {
         .into_any_element()
     }
 
-    fn mic_row(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Input devices as a radio list: follow the system, each connected device, and a chosen one that is gone.
+    fn mic_list(&self, cx: &mut Context<Self>) -> Div {
         let facts = &self.model.read(cx).facts;
         let chosen = config::value("micDevice");
-        let system = format!(
-            "跟随系统（{}）",
-            facts.default_mic.as_deref().unwrap_or("无")
-        );
-        let mut ids: Vec<Option<String>> = vec![None];
-        let mut items = vec![MenuEntry {
-            label: system.clone().into(),
-            checked: chosen.is_none(),
-            rule: false,
-        }];
+        let mut items: Vec<(Option<String>, String, String, bool)> = vec![(
+            None,
+            "跟随系统".into(),
+            format!("当前 {}", facts.default_mic.as_deref().unwrap_or("无")),
+            chosen.is_none(),
+        )];
         for (id, name) in &facts.mics {
-            ids.push(Some(id.clone()));
-            items.push(MenuEntry {
-                label: name.clone().into(),
-                checked: chosen.as_deref() == Some(id.as_str()),
-                rule: false,
-            });
+            let on = chosen.as_deref() == Some(id.as_str());
+            items.push((Some(id.clone()), name.clone(), String::new(), on));
         }
-        let missing = chosen
+        if let Some(c) = chosen
             .as_ref()
-            .is_some_and(|c| !facts.mics.iter().any(|(id, _)| id == c));
-        if missing {
-            ids.push(chosen.clone());
-            items.push(MenuEntry {
-                label: "已选设备未连接，暂用系统默认".into(),
-                checked: true,
-                rule: false,
-            });
+            .filter(|c| !facts.mics.iter().any(|(id, _)| id == *c))
+        {
+            items.push((
+                Some(c.clone()),
+                "已选设备".into(),
+                "未连接，暂用系统默认".into(),
+                true,
+            ));
         }
-        let current = items
-            .iter()
-            .find(|i| i.checked)
-            .map(|i| i.label.clone())
-            .unwrap_or(system.into());
-        let open = self.menu == Some(Menu::Mic);
-        let this = cx.entity().downgrade();
-        let (t1, t2, t3) = (this.clone(), this.clone(), this);
-        row(
-            "输入设备：",
-            pick_list(
-                "mic",
-                300.,
-                current,
-                items,
-                open,
-                move |_, cx| {
-                    let _ = t1.update(cx, |this, cx| {
-                        this.menu = if open { None } else { Some(Menu::Mic) };
-                        cx.notify();
-                    });
-                },
-                move |_, cx| {
-                    let _ = t2.update(cx, |this, cx| {
-                        this.menu = None;
-                        cx.notify();
-                    });
-                },
-                move |i, _, cx| {
-                    let id = ids.get(i).cloned().flatten();
-                    let _ = t3.update(cx, |this, cx| {
-                        this.menu = None;
-                        this.model
-                            .update(cx, |m, cx| m.set("micDevice", id.unwrap_or_default(), cx));
-                    });
-                },
-            ),
-        )
-        .into_any_element()
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .children(
+                items
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (id, name, sub, on))| {
+                        let model = self.model.clone();
+                        radio(
+                            SharedString::from(format!("mic-{i}")),
+                            on,
+                            name,
+                            move |_, cx| {
+                                let id = id.clone().unwrap_or_default();
+                                model.update(cx, |m, cx| m.set("micDevice", id, cx));
+                            },
+                        )
+                        .gap(px(12.))
+                        .h(px(36.))
+                        .px(px(10.))
+                        .rounded(px(10.))
+                        .map(|d| {
+                            if on {
+                                d.bg(hex(RAISED))
+                            } else {
+                                d.hover(|s| s.bg(hexa(0xffffff08)))
+                            }
+                        })
+                        .child(div().text_size(px(12.)).text_color(hex(TEXT2)).child(sub))
+                    }),
+            )
     }
 
-    /// The last utterance's levels: a 16-cell meter of the speech level and what the numbers mean.
-    fn level_rows(&self, cx: &App) -> Vec<AnyElement> {
+    /// The last utterance's speech level on a 48-cell meter with the silence threshold marked, plus warnings.
+    /// Returns the card's status note and the meter column.
+    fn level(&self, cx: &App) -> (String, Div) {
+        const CELLS: usize = 48;
         let m = self.model.read(cx);
         let last = m.store.all.iter().rev().find(|r| r.speech_rms.is_some());
-        let Some(r) = last else {
-            return vec![
-                row("输入电平：", meter(0, 16)).into_any_element(),
-                row("", hint("说一句话后显示上一句的电平。")).into_any_element(),
-            ];
-        };
-        let speech = r.speech_rms.unwrap_or(0);
-        let lit = (level(speech as f64) * 16.).round() as usize;
         let silence = self.silence.value();
-        let mut rows = vec![row("输入电平：", meter(lit, 16)).into_any_element()];
-        if let Some(noise) = r.noise_rms {
-            rows.push(
-                row(
-                    "",
-                    hint(format!(
-                        "上一句噪声约 {}，语音约 {}（RMS）；静音阈值放在两者之间、靠近噪声。",
-                        noise, speech
-                    ))
-                    .when(speech < silence, |d| d.text_color(hex(0xb35c00))),
-                )
-                .into_any_element(),
-            );
-        }
-        if speech < QUIET_RMS {
-            let mic = r
-                .mic
-                .clone()
-                .or_else(|| m.facts.default_mic.clone())
-                .unwrap_or_else(|| "当前设备".into());
-            rows.push(
-                row(
-                    "",
-                    hint(format!(
-                        "语音电平过低。{mic}：识别会漏字或整句为空。换一个输入设备，或调高该设备的输入音量。"
-                    ))
-                    .text_color(hex(0xb35c00)),
-                )
-                .into_any_element(),
-            );
-        }
-        rows
+        let speech = last.and_then(|r| r.speech_rms).unwrap_or(0);
+        let lit = (level(speech as f64) * CELLS as f64).round() as usize;
+        let mark = ((level(silence as f64) * CELLS as f64).round() as usize).min(CELLS - 1);
+        let cells = div()
+            .flex()
+            .items_end()
+            .gap(px(3.))
+            .h(px(26.))
+            .children((0..CELLS).map(|i| {
+                let c = if i >= 44 {
+                    RED
+                } else if i >= 38 {
+                    AMBER
+                } else {
+                    CYAN
+                };
+                let cell = div().flex_1().rounded(px(2.));
+                if i == mark {
+                    cell.h(px(26.)).bg(hex(TEXT2))
+                } else if i < lit {
+                    cell.h(px(20.)).bg(hex(c))
+                } else {
+                    cell.h(px(14.)).bg(hex(RAISED2))
+                }
+            }));
+        let scale = div()
+            .relative()
+            .h(px(16.))
+            .font(mono())
+            .text_size(px(10.))
+            .text_color(hex(TEXT3))
+            .child(div().absolute().left_0().child("60"))
+            .child(
+                div()
+                    .absolute()
+                    .left(relative(mark as f32 / CELLS as f32))
+                    .text_color(hex(TEXT2))
+                    .child(format!("↑ 静音阈值 {silence}")),
+            )
+            .child(div().absolute().right_0().child("3000 RMS"));
+        let mut col = div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(cells)
+            .child(scale);
+        let status = match last {
+            None => {
+                col = col.child(hint("说一句话后显示上一句的电平。"));
+                "还没有录音".to_string()
+            }
+            Some(r) => {
+                if speech < QUIET_RMS {
+                    let mic = r
+                        .mic
+                        .clone()
+                        .or_else(|| m.facts.default_mic.clone())
+                        .unwrap_or_else(|| "当前设备".into());
+                    col = col.child(
+                        hint(format!(
+                            "语音电平过低。{mic}：识别会漏字或整句为空。换一个输入设备，或调高该设备的输入音量。"
+                        ))
+                        .text_color(hex(AMBER)),
+                    );
+                } else if speech < silence {
+                    col = col.child(
+                        hint("上一句的语音低于静音阈值，收尾可能吞字：把阈值放在噪声和语音之间、靠近噪声。")
+                            .text_color(hex(AMBER)),
+                    );
+                }
+                match r.noise_rms {
+                    Some(n) => format!("上一句 语音 {speech} · 噪声 {n}"),
+                    None => format!("上一句 语音 {speech}"),
+                }
+            }
+        };
+        (status, col)
     }
 
     fn number_row(
@@ -560,17 +593,75 @@ impl General {
         .into_any_element()
     }
 
-    fn check(&self, key: &'static str, label: &'static str) -> AnyElement {
+    fn toggle(&self, key: &'static str, label: &'static str, sub: &'static str) -> AnyElement {
         let on = on_unless_zero(key);
         let model = self.model.clone();
-        row(
-            "",
-            checkbox(key, on, label, move |v, _, cx| {
-                model.update(cx, |m, cx| m.set(key, bool_str(v), cx));
-            }),
-        )
+        toggle_row(key, on, label, sub, move |v, _, cx| {
+            model.update(cx, |m, cx| m.set(key, bool_str(v), cx));
+        })
         .into_any_element()
     }
+}
+
+/// The HUD's four looks, drawn small: label, sample text, and the bottom light in the state's color.
+fn hud_states() -> Div {
+    let states = [
+        ("在听", "我们明天下午四点", TEXT, CYAN, 0.7),
+        ("润色中", "我们明天下午四点开会。", TEXT, VIOLET, 0.8),
+        ("麦克风太小", "没有听到声音", AMBER, AMBER, 0.4),
+        ("出错", "网络不可用，已保存录音", RED, RED, 0.4),
+    ];
+    div()
+        .flex()
+        .gap(px(10.))
+        .children(states.into_iter().map(|(name, text, ink, light, w)| {
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(div().text_size(px(11.)).text_color(hex(TEXT2)).child(name))
+                .child(
+                    div()
+                        .relative()
+                        .h(px(64.))
+                        .rounded(px(10.))
+                        .bg(hex(WELL))
+                        .border_1()
+                        .border_color(hexa(LINE))
+                        .overflow_hidden()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .px(px(8.))
+                        .text_size(px(12.))
+                        .text_color(hex(ink))
+                        .child(div().truncate().child(text))
+                        .child(
+                            div()
+                                .absolute()
+                                .bottom_0()
+                                .left(relative((1. - w) / 2.))
+                                .w(relative(w))
+                                .h(px(3.))
+                                .flex()
+                                .shadow(vec![shadow(0., -2., 14., 0., (light << 8) | 0x99, false)])
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .h_full()
+                                        .bg(hgrada(light << 8, (light << 8) | 0xff)),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .h_full()
+                                        .bg(hgrada((light << 8) | 0xff, light << 8)),
+                                ),
+                        ),
+                )
+        }))
 }
 
 /// Swift's level mapping: log scale between RMS 60 and 3000.
@@ -579,86 +670,173 @@ fn level(rms: f64) -> f64 {
     ((rms.max(1.).log10() - lo) / (hi - lo)).clamp(0., 1.)
 }
 
-impl Render for General {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl General {
+    fn voice_page(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
+        let (status, meter) = self.level(cx);
+        let hold = Shortcut::Hold.code();
+        let cap = if hold < 0 {
+            "未绑定".to_string()
+        } else {
+            key_name(hold)
+        };
+        let mut asr = vec![
+            card_head("识别", "火山引擎 bigmodel").into_any_element(),
+            self.toggle(
+                "asrContext",
+                "发送上下文",
+                "前台应用和输入框里光标前的文字，帮助识别专有名词",
+            ),
+            self.toggle(
+                "nonstream",
+                "二遍识别",
+                "松键后用整段音频再识别一次，更准，约慢 300 ms",
+            ),
+            div()
+                .pt(px(4.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(disclosure("advanced", self.advanced, "高级设置", {
+                    let this = cx.entity().downgrade();
+                    move |_, cx| {
+                        let _ = this.update(cx, |this, cx| {
+                            this.advanced = !this.advanced;
+                            cx.notify();
+                        });
+                    }
+                }))
+                .child(hint("静音阈值、松键收尾"))
+                .into_any_element(),
+        ];
+        if self.advanced {
+            asr.push(self.number_row("静音阈值", &self.silence, "RMS", window, cx));
+            asr.push(self.number_row("最长收尾", &self.tail, "ms", window, cx));
+            asr.push(
+                row(
+                    "",
+                    hint("松键后短暂保留录音，等到静音或时限再结束，避免吞掉最后一个字。太高会丢字，太低会变慢。"),
+                )
+                .into_any_element(),
+            );
+        }
+        super::page_body("voice")
+            .child(
+                group_body()
+                    .child(
+                        card_head("麦克风", "仅影响 Plaid，不更改系统输入设备").child(
+                            div()
+                                .font(mono())
+                                .text_size(px(11.))
+                                .text_color(hex(TEXT2))
+                                .child(status),
+                        ),
+                    )
+                    .child(self.mic_list(cx))
+                    .child(div().pt(px(6.)).child(meter)),
+            )
+            .child(
+                group_body()
+                    .child(card_head("说话键", "仅单独按下时触发；两者可以是同一个键"))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(28.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child(
+                                        keycap(cap)
+                                            .h(px(64.))
+                                            .min_w(px(96.))
+                                            .px(px(18.))
+                                            .rounded(px(12.))
+                                            .text_size(px(20.))
+                                            .shadow(vec![
+                                                shadow(0., 3., 0., 0., 0x08090bff, false),
+                                                glow(CYAN, 22., 0x22),
+                                            ]),
+                                    )
+                                    .child(hint("按住说话")),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(6.))
+                                    .child(self.shortcut_row(Shortcut::Hold, "按住说话", cx))
+                                    .child(self.shortcut_row(Shortcut::Tap, "轻点开关", cx))
+                                    .child(row(
+                                        "",
+                                        hint("按住 300 ms 开始、松开粘贴；轻点开始，再点一下或 ⏎ 结束，esc 取消。"),
+                                    )),
+                            ),
+                    ),
+            )
+            .child(group_body().children(asr))
+            .child(
+                group_body()
+                    .child(card_head("屏幕底部光带", "说话时出现在当前屏幕底部"))
+                    .child(hud_states()),
+            )
+    }
+
+    fn general_page(&self) -> Stateful<Div> {
         let reveal_label = if cfg!(windows) {
             "在资源管理器中显示"
         } else {
             "在 Finder 中显示"
         };
-        let mut asr = vec![
-            row("API Key：", self.key.clone()).into_any_element(),
-            self.check("asrContext", "发送上下文（前台应用和输入框里光标前的文字）"),
-            self.check(
-                "nonstream",
-                "二遍识别（松键后用整段音频再识别一次，约慢 300 ms）",
-            ),
-            row(
-                "",
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .child(disclosure("advanced", self.advanced, "高级设置", {
-                        let this = cx.entity().downgrade();
-                        move |_, cx| {
-                            let _ = this.update(cx, |this, cx| {
-                                this.advanced = !this.advanced;
-                                cx.notify();
-                            });
-                        }
-                    }))
-                    .child(hint("静音阈值、松键收尾")),
-            )
-            .into_any_element(),
-        ];
-        if self.advanced {
-            asr.push(self.number_row("静音阈值：", &self.silence, "RMS", window, cx));
-            asr.push(row("", hint("松键后短暂保留录音，等到静音或时限再结束，避免吞掉最后一个字。太高会丢字，太低会变慢。")).into_any_element());
-            asr.push(self.number_row("最长收尾：", &self.tail, "ms", window, cx));
-        }
-        let mut mic = vec![self.mic_row(cx)];
-        mic.extend(self.level_rows(cx));
-        mic.push(row("", hint("仅影响 Plaid，不更改系统输入设备。")).into_any_element());
-
         super::page_body("general")
-            .child(section(
-                "快捷键",
-                [
-                    self.shortcut_row(Shortcut::Hold, "按住说话：", cx),
-                    self.shortcut_row(Shortcut::Tap, "轻点开关：", cx),
-                    row(
-                        "",
-                        hint("仅单独按键触发。按住 300 ms 开始、松开粘贴；轻点开始，再点一下或 ⏎ 结束，esc 取消。两者可以是同一个键。"),
-                    )
-                    .into_any_element(),
-                ],
-            ))
-            .child(section("麦克风", mic))
-            .child(section("语音识别（火山引擎）", asr))
-            .child(section(
-                "数据",
-                [
-                    row(
-                        "数据文件夹：",
+            .child(
+                group_body()
+                    .child(card_head("火山引擎", "语音识别服务；key 只存在本机"))
+                    .child(row("API Key", self.key.clone())),
+            )
+            .child(
+                group_body()
+                    .child(card_head("数据", "全部只存本机"))
+                    .child(row(
+                        "数据文件夹",
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(8.))
+                            .gap(px(10.))
                             .min_w_0()
-                            .child(div().truncate().text_color(hex(0x333333)).child(data_dir_label()))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .font(mono())
+                                    .text_size(px(12.))
+                                    .child(data_dir_label()),
+                            )
                             .child(button("reveal", reveal_label, |_, _, _| {
                                 reveal(&config::data_dir().join("records.jsonl"))
                             })),
-                    )
-                    .into_any_element(),
-                    self.check("keepAudio", "保留最近 500 条录音（只存本机，用于回放和反馈问题）"),
-                    row(
-                        "",
-                        hint("云端识别会发送音频及已启用的上下文；LLM 优化和后台校对可能发送识别文本、热词及上下文。后台校对独立于优化开关，可在「词典」中管理。"),
-                    )
-                    .into_any_element(),
-                ],
-            ))
+                    ))
+                    .child(self.toggle(
+                        "keepAudio",
+                        "保留最近 500 条录音",
+                        "只存本机，用于回放和反馈问题",
+                    ))
+                    .child(div().pt(px(6.)).child(hint(
+                        "云端识别会发送音频及已启用的上下文；LLM 润色和后台校对可能发送识别文本、热词及上下文。后台校对独立于润色开关，可在「词典」中管理。",
+                    ))),
+            )
+    }
+}
+
+impl Render for General {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.voice {
+            self.voice_page(window, cx)
+        } else {
+            self.general_page()
+        }
     }
 }

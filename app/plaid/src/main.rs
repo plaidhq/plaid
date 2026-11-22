@@ -70,6 +70,7 @@ fn main() {
     let app = app.with_windowing(WindowingRequest::Headless);
     app.run(move |cx| {
         gpui_kit::init(cx);
+        ui::init(cx);
         ui::bind_keys(cx);
         let hud = hud::open(cx).expect("hud window");
         if let Err(e) = tray::install(cx, |c, cx| match c {

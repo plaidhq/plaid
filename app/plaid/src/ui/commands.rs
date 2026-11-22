@@ -1,7 +1,7 @@
 //! 命令: voice commands kept in actions.json, and how they are triggered (ActionsPage.swift).
 use super::Model;
 use super::mav::*;
-use super::refine::{editor, mono, top_row, wide_field};
+use super::refine::{editor, top_row, wide_field};
 use crate::config;
 use gpui_kit::base::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::prelude::FluentBuilder;
@@ -10,9 +10,6 @@ use plaid_core::actions::{Action, Outcome, Output};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::SystemTime;
-
-const ORANGE: u32 = 0xb35c00;
-const RED: u32 = 0xa3241d;
 
 const OUTPUTS: [(Output, &str); 3] = [
     (Output::None, "不处理"),
@@ -398,7 +395,7 @@ impl Commands {
             row(
                 "",
                 if bare {
-                    hint("以命令名开头的句子都会执行。口述内容碰巧以命令名开头也会触发，例如「搜索引擎优化……」会执行「搜索」").text_color(hex(ORANGE))
+                    hint("以命令名开头的句子都会执行。口述内容碰巧以命令名开头也会触发，例如「搜索引擎优化……」会执行「搜索」").text_color(hex(AMBER))
                 } else {
                     hint("只有以唤醒词开头的句子当作命令；唤醒词后没有匹配的命令时提示，不粘贴")
                 },
@@ -498,7 +495,7 @@ impl Commands {
         let delete = hit(id("delete"))
             .flex_none()
             .px(px(4.))
-            .child(icon("plaid/trash.svg", 13., hex(0x555555)))
+            .child(icon("plaid/trash.svg", 13., hex(TEXT2)))
             .on_click(cx.listener(move |this, _, _, cx| this.delete(i, cx)));
         let output = OUTPUTS
             .iter()
@@ -549,7 +546,7 @@ impl Commands {
                     .child(lock(delete)),
             ))
             .when_some(warning, |d, w| {
-                d.child(row("", hint(format!("⚠ {w}")).text_color(hex(ORANGE))))
+                d.child(row("", hint(format!("⚠ {w}")).text_color(hex(AMBER))))
             })
             .child(top_row(
                 "命令：",
@@ -605,10 +602,10 @@ impl Commands {
                     div()
                         .px(px(6.))
                         .py(px(4.))
-                        .bg(hex(0xffffff))
+                        .bg(hex(WELL))
                         .border_1()
-                        .border_color(hex(0xc4c4c4))
-                        .font_family(mono())
+                        .border_color(hexa(LINE2))
+                        .font(mono())
                         .text_size(px(12.))
                         .child(text),
                 ));
@@ -662,7 +659,7 @@ impl Render for Commands {
                     .child(
                         div()
                             .text_size(px(11.))
-                            .text_color(hex(0x3a3a3a))
+                            .text_color(hex(TEXT2))
                             .ml(px(6.))
                             .child(format!("命令（{n}）")),
                     )
@@ -692,9 +689,9 @@ impl Render for Commands {
                         .px(px(12.))
                         .py(px(8.))
                         .rounded(px(5.))
-                        .bg(hexa(0xff3b3014))
+                        .bg(tint(RED, 0x14))
                         .border_1()
-                        .border_color(hexa(0xa3241d55))
+                        .border_color(tint(RED, 0x55))
                         .child(icon("plaid/xcircle.svg", 14., hex(RED)))
                         .child(
                             div()

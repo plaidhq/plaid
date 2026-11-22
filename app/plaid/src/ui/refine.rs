@@ -1,4 +1,4 @@
-//! 优化: the LLM pass between the ASR result and the paste (RefinePage.swift).
+//! 文字: local text rules with a live preview, then the LLM pass between the ASR result and the paste.
 use super::key_field::KeyField;
 use super::mav::*;
 use super::{Model, bool_str, field, on_if_one, on_unless_zero, pick_list};
@@ -10,6 +10,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use plaid_core::dictation::pct;
 use plaid_core::llm;
+use plaid_core::rules::{KEYS, Rules};
 use std::time::{Duration, Instant};
 
 /// Sets format and base URL only.
@@ -31,28 +32,37 @@ const FORMATS: [(&str, &str); 2] = [("openai", "OpenAI 兼容"), ("anthropic", "
 const SAMPLE: &str =
     "嗯那个我们周三，不对，周四下午开个会，就是说讨论一下 keep a life 和那个 CI 的问题";
 
-const ORANGE: u32 = 0xb35c00;
-const RED: u32 = 0xa3241d;
+/// What the preview runs the rules over: one filler, a restart, a correction, a Latin term, a number, a period.
+const RULE_SAMPLE: &str =
+    "嗯，那个，我们明天明天下午三点，不对，四点开会讨论一下Q4的预算，大概要两百万。";
 
-pub(super) fn mono() -> &'static str {
-    if cfg!(windows) { "Consolas" } else { "Menlo" }
-}
+/// (title, example) per rule, in `KEYS` order.
+const RULE_TILES: [(&str, &str); 6] = [
+    ("去掉语气词", "嗯，那个，我们 → 我们"),
+    ("去掉重复", "明天明天 → 明天"),
+    ("处理改口", "三点，不对，四点 → 四点"),
+    ("句末不加句号", "…两百万。 → …两百万"),
+    ("中英文加空格", "讨论Q4的 → 讨论 Q4 的"),
+    ("数字写成阿拉伯", "两百万 → 200万"),
+];
 
 /// Form row for tall controls: the label sits on the control's first line instead of its middle.
 pub(super) fn top_row(label: impl Into<SharedString>, control: impl IntoElement) -> Div {
     let label: SharedString = label.into();
+    let label: SharedString = label
+        .strip_suffix('：')
+        .map(|s| SharedString::from(s.to_string()))
+        .unwrap_or(label);
     div()
         .flex()
         .items_start()
-        .gap(px(8.))
+        .gap(px(12.))
         .child(
             div()
                 .w(px(LABEL_W))
                 .flex_none()
-                .flex()
-                .justify_end()
-                .pt(px(3.))
-                .text_color(hex(0x1a1a1a))
+                .pt(px(6.))
+                .text_color(hex(TEXT2))
                 .when(!label.is_empty(), |d| d.child(label)),
         )
         .child(div().flex_1().min_w_0().child(control))
@@ -68,9 +78,9 @@ pub(super) fn editor(
     let focused = state.read(cx).focus_handle(cx).is_focused(window);
     field_frame(focused)
         .items_start()
-        .px(px(5.))
-        .py(px(3.))
-        .when(mono_font, |d| d.font_family(mono()).text_size(px(12.)))
+        .px(px(10.))
+        .py(px(6.))
+        .when(mono_font, |d| d.font(mono()).text_size(px(12.)))
         .child(div().flex_1().min_w_0().child(Textarea::new(state)))
 }
 
@@ -80,22 +90,22 @@ pub(super) fn wide_field(state: &Entity<InputState>, window: &Window, cx: &App) 
     field_frame(focused)
         .flex_1()
         .min_w_0()
-        .h(px(22.))
-        .px(px(5.))
+        .h(px(30.))
+        .px(px(10.))
         .child(div().flex_1().min_w_0().child(Input::new(state)))
 }
 
 use gpui_kit::base::input::Input;
 
-/// Orange "已修改" capsule.
+/// Amber "已修改" capsule.
 fn pill(text: &'static str) -> Div {
     div()
-        .px(px(6.))
+        .px(px(7.))
         .rounded_full()
-        .text_size(px(10.))
-        .line_height(px(15.))
-        .text_color(hex(ORANGE))
-        .bg(hexa(0xff950026))
+        .text_size(px(11.))
+        .line_height(px(17.))
+        .text_color(hex(AMBER))
+        .bg(tint(AMBER, 0x22))
         .child(text)
 }
 
@@ -381,7 +391,7 @@ impl Refine {
         if !on_if_one("llmEnabled") {
             return "关闭时识别结果原样粘贴".into();
         }
-        let s = "出错或超时会直接粘贴原文；优化中按 esc 跳过";
+        let s = "出错或超时直接粘贴原文；润色中光带变紫，按 esc 跳过";
         let all = &self.model.read(cx).store.all;
         let ms: Vec<i64> = all[all.len().saturating_sub(50)..]
             .iter()
@@ -670,12 +680,13 @@ impl Refine {
                 top_row(
                     "",
                     hit("refine-result")
-                        .px(px(6.))
-                        .py(px(4.))
-                        .bg(hex(0xffffff))
+                        .px(px(10.))
+                        .py(px(8.))
+                        .rounded(px(8.))
+                        .bg(hex(WELL))
                         .border_1()
-                        .border_color(hex(0xc4c4c4))
-                        .text_color(hex(if *failed { RED } else { 0x1a1a1a }))
+                        .border_color(hexa(LINE))
+                        .text_color(hex(if *failed { RED } else { TEXT }))
                         .child(text.clone()),
                 )
                 .into_any_element(),
@@ -707,51 +718,290 @@ fn history() -> usize {
         .min(10)
 }
 
+/// The rules preview: the sample as recognized (removed characters struck through) and as it would paste
+/// (inserted characters in cyan).
+fn preview() -> Div {
+    let rules = Rules::load(config::value);
+    let out = rules.apply(RULE_SAMPLE);
+    let (deleted, inserted) = super::perf::diff(RULE_SAMPLE, &out);
+    let struck = HighlightStyle {
+        color: Some(hex(TEXT3)),
+        strikethrough: Some(StrikethroughStyle {
+            thickness: px(1.5),
+            color: Some(hex(RED)),
+        }),
+        ..Default::default()
+    };
+    let added = HighlightStyle {
+        color: Some(hex(CYAN)),
+        background_color: Some(tint(CYAN, 0x30)),
+        ..Default::default()
+    };
+    let changed: usize = deleted
+        .iter()
+        .map(|r| RULE_SAMPLE[r.clone()].chars().count())
+        .sum::<usize>()
+        .max(
+            inserted
+                .iter()
+                .map(|r| out[r.clone()].chars().count())
+                .sum::<usize>(),
+        );
+    let label = |tag: &'static str, note: &'static str, right: String, lit: bool| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .font(mono())
+            .text_size(px(11.))
+            .text_color(hex(TEXT2))
+            .child(
+                div()
+                    .px(px(7.))
+                    .py(px(1.))
+                    .rounded(px(4.))
+                    .map(|d| {
+                        if lit {
+                            d.bg(hex(CYAN))
+                                .text_color(hex(BG))
+                                .font_weight(FontWeight::SEMIBOLD)
+                        } else {
+                            d.border_1().border_color(hexa(LINE3))
+                        }
+                    })
+                    .child(tag),
+            )
+            .child(div().flex_1().child(note))
+            .child(right)
+    };
+    group_body()
+        .gap(px(12.))
+        .child(label(
+            "识别",
+            "火山返回的原文",
+            "本地 · 不调用 LLM".into(),
+            false,
+        ))
+        .child(
+            div()
+                .font(mono())
+                .text_size(px(14.))
+                .line_height(px(24.))
+                .text_color(hex(TEXT2))
+                .child(
+                    StyledText::new(RULE_SAMPLE)
+                        .with_highlights(deleted.into_iter().map(|g| (g, struck))),
+                ),
+        )
+        .child(
+            div()
+                .h(px(1.))
+                .flex()
+                .child(
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .bg(hgrada(CYAN << 8, (CYAN << 8) | 0x80)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .bg(hgrada((VIOLET << 8) | 0x80, VIOLET << 8)),
+                ),
+        )
+        .child(label(
+            "粘贴",
+            "出现在光标处的文字",
+            if changed == 0 {
+                "与原文一致".into()
+            } else {
+                format!("改动 {changed} 字")
+            },
+            true,
+        ))
+        .child(
+            div()
+                .text_size(px(22.))
+                .line_height(px(32.))
+                .min_h(px(64.))
+                .child(
+                    StyledText::new(out).with_highlights(inserted.into_iter().map(|g| (g, added))),
+                ),
+        )
+}
+
+/// One rule as a tile: title, a dot that lights when on, the example underneath. The tile toggles the rule.
+fn rule_tile(i: usize, model: &Entity<Model>) -> Stateful<Div> {
+    let key = KEYS[i];
+    let (title, example) = RULE_TILES[i];
+    let on = on_if_one(key);
+    let model = model.clone();
+    hit(key)
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .px(px(14.))
+        .pt(px(14.))
+        .pb(px(12.))
+        .rounded(px(14.))
+        .border_1()
+        .map(|d| {
+            if on {
+                d.bg(tint(CYAN, 0x14))
+                    .border_color(tint(CYAN, 0x66))
+                    .shadow(vec![glow(CYAN, 18., 0x1a)])
+            } else {
+                d.bg(hex(SURFACE))
+                    .border_color(hexa(LINE))
+                    .hover(|s| s.border_color(hexa(LINE3)))
+            }
+        })
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(14.))
+                        .font_weight(medium())
+                        .child(title),
+                )
+                .child(div().size(px(10.)).flex_none().rounded_full().map(|d| {
+                    if on {
+                        d.bg(hex(CYAN)).shadow(vec![glow(CYAN, 10., 0xcc)])
+                    } else {
+                        d.border(px(1.5)).border_color(hex(0x3a3d45))
+                    }
+                })),
+        )
+        .child(
+            div()
+                .font(mono())
+                .text_size(px(11.))
+                .text_color(hex(TEXT2))
+                .truncate()
+                .child(example),
+        )
+        .on_click(move |_, _, cx| {
+            model.update(cx, |m, cx| m.set(key, bool_str(!on), cx));
+        })
+}
+
 impl Render for Refine {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let enabled = on_if_one("llmEnabled");
-        let model = self.model.clone();
-        super::page_body("refine")
-            .child(hint(
-                "粘贴前用 LLM 整理识别结果：去口癖、修正自我纠正、统一术语",
+        let tiles = |from: usize| {
+            div()
+                .flex()
+                .gap(px(10.))
+                .children((from..from + 3).map(|i| rule_tile(i, &self.model)))
+        };
+        let rules = div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(card_head(
+                "本地规则",
+                "在本机运行，不调用 LLM，短句也生效。点一下切换。",
             ))
-            .child(section(
-                "文本处理",
-                [
-                    row(
-                        "",
-                        checkbox("llmEnabled", enabled, "粘贴前用 LLM 优化", move |v, _, cx| {
-                            model.update(cx, |m, cx| m.set("llmEnabled", bool_str(v), cx))
-                        }),
+            .child(tiles(0))
+            .child(tiles(3));
+        let picked = MIN_CHARS
+            .iter()
+            .position(|&n| n == min_chars())
+            .unwrap_or(1);
+        let llm = group_body()
+            .w(px(300.))
+            .flex_none()
+            .gap(px(12.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .size(px(8.))
+                            .rounded_full()
+                            .bg(hex(if enabled { VIOLET } else { TEXT3 }))
+                            .when(enabled, |d| d.shadow(vec![glow(VIOLET, 10., 0xcc)])),
                     )
-                    .into_any_element(),
-                    row("优化：", {
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(15.))
+                            .font_weight(medium())
+                            .child("LLM 润色"),
+                    )
+                    .child({
                         let model = self.model.clone();
-                        let picked = MIN_CHARS.iter().position(|&n| n == min_chars()).unwrap_or(1);
-                        div().flex().child(segmented(
+                        hit("llmEnabled")
+                            .child(switch(enabled))
+                            .on_click(move |_, _, cx| {
+                                model
+                                    .update(cx, |m, cx| m.set("llmEnabled", bool_str(!enabled), cx))
+                            })
+                    }),
+            )
+            .child(hint(
+                "粘贴前用 LLM 整理：去口癖、修正改口、统一术语。比本地规则更聪明，也更慢。",
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(hex(TEXT2))
+                            .child("什么时候润色"),
+                    )
+                    .child({
+                        let model = self.model.clone();
+                        segmented(
                             "llmMinChars",
-                            &["每句都优化", "20 字以上", "50 字以上"],
+                            &["每句", "20 字以上", "50 字以上"],
                             picked,
                             move |i, _, cx| {
                                 let v = MIN_CHARS[i.min(MIN_CHARS.len() - 1)];
                                 model.update(cx, |m, cx| m.set("llmMinChars", v.to_string(), cx))
                             },
-                        ))
+                        )
                     })
-                    .into_any_element(),
-                    row("", hint("更短的句子识别完直接粘贴，不等 LLM")).into_any_element(),
-                    row("", hint(self.status(cx))).into_any_element(),
-                    row(
-                        "",
-                        hint("启用后，识别文本及已配置的上下文会发送给所选 LLM 服务；使用远程接口时会离开本机。「词典 → 后台校对」独立运行，关闭此开关不会关闭后台校对。"),
+                    .child(hint("更短的句子只走本地规则，识别完直接粘贴")),
+            )
+            .child(hint(self.status(cx)))
+            .when(!enabled, |d| d.opacity(0.75));
+        super::page_body("refine")
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(16.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(16.))
+                            .child(preview())
+                            .child(rules),
                     )
-                    .into_any_element(),
-                ],
-            ))
+                    .child(llm),
+            )
+            .child(div().pt(px(8.)).child(group("LLM 服务")))
             .child(section("服务商", self.provider_rows(window, cx)))
             .child(section("上下文", self.context_rows(window, cx)))
             .child(section("提示词", self.prompt_rows(window, cx)))
             .child(section("测试", self.test_rows(window, cx)))
+            .child(hint("启用 LLM 后，识别文本及已配置的上下文会发送给所选服务；使用远程接口时会离开本机。「词典 → 后台校对」独立运行，关闭润色不会关闭后台校对。"))
     }
 }
 
@@ -777,12 +1027,28 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &None,
     )?;
 
+    for (i, key) in KEYS.iter().enumerate() {
+        ui.click(key)?;
+        expect(
+            &format!("rule {i} on"),
+            config::raw(key).as_deref() == Some("1"),
+            &None,
+        )?;
+    }
+    ui.shot("refine-rules")?;
+    ui.click(KEYS[0])?;
+    expect(
+        "rule 0 off",
+        config::raw(KEYS[0]).as_deref() == Some("0"),
+        &None,
+    )?;
     ui.click("llmMinChars-2")?;
     expect(
         "min chars 50",
         config::raw("llmMinChars").as_deref() == Some("50"),
         &None,
     )?;
+    ui.scroll("llmMinChars-2", -420.)?;
     ui.click("llmFormat")?;
     ui.click("llmFormat-menu-1")?;
     expect(

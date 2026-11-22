@@ -7,6 +7,7 @@ pub mod hotwords;
 pub mod llm;
 pub mod phonetic;
 pub mod records;
+pub mod rules;
 pub mod session;
 pub mod store;
 pub mod text;

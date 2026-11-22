@@ -3,6 +3,7 @@
 //! focus reads) carry the utterance generation they belong to; stale ones are dropped.
 use crate::actions::{self, Action, Parsed};
 use crate::llm::{self, Endpoint};
+use crate::rules::Rules;
 use crate::session::{Event, Session};
 use crate::store::{Record, Store};
 use crate::{gesture, text};
@@ -223,6 +224,8 @@ struct Utterance {
     silence: f64,
     actions: Vec<Action>,
     wake: String,
+    /// ASR final before the local rules, set only when they changed it.
+    asr: Option<String>,
 }
 
 impl Utterance {
@@ -648,6 +651,7 @@ impl Controller {
             silence,
             actions,
             wake,
+            asr: None,
         });
         self.session = Some(session);
         self.phase = Phase::Recording { toggled: false };
@@ -846,6 +850,7 @@ impl Controller {
             total_ms: ms(release, Instant::now()),
             raw: raw.into(),
             text: text.into(),
+            asr: u.asr.clone(),
             audio: if keep {
                 self.store.save_audio(&u.audio, u.at)
             } else {
@@ -1091,7 +1096,8 @@ impl Controller {
             Ok(_) if !exists => Hud::Flash("原记录已删除，无法保存重试结果".into()),
             Ok(t) => {
                 p.log(&format!("recovered chars={}", t.chars().count()));
-                self.store.recovered(id, t);
+                self.store
+                    .recovered(id, Rules::load(|k| p.setting(k)).apply(&t));
                 Hud::Note("识别结果已保存在原记录中".into())
             }
             Err(e) => {
@@ -1129,8 +1135,19 @@ impl Controller {
     }
 
     /// Optional LLM pass between the ASR final and the paste. Fails open: errors and timeouts paste the raw text.
-    fn refine_or_deliver(&mut self, raw: String, p: &mut impl Platform) {
+    fn refine_or_deliver(&mut self, asr: String, p: &mut impl Platform) {
         let asr_at = Instant::now();
+        let raw = Rules::load(|k| p.setting(k)).apply(&asr);
+        if raw != asr {
+            p.log(&format!(
+                "rules: {} → {} chars",
+                asr.chars().count(),
+                raw.chars().count()
+            ));
+            if let Some(u) = self.u.as_mut() {
+                u.asr = Some(asr);
+            }
+        }
         if p.setting("llmEnabled").as_deref() != Some("1") {
             return self.deliver(&raw, &raw, "off", None, asr_at, true, p);
         }
@@ -1199,6 +1216,7 @@ impl Controller {
             let llm_ms = Some(elapsed);
             match result {
                 Ok(t) => {
+                    let t = Rules::load(|k| p.setting(k)).format(&t);
                     p.log(&format!("refined ms={elapsed} chars={}", t.chars().count()));
                     self.deliver(&r.raw, &t, "ok", llm_ms, r.asr_at, true, p);
                 }
@@ -1742,6 +1760,51 @@ mod tests {
         t.p.settings.push(("llmMinChars", "0"));
         let out = refining(&mut t, 1, "先就这样吧。");
         assert!(has(&out, "llm 1"), "{out:?}");
+    }
+
+    #[test]
+    fn local_rules_run_before_the_llm_gate_and_on_its_output() {
+        // Short result: rules alone, original ASR kept for History.
+        let mut t = T::new();
+        t.p.settings
+            .extend([("ruleFillers", "1"), ("ruleNoPeriod", "1")]);
+        let out = refining(&mut t, 1, "嗯，先就这样吧。");
+        assert!(
+            has(&out, "verify 1 先就这样吧") && !has(&out, "llm 1"),
+            "{out:?}"
+        );
+        t.flush();
+        let r = t.c.store.all.last().unwrap();
+        assert_eq!(
+            (r.asr.as_deref(), r.raw.as_str(), r.text.as_str()),
+            (Some("嗯，先就这样吧。"), "先就这样吧", "先就这样吧")
+        );
+        // Long result: the LLM sees the ruled text; its output gets the format rules.
+        let mut t = T::new();
+        t.p.settings
+            .extend([("ruleFillers", "1"), ("ruleNoPeriod", "1")]);
+        let out = refining(
+            &mut t,
+            1,
+            "嗯，我们今天下午三点在公司楼下见面吧，记得带电脑。",
+        );
+        assert!(
+            has(
+                &out,
+                "hud Refining(\"我们今天下午三点在公司楼下见面吧，记得带电脑\")"
+            ),
+            "{out:?}"
+        );
+        let out = llm(&mut t, 1, Ok("今天下午三点公司楼下见，记得带电脑。"));
+        assert!(
+            has(&out, "verify 1 今天下午三点公司楼下见，记得带电脑"),
+            "{out:?}"
+        );
+        // Rules off: nothing recorded twice.
+        let mut t = T::new();
+        refining(&mut t, 1, "嗯，先就这样吧。");
+        t.flush();
+        assert_eq!(t.c.store.all.last().unwrap().asr, None);
     }
 
     #[test]

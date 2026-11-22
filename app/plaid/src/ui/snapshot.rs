@@ -211,7 +211,17 @@ pub fn check(args: &[String]) -> Result<(), String> {
 }
 
 fn check_general(ui: &mut Ui) -> Result<(), String> {
-    ui.open(Page::General, facts())?;
+    ui.open(Page::Voice, facts())?;
+    ui.shot("voice")?;
+    ui.click("mic-2")?;
+    let mic = config::value("micDevice");
+    expect("mic picked from list", mic.is_some(), &None)?;
+    ui.click("mic-0")?;
+    expect(
+        "mic follows system",
+        config::value("micDevice").is_none(),
+        &mic,
+    )?;
     let before = config::raw("asrContext");
     ui.click("asrContext")?;
     expect(
@@ -226,8 +236,17 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
         &None,
     )?;
 
+    let y = ui.bounds("advanced").map(|b| b.origin.y);
+    ui.scroll("asrContext", -400.)?;
+    let y2 = ui.bounds("advanced").map(|b| b.origin.y);
+    expect(
+        "page scrolls",
+        matches!((y, y2), (Some(a), Some(b)) if b < a),
+        &None,
+    )?;
+    ui.shot("voice-scrolled")?;
     ui.click("advanced")?;
-    ui.shot("general-advanced")?;
+    ui.shot("voice-advanced")?;
     let silence = config::value("silenceRMS");
     ui.click("silenceRMS-1")?;
     let up = config::value("silenceRMS");
@@ -240,8 +259,9 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
         &up,
     )?;
 
+    ui.scroll("asrContext", 600.)?;
     ui.click("hold")?;
-    ui.shot("general-menu")?;
+    ui.shot("voice-menu")?;
     let want = super::general::offered()[0];
     ui.click("hold-menu-0")?;
     expect(
@@ -251,15 +271,18 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
         &None,
     )?;
     expect("menu closed after pick", !ui.has("hold-menu-0"), &None)?;
-    let y = ui.bounds("reveal").map(|b| b.origin.y);
-    ui.scroll("asrContext", -400.)?;
-    let y2 = ui.bounds("reveal").map(|b| b.origin.y);
+    ui.close()?;
+
+    ui.open(Page::General, facts())?;
+    ui.click("keepAudio")?;
     expect(
-        "page scrolls",
-        matches!((y, y2), (Some(a), Some(b)) if b < a),
+        "keepAudio toggled",
+        config::raw("keepAudio").as_deref() == Some("0"),
         &None,
     )?;
-    ui.shot("general-scrolled")?;
+    ui.click("keepAudio")?;
+    expect("reveal button present", ui.has("reveal"), &None)?;
+    ui.shot("general")?;
     ui.close()?;
 
     ui.open(
@@ -307,7 +330,10 @@ impl Ui {
             Arc::new(super::assets::Assets),
             gpui_kit::platform::current_headless_renderer,
         );
-        cx.update(gpui_kit::init);
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::init(cx);
+        });
         Ok(Ui {
             cx,
             out: out.into(),

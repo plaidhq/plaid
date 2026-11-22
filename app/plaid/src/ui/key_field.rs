@@ -151,7 +151,7 @@ impl Render for KeyField {
             .gap(px(4.))
             .child(line)
             .when_some(self.error.clone(), |d, e| {
-                d.child(hint(e).text_color(hex(0xa3241d)))
+                d.child(hint(e).text_color(hex(RED)))
             })
     }
 }

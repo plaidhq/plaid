@@ -1,4 +1,4 @@
-//! Settings window (Mac OS X 10.9 look): source list on the left, one page on the right. Pages read settings live
+//! Settings window ("edge light", dark): a header with the page pills, one page, a status line. Pages read settings live
 //! from settings.json and the dictation history from disk (refreshed when records.jsonl changes); anything that
 //! changes records goes to the controller as a `Msg`, which owns the store while the app runs.
 pub mod assets;
@@ -51,6 +51,31 @@ pub fn bind_keys(cx: &mut App) {
     cx.on_action(|_: &Quit, cx| cx.quit());
 }
 
+/// Registers the bundled fonts and the dark palette the kit's text input draws with. Call after `gpui_kit::init`.
+pub fn init(cx: &mut App) {
+    let fonts: [&'static [u8]; 5] = [
+        include_bytes!("../../resources/fonts/SpaceGrotesk-Regular.ttf"),
+        include_bytes!("../../resources/fonts/SpaceGrotesk-Medium.ttf"),
+        include_bytes!("../../resources/fonts/SpaceGrotesk-Bold.ttf"),
+        include_bytes!("../../resources/fonts/JetBrainsMono-Regular.ttf"),
+        include_bytes!("../../resources/fonts/JetBrainsMono-SemiBold.ttf"),
+    ];
+    let fonts = fonts.into_iter().map(std::borrow::Cow::Borrowed).collect();
+    if let Err(e) = cx.text_system().add_fonts(fonts) {
+        crate::trace::log(&format!("fonts: {e}"));
+    }
+    let theme = gpui_kit::base::Theme::global_mut(cx);
+    theme.appearance = gpui_kit::base::ThemeAppearance::Dark;
+    let c = &mut theme.tokens.colors;
+    c.foreground = hex(TEXT);
+    c.muted_foreground = hex(TEXT3);
+    c.surface = hex(WELL);
+    c.background = hex(BG);
+    c.border = hexa(LINE2);
+    c.accent = hex(0x2f6f8c);
+    c.selection = tint(CYAN, 0x55);
+}
+
 /// What the running app hands the settings window: the controller's inbox and the hotkey hook's state.
 pub struct Live {
     pub tx: async_channel::Sender<Msg>,
@@ -62,59 +87,51 @@ impl Global for Live {}
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Page {
     Overview,
+    Perf,
     History,
-    Dictionary,
+    Voice,
     Refine,
+    Dictionary,
     Commands,
     General,
-    Perf,
 }
 
 impl Page {
-    #[cfg(all(feature = "snapshot", any(target_os = "macos", target_os = "linux")))]
-    pub const ALL: [Page; 7] = [
+    /// Header order; a rule goes before 声音 and 设置.
+    pub const ALL: [Page; 8] = [
         Page::Overview,
+        Page::Perf,
         Page::History,
-        Page::Dictionary,
+        Page::Voice,
         Page::Refine,
+        Page::Dictionary,
         Page::Commands,
         Page::General,
-        Page::Perf,
     ];
 
     pub fn title(self) -> &'static str {
         match self {
-            Page::Overview => "概览",
+            Page::Overview => "今天",
+            Page::Perf => "报告",
             Page::History => "历史",
+            Page::Voice => "声音",
+            Page::Refine => "文字",
             Page::Dictionary => "词典",
-            Page::Refine => "优化",
             Page::Commands => "命令",
             Page::General => "设置",
-            Page::Perf => "性能",
         }
     }
 
     pub fn slug(self) -> &'static str {
         match self {
             Page::Overview => "overview",
+            Page::Perf => "perf",
             Page::History => "history",
-            Page::Dictionary => "dictionary",
+            Page::Voice => "voice",
             Page::Refine => "refine",
+            Page::Dictionary => "dictionary",
             Page::Commands => "commands",
             Page::General => "general",
-            Page::Perf => "perf",
-        }
-    }
-
-    fn icon(self) -> &'static str {
-        match self {
-            Page::Overview => "plaid/overview.svg",
-            Page::History => "plaid/history.svg",
-            Page::Dictionary => "plaid/dictionary.svg",
-            Page::Refine => "plaid/refine.svg",
-            Page::Commands => "plaid/commands.svg",
-            Page::General => "plaid/settings.svg",
-            Page::Perf => "plaid/perf.svg",
         }
     }
 }
@@ -271,8 +288,8 @@ pub fn field(state: &Entity<InputState>, width: f32, window: &Window, cx: &App) 
     let focused = state.read(cx).focus_handle(cx).is_focused(window);
     field_frame(focused)
         .w(px(width))
-        .h(px(22.))
-        .px(px(5.))
+        .h(px(30.))
+        .px(px(10.))
         .child(div().flex_1().min_w_0().child(Input::new(state)))
 }
 
@@ -294,8 +311,8 @@ pub fn pick_list(
         .flex_col()
         .child(popup(id, current, width).on_click(move |_, w, cx| toggle(w, cx)))
         .when(open, |d| {
-            // As NSPopUpButton: the menu opens with the checked item over the button face.
-            let lift = items.iter().position(|i| i.checked).unwrap_or(0) as f32 * 19. + 4.;
+            // The menu opens with the checked item over the button face.
+            let lift = items.iter().position(|i| i.checked).unwrap_or(0) as f32 * MENU_ROW + 5.;
             d.child(deferred(
                 anchored().snap_to_window_with_margin(px(8.)).child(
                     menu(SharedString::from(format!("{id}-menu")), width, items, pick)
@@ -359,7 +376,12 @@ impl Settings {
         }
         let m = self.model.clone();
         let v: AnyView = match page {
-            Page::General => cx.new(|cx| general::General::new(m, window, cx)).into(),
+            Page::General => cx
+                .new(|cx| general::General::new(m, false, window, cx))
+                .into(),
+            Page::Voice => cx
+                .new(|cx| general::General::new(m, true, window, cx))
+                .into(),
             Page::History => {
                 let s = cx.entity().downgrade();
                 let go = move |p: Page, _: &mut Window, cx: &mut App| {
@@ -381,17 +403,83 @@ impl Settings {
         v
     }
 
-    fn sidebar(&self, cx: &mut Context<Self>) -> Div {
+    /// 56 px header: window lights, wordmark, page pills. Only the wordmark and the empty space drag the window,
+    /// so the pills keep their clicks (Windows hit-tests drag areas natively).
+    fn header(&self, active: bool, cx: &mut Context<Self>) -> Div {
         let pending = self.pending;
-        let group = |label: &'static str, pages: &[Page], cx: &mut Context<Self>| {
-            div()
-                .child(source_header(label))
-                .children(pages.iter().map(|&p| {
-                    let count = if p == Page::Dictionary { pending } else { 0 };
-                    source_row(p.slug(), p.icon(), p.title(), p == self.page, count)
-                        .on_click(cx.listener(move |this, _, _, cx| this.show(p, cx)))
-                }))
-        };
+        let mut nav = div().flex().items_center().gap(px(2.)).ml(px(10.));
+        for p in Page::ALL {
+            if matches!(p, Page::Voice | Page::General) {
+                nav = nav.child(div().w(px(1.)).h(px(14.)).mx(px(8.)).bg(hexa(LINE3)));
+            }
+            let on = p == self.page;
+            let count = (p == Page::Dictionary && pending > 0).then(|| {
+                div()
+                    .ml(px(6.))
+                    .h(px(16.))
+                    .min_w(px(16.))
+                    .px(px(4.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .bg(hex(CYAN))
+                    .text_color(hex(BG))
+                    .font(mono())
+                    .text_size(px(10.))
+                    .font_weight(bold())
+                    .child(pending.to_string())
+            });
+            nav = nav.child(
+                hit(p.slug())
+                    .flex()
+                    .items_center()
+                    .h(px(30.))
+                    .px(px(12.))
+                    .rounded_full()
+                    .map(|d| {
+                        if on {
+                            d.bg(hexa(0xffffff17)).text_color(hex(TEXT))
+                        } else {
+                            d.text_color(hex(TEXT2))
+                                .hover(|s| s.text_color(hex(TEXT)).bg(hexa(0xffffff0a)))
+                        }
+                    })
+                    .child(p.title())
+                    .children(count)
+                    .on_click(cx.listener(move |this, _, _, cx| this.show(p, cx))),
+            );
+        }
+        div()
+            .h(px(56.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .child(div().pl(px(20.)).pr(px(22.)).child(lights(active)))
+            .child(
+                drag_area()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .h_full()
+                    .text_size(px(19.))
+                    .line_height(px(24.))
+                    .font_weight(bold())
+                    .child("plaid")
+                    .child(
+                        div()
+                            .size(px(6.))
+                            .rounded_full()
+                            .bg(hex(CYAN))
+                            .shadow(vec![glow(CYAN, 10., 0xff)]),
+                    ),
+            )
+            .child(nav)
+            .child(drag_area().flex_1().h_full())
+    }
+
+    /// 40 px mono status line, then the 2 px cyan→violet edge light along the window's bottom.
+    fn footer(&self, cx: &mut Context<Self>) -> Div {
         let facts = &self.model.read(cx).facts;
         let (status, text) = if !facts.volc_key {
             (Status::Warn, "未设置 API Key")
@@ -400,37 +488,37 @@ impl Settings {
         } else {
             (Status::Ok, "就绪 · 火山引擎")
         };
+        let words = self.model.read(cx).store.all.len();
         div()
-            .w(px(188.))
+            .relative()
+            .h(px(40.))
             .flex_none()
             .flex()
-            .flex_col()
-            .py(px(6.))
-            .bg(hex(SIDEBAR))
-            .border_r_1()
-            .border_color(hex(SIDEBAR_EDGE))
-            .child(group("听写", &[Page::Overview, Page::History], cx))
-            .child(group(
-                "个性化",
-                &[Page::Dictionary, Page::Refine, Page::Commands],
-                cx,
-            ))
-            .child(group("应用", &[Page::General, Page::Perf], cx))
+            .items_center()
+            .gap(px(18.))
+            .px(px(22.))
+            .font(mono())
+            .text_size(px(11.))
+            .text_color(hex(TEXT2))
+            .child(badge(status, text))
+            .child(format!("{words} 条记录"))
             .child(
                 div()
-                    .mt_auto()
-                    .px(px(14.))
-                    .pb(px(4.))
+                    .ml_auto()
+                    .child(format!("Plaid {}", env!("CARGO_PKG_VERSION"))),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(px(2.))
                     .flex()
-                    .flex_col()
-                    .gap(px(3.))
-                    .child(badge(status, text))
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(hex(0x7b8590))
-                            .child(format!("Plaid {}", env!("CARGO_PKG_VERSION"))),
-                    ),
+                    .shadow(vec![shadow(0., -4., 18., 0., 0x7fd8ff59, false)])
+                    .child(div().flex_1().h_full().bg(hgrada(0x7fd8ff00, 0x7fd8ffff)))
+                    .child(div().flex_1().h_full().bg(hgrada(0x7fd8ffff, 0xb59cffff)))
+                    .child(div().flex_1().h_full().bg(hgrada(0xb59cffff, 0xb59cff00))),
             )
     }
 }
@@ -443,15 +531,9 @@ impl Render for Settings {
             .size_full()
             .flex()
             .flex_col()
-            .child(titlebar(self.page.title(), window.is_window_active()))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .child(self.sidebar(cx))
-                    .child(div().flex_1().min_w_0().h_full().child(page)),
-            )
+            .child(self.header(window.is_window_active(), cx))
+            .child(div().flex_1().min_h_0().child(page))
+            .child(self.footer(cx))
     }
 }
 
@@ -463,10 +545,10 @@ pub fn page_body(id: &'static str) -> Stateful<Div> {
         .overflow_y_scroll()
         .flex()
         .flex_col()
-        .gap(px(12.))
-        .pt(px(16.))
-        .px(px(22.))
-        .pb(px(18.))
+        .gap(px(14.))
+        .pt(px(6.))
+        .px(px(28.))
+        .pb(px(20.))
 }
 
 pub const W: f32 = 980.;
