@@ -462,8 +462,11 @@ pub fn default_button(
         .on_click(on_click)
 }
 
+/// Dims a control and lays an occluding cover over it, so its own click handlers never fire.
 pub fn disabled(el: Stateful<Div>) -> Stateful<Div> {
     el.opacity(0.4)
+        .relative()
+        .child(div().absolute().inset_0().cursor_default().occlude())
 }
 
 /// Pop-up button face: current value and a chevron. The menu is drawn by the caller.

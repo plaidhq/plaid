@@ -157,6 +157,6 @@ Not yet exercised in a live run of the GPUI app:
   rings, Windows window chrome, fonts and HUD transparency;
 - 设置 shortcut recorder (needs the live key hook and accessibility);
 - onboarding accessibility prompt and its try-it paste; mic permission state;
-- history copy, audio playback, 重试 round trip and the export save dialog; Finder reveal;
+- history copy, audio playback, 重试 and 重新润色 round trips and the export save dialog; Finder reveal;
 - 优化 LLM test against a real endpoint (only the error path is snapshotted) and 命令 trial run of a real command;
 - 性能 memory figures on Windows; empty states with no records.

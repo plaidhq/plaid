@@ -74,15 +74,17 @@ enum Line {
 /// the end from the record changing on disk, or gives up after the controller's own timeout.
 struct Retry {
     id: DateTime<Utc>,
-    before: (String, Option<String>, String),
+    before: Fingerprint,
     refine: bool,
     _timeout: Task<()>,
 }
 
-/// What a retry or 重新润色 changes in a record.
-fn fingerprint(r: &Record) -> (String, Option<String>, String) {
-    (r.text.clone(), r.outcome.clone(), r.llm.clone())
+/// What a retry or 重新润色 changes in a record (a successful 重新润色 always rewrites llm_ms).
+fn fingerprint(r: &Record) -> Fingerprint {
+    (r.text.clone(), r.outcome.clone(), r.llm.clone(), r.llm_ms)
 }
+
+type Fingerprint = (String, Option<String>, String, Option<i64>);
 
 /// Navigates the settings window to another page.
 type Go = Rc<dyn Fn(Page, &mut Window, &mut App)>;
@@ -364,7 +366,7 @@ impl History {
     fn track(
         &mut self,
         id: DateTime<Utc>,
-        before: (String, Option<String>, String),
+        before: Fingerprint,
         secs: u64,
         refine: bool,
         cx: &mut Context<Self>,
@@ -374,8 +376,13 @@ impl History {
                 .timer(Duration::from_secs(secs))
                 .await;
             let _ = this.update(cx, |h, cx| {
-                if h.retry.as_ref().is_some_and(|r| r.id == id) {
-                    h.retry = None;
+                if let Some(r) = h.retry.take_if(|r| r.id == id) {
+                    // Refusals and failures only reach the HUD.
+                    h.note = Some(if r.refine {
+                        "没有收到润色结果，原因见屏幕下方提示。"
+                    } else {
+                        "没有收到识别结果，原因见屏幕下方提示。"
+                    });
                     cx.notify();
                 }
             });
@@ -1883,7 +1890,7 @@ fn peaks(path: &Path) -> Vec<f32> {
 
 /// A button that does nothing and is drawn dimmed when `on` is false.
 fn enabled(on: bool, b: Stateful<Div>) -> Stateful<Div> {
-    if on { b } else { disabled(b).occlude() }
+    if on { b } else { disabled(b) }
 }
 
 fn reveal_label() -> &'static str {
@@ -2267,14 +2274,20 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     ui.key("cmd-a")?;
     ui.key("backspace")?;
     expect("search cleared", !painted().is_empty(), &None)?;
-    // 重新润色: drop the failed record whose retry is still in flight, then refine the newest pasted record.
+    // The retry above never ends without a controller: its record can't be deleted and 重新识别 stays inert.
     ui.click("history-filter-2")?;
     ui.click(&target)?;
     ui.click("history-delete")?;
-    ui.click("history-delete-ok")?;
-    ui.click("history-filter-0")?;
+    ui.click("history-retry")?;
     expect(
-        "deleting the retried record ends the retry",
+        "disabled buttons ignore clicks",
+        !ui.has("history-delete-ok") && !ui.has("history-retry-ok"),
+        &None,
+    )?;
+    // 重新润色 on a fresh page (no retry in flight) for the newest pasted record.
+    ui.open(Page::History, super::snapshot::facts())?;
+    expect(
+        "refine offered",
         ui.has("history-refine") && !ui.has("history-status"),
         &None,
     )?;

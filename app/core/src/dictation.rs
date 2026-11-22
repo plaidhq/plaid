@@ -347,7 +347,7 @@ pub struct Controller {
     pending: Vec<Pending>,
     refine: Option<Refine>,
     /// History's 重新润色 in flight: (llm request id, record).
-    rerefining: Option<(u64, DateTime<Utc>)>,
+    rerefining: Option<(u64, DateTime<Utc>, Instant)>,
     learn: Learner,
     llm_seq: u64,
     /// A matched command marked `confirm`, waiting for ⏎ (esc drops it). Not a phase: it doesn't block the next press.
@@ -1261,7 +1261,7 @@ impl Controller {
             Err(e) => p.hud(Hud::Flash(format!("重新润色失败：{e}"))),
             Ok(req) => {
                 self.llm_seq += 1;
-                self.rerefining = Some((self.llm_seq, id));
+                self.rerefining = Some((self.llm_seq, id, Instant::now()));
                 p.log(&format!(
                     "rerefine model={} chars={}",
                     ep.model,
@@ -1301,14 +1301,17 @@ impl Controller {
                     self.deliver(&r.raw, &r.raw, llm, llm_ms, r.asr_at, true, p);
                 }
             }
-        } else if let Some((_, rid)) = self.rerefining.take_if(|j| j.0 == id) {
+        } else if let Some((_, rid, at)) = self.rerefining.take_if(|j| j.0 == id) {
             let note = match result {
                 Ok(t) => {
                     let t = Rules::load(|k| p.setting(k)).format(&t);
                     p.log(&format!("rerefined chars={}", t.chars().count()));
+                    // llm_ms always moves, so 历史 sees the run end even when the text comes back unchanged.
+                    let llm_ms = Some(ms(at, Instant::now()));
                     self.store.update(rid, |r| {
                         r.text = t;
                         r.llm = "ok".into();
+                        r.llm_ms = llm_ms;
                     });
                     "已重新润色，结果在历史里".to_string()
                 }
@@ -1857,6 +1860,11 @@ mod tests {
         );
         let reloaded = crate::store::Store::load(t.c.store.dir());
         assert_eq!(reloaded.all.last().unwrap().llm, "ok");
+        // The same text again still rewrites the record, so 历史 sees the run end.
+        t.c.store.update(id, |r| r.llm_ms = None);
+        t.send(Msg::Refine { id });
+        llm(&mut t, 3, Ok("你好，我们今天下午三点在公司楼下见面吧。"));
+        assert!(t.c.store.all.last().unwrap().llm_ms.is_some());
     }
 
     #[test]
