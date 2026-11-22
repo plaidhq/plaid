@@ -1254,16 +1254,26 @@ impl History {
 
         // Over the first label's line, so offering it moves nothing.
         let t_word = this.clone();
+        let live = cx.try_global::<super::Live>().is_some();
         let texts = texts.relative().when(selecting, |d| {
-            d.child(
-                div().absolute().top(px(-4.)).right_0().child(
-                    small_button("history-add-word", "加入词典", move |_, window, cx| {
-                        let word = gpui_kit::base::TextSelection::selected_text(window, cx);
-                        let _ = t_word.update(cx, |h, cx| h.add_word(&word, cx));
-                    })
-                    .keep_text_selection("history-add-word-keep"),
-                ),
-            )
+            let spot = div().absolute().top(px(-4.)).right_0().child(
+                small_button("history-add-word", "加入词典", move |_, window, cx| {
+                    let word = gpui_kit::base::TextSelection::selected_text(window, cx);
+                    let _ = t_word.update(cx, |h, cx| h.add_word(&word, cx));
+                })
+                .keep_text_selection("history-add-word-keep"),
+            );
+            // Live only: fades in as the selection appears; snapshots draw it at rest.
+            d.child(if live {
+                spot.with_animation(
+                    "history-add-word-in",
+                    Animation::new(Duration::from_millis(140)).with_easing(ease_out_quint()),
+                    |d, t| d.opacity(t).top(px(-4. + (1. - t) * 3.)),
+                )
+                .into_any_element()
+            } else {
+                spot.into_any_element()
+            })
         });
 
         let llm_bad = !matches!(r.llm.as_str(), "ok" | "off");
