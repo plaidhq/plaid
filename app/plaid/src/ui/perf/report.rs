@@ -153,8 +153,10 @@ impl Report {
             }
             if let Some(asr) = &row.asr {
                 r.ruled += 1;
+                // A rule that ran left `raw` as a fixed point (rules are idempotent); one that would change
+                // `asr` but not `raw` is taken as switched on.
                 for (k, rule) in single.iter().enumerate() {
-                    if rule.apply(asr) != *asr {
+                    if rule.apply(asr) != *asr && rule.apply(&row.raw) == row.raw {
                         r.rules[k] += 1;
                     }
                 }
@@ -405,14 +407,16 @@ impl Perf {
             .flex_col()
             .justify_end()
             .gap(px(4.))
-            .children(ramp.into_iter().enumerate().map(|(k, label)| {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .child(cell(k).size(px(10.)))
-                    .child(small(label).text_color(hex(TEXT2)))
-            }));
+            .when(r.active > 0, |d| {
+                d.children(ramp.into_iter().enumerate().map(|(k, label)| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(cell(k).size(px(10.)))
+                        .child(small(label).text_color(hex(TEXT2)))
+                }))
+            });
         panel()
             .gap(px(12.))
             .px(px(20.))
@@ -504,7 +508,7 @@ impl Perf {
                 move |b, _, window, _| {
                     let at = |i: usize, v: f64| {
                         point(
-                            b.origin.x + b.size.width * (i as f32 / (n - 1) as f32),
+                            b.origin.x + b.size.width * ((i as f32 + 0.5) / n as f32),
                             b.origin.y + b.size.height * (1. - ((v - lo) / (hi - lo)) as f32),
                         )
                     };
