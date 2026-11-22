@@ -12,6 +12,8 @@ use plaid_core::store::Record;
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+mod report;
+
 const RANGES: [i64; 3] = [50, 200, 0];
 const STAGES: usize = 60;
 const EVENTS: usize = 500;
@@ -336,6 +338,10 @@ pub struct Perf {
     json_open: bool,
     hover_trend: Option<usize>,
     hover_stage: Option<usize>,
+    report: report::Report,
+    hover_heat: Option<usize>,
+    hover_speed: Option<usize>,
+    hover_hist: Option<usize>,
 }
 
 impl Perf {
@@ -388,6 +394,10 @@ impl Perf {
             json_open: false,
             hover_trend: None,
             hover_stage: None,
+            report: Default::default(),
+            hover_heat: None,
+            hover_speed: None,
+            hover_hist: None,
         };
         p.reload(cx);
         p
@@ -419,6 +429,8 @@ impl Perf {
             .unwrap_or(0);
         self.audio_size = dir_size(&store.audio_dir());
         self.events = events();
+        let samples: Vec<&Record> = self.rows.iter().filter(|r| sample(r)).collect();
+        self.report = report::Report::new(store, &self.rows, &samples);
         self.resort();
     }
 
@@ -460,7 +472,7 @@ impl Perf {
             .justify_between()
             .gap(px(10.))
             .child(div().text_color(hex(TEXT)).min_w_0().child(format!(
-                "最近 {} 句的延迟、电平、LLM 结果和原始数据，用来排查慢和漏字",
+                "以下是最近 {} 句的粘贴延迟、改动、电平和原始数据，用来排查慢和漏字",
                 self.rows.len()
             )))
             .child(
@@ -1664,8 +1676,8 @@ fn pick(
 impl Render for Perf {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let page = super::page_body("perf")
-            .child(self.header(cx))
-            .child(self.status());
+            .child(self.report_usage(cx))
+            .child(self.header(cx));
         if self.total == 0 {
             let (_, body) = boxed("", None);
             return page
@@ -1680,6 +1692,7 @@ impl Render for Perf {
                                 .text_size(px(12.)),
                         ),
                 )
+                .child(self.status())
                 .child(self.events_card(window, cx));
         }
         let samples = self.samples();
@@ -1691,7 +1704,8 @@ impl Render for Perf {
         let groups = self.groups(&samples);
         let levels = self.levels(&samples);
         let raw = self.raw(cx);
-        page.child(latency)
+        page.when(!samples.is_empty(), |d| d.child(self.report_records(cx)))
+            .child(latency)
             .children(trend)
             .child(stages)
             .child(groups)
@@ -1702,6 +1716,7 @@ impl Render for Perf {
                 ))
             })
             .child(raw)
+            .child(self.status())
             .child(self.events_card(window, cx))
     }
 }
@@ -1723,6 +1738,19 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &before,
     )?;
     ui.shot("perf")?;
+    // Report cards: a heatmap day (the fixture's newest usage), the speed line and a histogram bin.
+    let day = (0..182)
+        .rev()
+        .map(|i| format!("perf-heat-{i}"))
+        .find(|id| ui.has(id))
+        .ok_or("FAIL no heatmap cells")?;
+    ui.scroll(&day, 0.)?;
+    ui.shot("perf-heat-hover")?;
+    ui.scroll("perf-speed-29", 0.)?;
+    ui.shot("perf-speed-hover")?;
+    bring(ui, "perf-hist-4")?;
+    ui.scroll("perf-hist-4", 0.)?;
+    ui.shot("perf-report")?;
     for (id, want) in [
         ("perf-range-0", "50"),
         ("perf-range-2", "0"),
@@ -1840,7 +1868,10 @@ fn bring(ui: &mut super::snapshot::Ui, id: &str) -> Result<(), String> {
             return Ok(());
         }
         let anchor = [
+            "perf-heat-0",
             "perf-range-0",
+            "perf-hist-0",
+            "perf-hist-23",
             "perf-trend-0",
             "perf-trend-20",
             "perf-stage-0",

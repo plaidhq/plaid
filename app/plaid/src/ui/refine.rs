@@ -37,7 +37,7 @@ const RULE_SAMPLE: &str =
     "嗯，那个，我们明天明天下午三点，不对，四点开会讨论一下Q4的预算，大概要两百万。";
 
 /// (title, example) per rule, in `KEYS` order.
-const RULE_TILES: [(&str, &str); 6] = [
+pub(super) const RULE_TILES: [(&str, &str); 6] = [
     ("去掉语气词", "嗯，那个，我们 → 我们"),
     ("去掉重复", "明天明天 → 明天"),
     ("处理改口", "三点，不对，四点 → 四点"),

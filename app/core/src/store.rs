@@ -289,7 +289,8 @@ impl Store {
     }
 
     /// Retry result saved in place (no paste, learning or refine); a failed record now counts in usage.
-    pub fn recovered(&mut self, id: DateTime<Utc>, text: String) {
+    /// A retried recognition: `asr` is the ASR final, `text` the same after the local rules.
+    pub fn recovered(&mut self, id: DateTime<Utc>, asr: String, text: String) {
         let Some(was_failure) = self
             .all
             .iter()
@@ -300,9 +301,9 @@ impl Store {
             return;
         };
         self.update(id, |r| {
+            r.asr = (asr != text).then_some(asr);
             r.raw = text.clone();
             r.text = text;
-            r.asr = None;
             r.outcome = Some("saved".into());
             r.error = None;
         });

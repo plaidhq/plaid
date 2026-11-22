@@ -618,7 +618,8 @@ pub(super) fn fixture(dir: &Path) -> std::io::Result<()> {
                     llm_ms: llm_on.then(|| 400 + next(900) as i64),
                     llm: if llm_on { "ok" } else { "off" }.into(),
                     total_ms: 0,
-                    raw: raw.into(),
+                    // Volc punctuates: with the LLM off the pasted text is the ASR text as is.
+                    raw: if llm_on { raw } else { text }.into(),
                     text: text.into(),
                     noise_rms: Some(40 + next(60) as i64),
                     speech_rms: Some(600 + next(1800) as i64),
@@ -629,6 +630,12 @@ pub(super) fn fixture(dir: &Path) -> std::io::Result<()> {
                     ..Default::default()
                 };
                 r.total_ms = r.asr_ms + r.llm_ms.unwrap_or(0) + 30;
+                // Local rules (fillers) changed the ASR final on some records.
+                match next(6) {
+                    0 => r.asr = Some(format!("嗯，{}", r.raw)),
+                    1 => r.asr = Some(format!("那个，{}", r.raw)),
+                    _ => {}
+                }
                 if next(25) == 0 {
                     r.outcome = Some("failed".into());
                     r.error = Some("ASR 超时".into());
@@ -652,6 +659,12 @@ pub(super) fn fixture(dir: &Path) -> std::io::Result<()> {
                 let r = &mut records[i];
                 r.pasted = Some(format!("把 {from} 的配置也一起更新。"));
                 r.text = r.pasted.clone().unwrap();
+                r.raw = r.text.clone();
+                r.asr = None;
+                r.llm = "off".into();
+                r.llm_ms = None;
+                r.outcome = None;
+                r.error = None;
                 r.edited = Some(format!("把 {to} 的配置也一起更新。"));
             }
         }
@@ -662,6 +675,27 @@ pub(super) fn fixture(dir: &Path) -> std::io::Result<()> {
         for r in records {
             store.add(r);
         }
+        // Usage outlives records.jsonl: half a year of daily totals for the 报告 heatmap.
+        for day in 40..182 {
+            if next(5) == 0 {
+                continue;
+            }
+            let n = 2 + next(14) as i64;
+            let ms = n * (2500 + next(3000) as i64);
+            let u = store
+                .usage
+                .entry(plaid_core::store::day(now - Duration::days(day)))
+                .or_default();
+            u.n = n;
+            u.ms = ms;
+            u.chars = ms * (3 + next(3) as i64) / 1000;
+            u.apps
+                .insert(APPS[next(APPS.len() as u64) as usize].into(), u.chars);
+        }
+        plaid_core::store::write_atomic(
+            &dir.join("usage.json"),
+            &serde_json::to_vec(&store.usage).unwrap_or_default(),
+        )?;
     }
     let write = |name: &str, body: &str| -> std::io::Result<()> {
         let p = dir.join(name);
@@ -694,6 +728,23 @@ pub(super) fn fixture(dir: &Path) -> std::io::Result<()> {
             && let Some(name) = store.save_audio(&vec![0u8; 32000], at)
         {
             store.update(at, |r| r.audio = Some(name));
+        }
+        // A speech-like envelope (syllable bursts under a phrase contour) for the newest record's waveform.
+        let newest = store.all.last().map(|r| (r.at, r.audio_ms));
+        if let Some((at, audio_ms)) = newest {
+            let n = (audio_ms.max(1000) as usize) * 16;
+            let pcm: Vec<u8> = (0..n)
+                .flat_map(|i| {
+                    let t = i as f32 / 16000.;
+                    let syllable = (t * 4.3 * std::f32::consts::TAU).sin().max(0.);
+                    let phrase = (t * 0.7 * std::f32::consts::TAU).sin().abs() * 0.7 + 0.3;
+                    let v = (t * 180. * std::f32::consts::TAU).sin() * syllable * phrase * 12000.;
+                    (v as i16).to_le_bytes()
+                })
+                .collect();
+            if let Some(name) = store.save_audio(&pcm, at) {
+                store.update(at, |r| r.audio = Some(name));
+            }
         }
         let n = store.all.len();
         for back in [2, 20] {

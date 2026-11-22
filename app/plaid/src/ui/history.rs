@@ -9,32 +9,42 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use plaid_core::dictation::Msg;
 use plaid_core::store::{self, LIMIT, Record};
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
 const LATENCY: &str = "historyLatency";
 
-/// Column widths (0 = flexible), as in the canvas; the latency column only when `historyLatency` is on.
-const TIME_W: f32 = 72.;
-const APP_W: f32 = 84.;
-const LATENCY_W: f32 = 290.;
-const STATUS_W: f32 = 78.;
-const DURATION_W: f32 = 58.;
+/// List row height; day headers use it too so the list stays uniform.
+const ROW_H: f32 = 56.;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Filter {
     All,
     Saved,
     Failed,
+    Llm,
+    Edited,
 }
 
 impl Filter {
+    /// Chip order; the first three keep their indices from the old segmented control.
+    const ALL: [Filter; 5] = [
+        Filter::All,
+        Filter::Saved,
+        Filter::Failed,
+        Filter::Llm,
+        Filter::Edited,
+    ];
+
     fn keeps(self, r: &Record) -> bool {
         match self {
             Filter::All => true,
             Filter::Saved => r.outcome.as_deref() == Some("saved"),
             Filter::Failed => r.is_failure(),
+            Filter::Llm => r.llm == "ok",
+            Filter::Edited => r.edited.is_some(),
         }
     }
 }
@@ -79,6 +89,7 @@ pub struct History {
     player: Option<std::process::Child>,
     audio_bytes: u64,
     scroll: UniformListScrollHandle,
+    wave: RefCell<Option<(PathBuf, Rc<Vec<f32>>)>>,
 }
 
 impl History {
@@ -116,6 +127,7 @@ impl History {
             player: None,
             audio_bytes,
             scroll: UniformListScrollHandle::new(),
+            wave: RefCell::new(None),
         }
     }
 
@@ -361,72 +373,85 @@ impl History {
 
     // --- Rendering ---------------------------------------------------------------------------------------------
 
-    fn toolbar(&self, counts: [usize; 3], shown: usize, cx: &mut Context<Self>) -> Div {
-        let labels = [
-            format!("全部 {}", counts[0]),
-            format!("未粘贴 {}", counts[1]),
-            format!("失败 {}", counts[2]),
-        ];
-        let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-        let selected = match self.filter {
-            Filter::All => 0,
-            Filter::Saved => 1,
-            Filter::Failed => 2,
-        };
-        let this = cx.entity().downgrade();
-        let seg = segmented("history-filter", &refs, selected, move |i, _, cx| {
-            let f = [Filter::All, Filter::Saved, Filter::Failed][i.min(2)];
-            let _ = this.update(cx, |h, cx| h.set_filter(f, cx));
-        })
-        .text_size(px(12.));
-        div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(10.))
-            .px(px(12.))
-            .py(px(9.))
-            .child(seg)
-            .child(div().flex_1())
-            .child(self.action_button(cx))
-            .child(self.search_field(shown, cx))
-    }
-
     fn search_field(&self, shown: usize, cx: &mut Context<Self>) -> Div {
         let typed = !self.search.read(cx).value().is_empty();
         let search = self.search.clone();
         div()
-            .w(px(220.))
-            .h(px(22.))
+            .h(px(36.))
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(5.))
-            .px(px(9.))
-            .rounded(px(11.))
-            .bg(hex(WELL))
+            .gap(px(8.))
+            .px(px(12.))
+            .rounded(px(10.))
+            .bg(hex(SURFACE))
             .border_1()
-            .border_color(hexa(LINE2))
-            .text_size(px(12.))
-            .child(icon("plaid/search.svg", 12., hex(TEXT2)))
+            .border_color(hexa(LINE))
+            .child(icon("plaid/search.svg", 14., hex(TEXT2)))
             .child(div().flex_1().min_w_0().child(Input::new(&self.search)))
             .when(typed, |d| {
                 d.child(
                     div()
                         .flex_none()
+                        .font(mono())
                         .text_size(px(11.))
-                        .text_color(hex(HINT))
+                        .text_color(hex(TEXT2))
                         .child(format!("{shown} 条")),
                 )
                 .child(
                     hit("history-search-clear")
                         .flex_none()
-                        .child(icon("plaid/xcircle.svg", 12., hex(TEXT3)))
+                        .child(icon("plaid/xcircle.svg", 13., hex(TEXT3)))
                         .on_click(move |_, w, cx| {
                             search.update(cx, |s, cx| s.set_value("", w, cx));
                         }),
                 )
             })
+    }
+
+    /// Filter chips with counts, then the actions button.
+    fn chips(&self, counts: [usize; 5], cx: &mut Context<Self>) -> Div {
+        let labels = ["全部", "未粘贴", "失败", "润色", "改过"];
+        let mut row = div().flex().flex_none().items_center().gap(px(6.));
+        for (i, f) in Filter::ALL.into_iter().enumerate() {
+            let on = self.filter == f;
+            let this = cx.entity().downgrade();
+            row = row.child(
+                hit(format!("history-filter-{i}"))
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .h(px(24.))
+                    .px(px(10.))
+                    .rounded(px(12.))
+                    .text_size(px(12.))
+                    .whitespace_nowrap()
+                    .border_1()
+                    .map(|d| {
+                        if on {
+                            d.bg(tint(TEXT, 0x1a))
+                                .border_color(gpui_kit::transparent_black())
+                                .text_color(hex(TEXT))
+                        } else {
+                            d.border_color(hexa(LINE))
+                                .text_color(hex(TEXT2))
+                                .hover(|s| s.bg(tint(TEXT, 0x0d)))
+                        }
+                    })
+                    .child(labels[i])
+                    .child(
+                        div()
+                            .font(mono())
+                            .text_size(px(10.))
+                            .text_color(hex(if on { TEXT2 } else { TEXT3 }))
+                            .child(counts[i].to_string()),
+                    )
+                    .on_click(move |_, _, cx| {
+                        let _ = this.update(cx, |h, cx| h.set_filter(f, cx));
+                    }),
+            );
+        }
+        row.child(div().flex_1()).child(self.action_button(cx))
     }
 
     /// NSPopUpButton in pull-down style with the action (ellipsis) glyph, and its drawn menu.
@@ -454,16 +479,13 @@ impl History {
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(3.))
-            .h(px(21.))
-            .px(px(7.))
-            .rounded(px(4.))
-            .bg(hex(RAISED2))
+            .justify_center()
+            .size(px(24.))
+            .rounded(px(12.))
             .border_1()
-            .border_color(hexa(LINE2))
-            .hover(|s| s.bg(hex(HOVER)))
-            .child(icon("plaid/action.svg", 14., hex(TEXT)))
-            .child(icon("plaid/tri-down.svg", 6., hex(TEXT2)))
+            .border_color(hexa(LINE))
+            .hover(|s| s.bg(tint(TEXT, 0x0d)))
+            .child(icon("plaid/action.svg", 14., hex(TEXT2)))
             .on_click(move |_, _, cx| {
                 let _ = toggle.update(cx, |h, cx| {
                     h.actions = !h.actions;
@@ -511,7 +533,7 @@ impl History {
         })
     }
 
-    /// Retry progress or result, and the export spinner, under the toolbar.
+    /// Retry progress or result, and the export spinner, under the chips.
     fn status_line(&self) -> Option<Stateful<Div>> {
         let (text, busy) = if self.retry.is_some() {
             ("正在重新识别；不会自动粘贴…", true)
@@ -526,37 +548,22 @@ impl History {
                 .flex_none()
                 .items_center()
                 .gap(px(6.))
-                .px(px(14.))
-                .pb(px(6.))
+                .px(px(2.))
                 .when(busy, |d| d.child(spinner(11., TEXT2, 0)))
                 .child(hint(text).text_color(hex(TEXT))),
         )
     }
 
-    fn header(latency: bool) -> Div {
-        let mut cols = vec![("时间", TIME_W), ("应用", APP_W), ("文本", 0.)];
-        if latency {
-            cols.push(("延迟（ms）", LATENCY_W));
-        }
-        cols.push(("状态", STATUS_W));
-        cols.push(("用时", DURATION_W));
-        table_header(&cols)
-    }
-
-    fn table(
+    fn list(
         &self,
         lines: Rc<Vec<Line>>,
-        latency: bool,
+        marked: Vec<DateTime<Utc>>,
         empty: Option<(&'static str, &'static str)>,
         cx: &mut Context<Self>,
     ) -> Div {
-        let well = table_well()
-            .flex_1()
-            .min_h_0()
-            .mx(px(12.))
-            .child(Self::header(latency));
+        let frame = div().flex_1().min_h_0().flex().flex_col();
         if let Some((title, body)) = empty {
-            return well.child(
+            return frame.child(
                 hit("history-empty")
                     .flex_1()
                     .flex()
@@ -566,7 +573,7 @@ impl History {
                     .gap(px(4.))
                     .child(
                         div()
-                            .font_weight(bold())
+                            .font_weight(medium())
                             .text_color(hex(TEXT2))
                             .child(title),
                     )
@@ -574,7 +581,8 @@ impl History {
             );
         }
         let this = cx.entity().downgrade();
-        let selected = Rc::new(self.selected.clone());
+        let marked = Rc::new(marked);
+        let latency = on_if_one(LATENCY);
         let retrying = self.retry.as_ref().map(|r| r.id);
         let order: Rc<Vec<DateTime<Utc>>> = Rc::new(
             lines
@@ -586,35 +594,35 @@ impl History {
                 .collect(),
         );
         let n = lines.len();
-        well.child(
+        frame.child(
             uniform_list("history-list", n, move |range, _, _| {
                 range
                     .map(|i| match &lines[i] {
                         Line::Day(label) => day_row(label.clone()).into_any_element(),
                         Line::Rec(r) => {
-                            let sel = selected.contains(&r.at);
                             let id = r.at;
                             let (t1, t2, ord) = (this.clone(), this.clone(), order.clone());
-                            record_row(r, i, sel, latency, retrying == Some(r.at))
-                                .on_click(move |e, _, cx| {
-                                    if e.is_right_click() {
-                                        return;
-                                    }
-                                    let m = e.modifiers();
-                                    let _ = t1.update(cx, |h, cx| h.click_row(id, m, &ord, cx));
-                                })
-                                .on_mouse_down(MouseButton::Right, move |e, _, cx| {
-                                    let p = e.position;
-                                    let _ = t2.update(cx, |h, cx| {
-                                        if !h.selected.contains(&id) {
-                                            h.selected = vec![id];
-                                            h.anchor = Some(id);
+                            let row =
+                                record_row(r, marked.contains(&id), latency, retrying == Some(id))
+                                    .on_click(move |e, _, cx| {
+                                        if e.is_right_click() {
+                                            return;
                                         }
-                                        h.context = Some(p);
-                                        cx.notify();
+                                        let m = e.modifiers();
+                                        let _ = t1.update(cx, |h, cx| h.click_row(id, m, &ord, cx));
+                                    })
+                                    .on_mouse_down(MouseButton::Right, move |e, _, cx| {
+                                        let p = e.position;
+                                        let _ = t2.update(cx, |h, cx| {
+                                            if !h.selected.contains(&id) {
+                                                h.selected = vec![id];
+                                                h.anchor = Some(id);
+                                            }
+                                            h.context = Some(p);
+                                            cx.notify();
+                                        });
                                     });
-                                })
-                                .into_any_element()
+                            div().h(px(ROW_H)).py(px(2.)).child(row).into_any_element()
                         }
                     })
                     .collect()
@@ -672,38 +680,57 @@ impl History {
         )
     }
 
-    fn detail(&self, cx: &mut Context<Self>) -> Option<Div> {
+    /// Peaks of the recording for the waveform strip, read once per file.
+    fn peaks(&self, path: &Path) -> Rc<Vec<f32>> {
+        if let Some((p, v)) = &*self.wave.borrow()
+            && p == path
+        {
+            return v.clone();
+        }
+        let v = Rc::new(peaks(path));
+        *self.wave.borrow_mut() = Some((path.to_path_buf(), v.clone()));
+        v
+    }
+
+    /// The right panel: one record (the selection, or the newest shown), or the multi-selection actions.
+    fn detail(&self, focus: Option<DateTime<Utc>>, cx: &mut Context<Self>) -> Div {
         let this = cx.entity().downgrade();
-        let frame = hit("history-detail")
-            .flex()
-            .flex_col()
-            .flex_none()
-            .max_h(px(330.))
-            .overflow_y_scroll()
-            .gap(px(10.))
-            .mx(px(12.))
-            .mt(px(10.))
-            .px(px(16.))
-            .py(px(12.))
-            .rounded(px(5.))
-            .bg(hex(SURFACE))
-            .border_1()
-            .border_color(hexa(LINE));
+        let panel = || {
+            div()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .rounded(px(16.))
+                .bg(hex(SURFACE))
+                .border_1()
+                .border_color(hexa(LINE))
+        };
         if self.selected.len() > 1 {
             let n = self.selected.len();
             let ids = self.selected.clone();
             let (t1, t2) = (this.clone(), this);
             let ids2 = ids.clone();
-            return Some(
-                div().child(
-                    frame.child(
+            return panel().child(
+                hit("history-detail")
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .px(px(22.))
+                    .py(px(18.))
+                    .child(
+                        div()
+                            .text_size(px(15.))
+                            .font_weight(medium())
+                            .child(format!("已选 {n} 条")),
+                    )
+                    .child(hint("⌘ 点击加减，⇧ 点击连选。"))
+                    .child(
                         div()
                             .flex()
-                            .items_center()
                             .gap(px(8.))
-                            .child(div().font_weight(bold()).child(format!("已选 {n} 条")))
-                            .child(div().flex_1())
-                            .child(button(
+                            .child(primary(
                                 "history-copy-many",
                                 format!("复制 {n} 条"),
                                 move |_, _, cx| {
@@ -722,73 +749,298 @@ impl History {
                                 ),
                             )),
                     ),
-                ),
             );
         }
-        let id = *self.selected.first()?;
-        let r = self.record(id, cx)?.clone();
+        let Some(r) = focus.and_then(|id| self.record(id, cx)).cloned() else {
+            return panel();
+        };
+        let id = r.at;
         let wav = self.audio_path(&r, cx);
         let retrying = self.retry.as_ref().is_some_and(|x| x.id == id);
-        let local = r.at.with_timezone(&Local);
+        let (tag, color) = path_tag(&r, retrying);
+        let llm = r.llm == "ok";
+        let mark = if llm { VIOLET } else { CYAN };
         let app = r.app.clone().unwrap_or_else(|| "未知应用".into());
-        let state = if retrying {
-            "重新识别中…".to_string()
-        } else if r.is_failure() {
-            "识别失败 · 原记录和保留的录音可用于排查或重试".into()
-        } else if r.outcome.as_deref() == Some("saved") {
-            "未粘贴 · 文字已保存，需手动复制；不会自动粘贴".into()
-        } else if r.edited.is_some() {
-            "已粘贴 · 你修改过这句".into()
+
+        let header = div()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .child(
+                div()
+                    .size(px(26.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(7.))
+                    .bg(hex(RAISED2))
+                    .font(mono())
+                    .text_size(px(10.))
+                    .child(badge(&app)),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(15.))
+                    .font_weight(medium())
+                    .child(app),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .font(mono())
+                    .text_size(px(11.))
+                    .text_color(hex(TEXT2))
+                    .child(when(r.at)),
+            )
+            .child(
+                div()
+                    .ml_auto()
+                    .flex_none()
+                    .px(px(9.))
+                    .py(px(2.))
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(tint(color, 0x66))
+                    .font(mono())
+                    .text_size(px(11.))
+                    .text_color(hex(color))
+                    .child(tag),
+            );
+
+        let secs = format!("{}:{:02}", r.audio_ms / 60000, (r.audio_ms / 1000) % 60);
+        let mut strip = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(12.))
+            .h(px(50.))
+            .px(px(12.))
+            .rounded(px(12.))
+            .bg(hex(WELL))
+            .border_1()
+            .border_color(hexa(LINE));
+        if let Some(path) = wav.clone() {
+            let peaks = self.peaks(&path);
+            let t_play = this.clone();
+            strip = strip
+                .child(
+                    hit("history-play")
+                        .size(px(28.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(hex(mark))
+                        .shadow(vec![glow(mark, 12., 0x55)])
+                        .child(icon("plaid/tri-right.svg", 10., hex(BG)).ml(px(2.)))
+                        .on_click(move |_, _, cx| {
+                            let p = path.clone();
+                            let _ = t_play.update(cx, |h, _| h.play(&p));
+                        }),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .h(px(30.))
+                        .flex()
+                        .items_center()
+                        .gap(px(2.))
+                        .children(peaks.iter().map(|a| {
+                            div()
+                                .flex_1()
+                                .h(px(2. + a * 26.))
+                                .rounded(px(1.))
+                                .bg(tint(mark, 0xa0))
+                        })),
+                );
         } else {
-            "已粘贴".into()
+            strip = strip.child(
+                div()
+                    .flex_1()
+                    .child(hint("没有保留录音，无法播放或重新识别")),
+            );
+        }
+        strip = strip.child(
+            div()
+                .flex_none()
+                .font(mono())
+                .text_size(px(11.))
+                .text_color(hex(TEXT2))
+                .child(secs),
+        );
+
+        // Recognized text with what the rules and the LLM removed struck through; the result with what they
+        // added in the path color.
+        let original = r.asr.clone().unwrap_or_else(|| r.raw.clone());
+        let (deleted, inserted) = super::perf::diff(&original, &r.text);
+        let changed: usize = deleted
+            .iter()
+            .map(|g| {
+                original[g.clone()]
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .count()
+            })
+            .chain(inserted.iter().map(|g| {
+                r.text[g.clone()]
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .count()
+            }))
+            .sum();
+        let struck = HighlightStyle {
+            color: Some(hex(TEXT3)),
+            strikethrough: Some(StrikethroughStyle {
+                thickness: px(1.5),
+                color: Some(hex(RED)),
+            }),
+            ..Default::default()
         };
-        let delivered = r.outcome.is_none();
+        let added = |c: u32| HighlightStyle {
+            color: Some(hex(c)),
+            underline: Some(UnderlineStyle {
+                thickness: px(2.),
+                color: Some(hex(c)),
+                wavy: false,
+            }),
+            ..Default::default()
+        };
+        let mut texts = div().flex().flex_col().gap(px(14.));
+        if !r.text.is_empty() && !original.is_empty() && original != r.text {
+            texts = texts.child(block(
+                "识别原文",
+                div()
+                    .text_size(px(14.))
+                    .line_height(px(24.))
+                    .text_color(hex(TEXT2))
+                    .child(
+                        StyledText::new(original.clone())
+                            .with_highlights(deleted.into_iter().map(|g| (g, struck))),
+                    ),
+            ));
+        }
+        let out_label = if r.outcome.as_deref() == Some("saved") {
+            "已保存，未粘贴"
+        } else {
+            "粘贴出去的"
+        };
+        texts = texts.child(if r.text.is_empty() {
+            block(
+                if r.is_failure() {
+                    "识别失败"
+                } else {
+                    "结果"
+                },
+                div()
+                    .text_size(px(15.))
+                    .text_color(hex(TEXT3))
+                    .child(match &r.error {
+                        Some(e) => format!("没有识别结果：{e}"),
+                        None => "没有识别结果".into(),
+                    }),
+            )
+        } else {
+            block(
+                out_label,
+                div().text_size(px(20.)).line_height(px(30.)).child(
+                    StyledText::new(r.text.clone())
+                        .with_highlights(inserted.into_iter().map(|g| (g, added(mark)))),
+                ),
+            )
+        });
+        if let Some(e) = &r.edited {
+            let (_, ins) = super::perf::diff(&r.text, e);
+            texts = texts.child(block(
+                "你后来改成",
+                div().text_size(px(15.)).line_height(px(24.)).child(
+                    StyledText::new(e.clone())
+                        .with_highlights(ins.into_iter().map(|g| (g, added(AMBER)))),
+                ),
+            ));
+        }
+
         let llm_bad = !matches!(r.llm.as_str(), "ok" | "off");
-        let metrics = [
-            ("首字", ms(r.first_text_ms), false),
-            ("识别", ms(Some(r.asr_ms).filter(|v| *v > 0)), false),
+        let chars = r.text.chars().filter(|c| !c.is_whitespace()).count() as i64;
+        let facts = [
+            (
+                "松开 → 粘贴",
+                if r.outcome.is_none() {
+                    format!("{:.2}s", r.total_ms as f64 / 1000.)
+                } else {
+                    "—".into()
+                },
+                false,
+            ),
             (
                 "LLM",
                 match r.llm.as_str() {
-                    "ok" => ms(r.llm_ms),
-                    "off" => "—".into(),
-                    other => other.to_string(),
+                    "ok" => r
+                        .llm_ms
+                        .map_or("—".into(), |v| format!("{:.2}s", v as f64 / 1000.)),
+                    "off" => "关".into(),
+                    "skipped" => "跳过".into(),
+                    "timeout" => "超时".into(),
+                    _ => "出错".into(),
                 },
-                llm_bad,
+                llm_bad && r.llm != "skipped",
             ),
+            ("改动", format!("{changed} 字"), false),
             (
-                "粘贴",
-                if delivered {
-                    ms(Some(r.total_ms))
+                "说话速度",
+                if r.audio_ms > 0 && chars > 0 {
+                    format!("{}/分", chars * 60_000 / r.audio_ms)
                 } else {
                     "—".into()
                 },
                 false,
             ),
         ];
-        let text = r.text.clone();
-        let (t_copy, t_play, t_retry, t_details) = (this.clone(), this.clone(), this.clone(), this);
-        let mut buttons = div()
-            .ml_auto()
+        let facts = div()
             .flex()
+            .gap(px(10.))
+            .children(facts.into_iter().map(|(k, v, warn)| {
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .px(px(12.))
+                    .py(px(10.))
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(hexa(LINE))
+                    .child(div().text_size(px(11.)).text_color(hex(TEXT2)).child(k))
+                    .child(
+                        div()
+                            .truncate()
+                            .font(mono())
+                            .text_size(px(17.))
+                            .font_weight(bold())
+                            .text_color(hex(if warn { AMBER } else { TEXT }))
+                            .child(v),
+                    )
+            }));
+
+        let text = r.text.clone();
+        let (t_copy, t_retry, t_details) = (this.clone(), this.clone(), this);
+        let mut buttons = div()
+            .flex()
+            .flex_wrap()
             .items_center()
             .gap(px(8.))
             .child(enabled(
                 !text.is_empty(),
-                button("history-copy", "复制", move |_, _, cx| {
+                primary("history-copy", "复制", move |_, _, cx| {
                     let _ = t_copy.update(cx, |h, cx| h.copy(&[id], cx));
                 }),
             ));
-        if let Some(path) = wav.clone() {
-            let p2 = path.clone();
+        if let Some(path) = wav {
             buttons = buttons
-                .child(button("history-play", "播放录音", move |_, _, cx| {
-                    let p = path.clone();
-                    let _ = t_play.update(cx, |h, _| h.play(&p));
-                }))
-                .child(button("history-reveal", reveal_label(), move |_, _, _| {
-                    reveal(&p2)
-                }))
                 .child(enabled(
                     self.retry.is_none(),
                     button("history-retry", "重新识别…", move |_, _, cx| {
@@ -797,24 +1049,29 @@ impl History {
                             cx.notify();
                         });
                     }),
-                ));
+                ))
+                .child(button("history-reveal", reveal_label(), move |_, _, _| {
+                    reveal(&path)
+                }));
         }
+
         let mut fields: Vec<(&str, String, bool)> = vec![];
         if let Some(e) = &r.error {
             fields.push(("错误", e.clone(), true));
         }
-        fields.push(("应用", app.clone(), false));
+        if llm_bad {
+            fields.push(("LLM", r.llm.clone(), true));
+        }
+        fields.push(("首字", ms(r.first_text_ms), false));
+        fields.push(("识别", ms(Some(r.asr_ms).filter(|v| *v > 0)), false));
         if let Some(v) = r.trigger_ms {
             fields.push(("按键 → 启动", format!("{v} ms"), false));
         }
         if let Some(v) = r.mic_start_ms {
             fields.push(("麦克风启动", format!("{v} ms"), false));
         }
-        if !r.raw.is_empty() && r.raw != r.text {
-            fields.push(("识别", r.raw.clone(), false));
-        }
-        if let Some(e) = &r.edited {
-            fields.push(("修改后", e.clone(), false));
+        if r.asr.is_some() && r.raw != r.text {
+            fields.push(("规则后", r.raw.clone(), false));
         }
         if r.noise_rms.is_some() || r.speech_rms.is_some() {
             let level = format!(
@@ -825,106 +1082,74 @@ impl History {
             );
             fields.push(("电平", level, false));
         }
-        if llm_bad {
-            fields.push(("LLM", r.llm.clone(), true));
-        }
         let details = self.details;
-        Some(
-            div().child(
-                frame
-                    .child(
-                        div()
-                            .flex()
-                            .items_baseline()
-                            .gap(px(10.))
-                            .child(
-                                div()
-                                    .font_weight(bold())
-                                    .child(format!("{} · {app}", local.format("%H:%M"))),
-                            )
-                            .child(hint(state).when(r.is_failure(), |d| d.text_color(hex(RED)))),
-                    )
-                    .child(if text.is_empty() {
-                        div().text_color(hex(TEXT3)).child("没有识别结果")
+        panel().child(
+            hit("history-detail")
+                .size_full()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap(px(14.))
+                .px(px(22.))
+                .py(px(18.))
+                .child(header)
+                .child(strip)
+                .child(texts)
+                .child(facts)
+                .child(buttons)
+                .child(disclosure(
+                    "history-details",
+                    details,
+                    if r.error.is_some() {
+                        "错误与详情"
                     } else {
-                        div().line_height(px(20.)).text_color(hex(TEXT)).child(text)
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .items_center()
-                            .gap(px(28.))
-                            .children(metrics.into_iter().map(|(k, v, warn)| {
-                                div().flex().flex_col().gap(px(1.)).child(hint(k)).child(
+                        "详情"
+                    },
+                    move |_, cx| {
+                        let _ = t_details.update(cx, |h, cx| {
+                            h.details = !h.details;
+                            cx.notify();
+                        });
+                    },
+                ))
+                .when(details, |d| {
+                    d.child(div().flex().flex_col().gap(px(4.)).pl(px(15.)).children(
+                        fields.into_iter().map(|(k, v, warn)| {
+                            div()
+                                .flex()
+                                .gap(px(10.))
+                                .text_size(px(11.))
+                                .child(div().w(px(80.)).flex_none().text_color(hex(TEXT2)).child(k))
+                                .child(
                                     div()
-                                        .font_weight(bold())
+                                        .flex_1()
+                                        .min_w_0()
                                         .text_color(hex(if warn { AMBER } else { TEXT }))
                                         .child(v),
                                 )
-                            }))
-                            .child(buttons),
-                    )
-                    .when(wav.is_none(), |d| {
-                        d.child(hint("没有可用录音，无法重新识别。"))
-                    })
-                    .child(disclosure(
-                        "history-details",
-                        details,
-                        if r.error.is_some() {
-                            "错误与详情"
-                        } else {
-                            "详情"
-                        },
-                        move |_, cx| {
-                            let _ = t_details.update(cx, |h, cx| {
-                                h.details = !h.details;
-                                cx.notify();
-                            });
-                        },
+                        }),
                     ))
-                    .when(details, |d| {
-                        d.child(div().flex().flex_col().gap(px(3.)).pl(px(15.)).children(
-                            fields.into_iter().map(|(k, v, warn)| {
-                                div()
-                                    .flex()
-                                    .gap(px(10.))
-                                    .text_size(px(11.))
-                                    .child(
-                                        div()
-                                            .w(px(80.))
-                                            .flex_none()
-                                            .flex()
-                                            .justify_end()
-                                            .text_color(hex(HINT))
-                                            .child(k),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .text_color(hex(if warn { AMBER } else { TEXT }))
-                                            .child(v),
-                                    )
-                            }),
-                        ))
-                    }),
-            ),
+                }),
         )
     }
 
     fn bottom(&self, n: usize, cx: &mut Context<Self>) -> Div {
-        let mut text = format!("最近 {n} 条，最多保留 {LIMIT} 条，只保存在本机");
+        let mut text = format!("最多保留 {LIMIT} 条 · 只保存在本机");
         if self.audio_bytes > 0 {
-            text.push_str(&format!("，录音占用 {}", size_label(self.audio_bytes)));
+            text.push_str(&format!(" · 录音占用 {}", size_label(self.audio_bytes)));
         }
         let this = cx.entity().downgrade();
-        bottom_bar()
-            .h(px(24.))
-            .mt(px(10.))
-            .px(px(10.))
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .h(px(40.))
+            .px(px(28.))
             .gap(px(10.))
-            .child(hint(text))
+            .font(mono())
+            .text_size(px(11.))
+            .text_color(hex(TEXT2))
+            .child(text)
             .child(div().flex_1())
             .child(enabled(
                 n > 0,
@@ -933,7 +1158,8 @@ impl History {
                         h.sheet = Some(Sheet::Clear(n));
                         cx.notify();
                     });
-                }),
+                })
+                .font(sans()),
             ))
     }
 
@@ -943,7 +1169,7 @@ impl History {
             Sheet::Clear(n) => (
                 "history-clear",
                 format!("删除全部 {n} 条记录和录音？"),
-                "概览里的用量统计会保留。",
+                "「今天」和「报告」里的用量统计会保留。",
                 "删除",
             ),
             Sheet::Retry(_) => (
@@ -1031,20 +1257,26 @@ impl Drop for History {
 impl Render for History {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let q = self.query(cx);
-        let latency = on_if_one(LATENCY);
         let store = &self.model.read(cx).store;
         let total = store.all.len();
         let found: Vec<&Record> = store.all.iter().filter(|r| matches(r, &q)).collect();
-        let counts = [
-            found.len(),
-            found.iter().filter(|r| Filter::Saved.keeps(r)).count(),
-            found.iter().filter(|r| Filter::Failed.keeps(r)).count(),
-        ];
+        let counts = Filter::ALL.map(|f| found.iter().filter(|r| f.keeps(r)).count());
         let shown: Vec<&Record> = found
             .into_iter()
             .rev()
             .filter(|r| self.filter.keeps(r))
             .collect();
+        // With nothing selected the newest shown record fills the panel.
+        let focus = match self.selected.as_slice() {
+            [] => shown.first().map(|r| r.at),
+            [id] => Some(*id),
+            _ => None,
+        };
+        let marked = if self.selected.is_empty() {
+            focus.into_iter().collect()
+        } else {
+            self.selected.clone()
+        };
         let lines = Rc::new(group(&shown));
         let n_shown = shown.len();
         let empty = if total == 0 {
@@ -1055,11 +1287,9 @@ impl Render for History {
         } else if n_shown > 0 {
             None
         } else if !q.is_empty() {
-            Some(("没有匹配的记录", "试试其他关键词，或切换记录状态。"))
-        } else if self.filter == Filter::Saved {
-            Some(("没有匹配的记录", "没有已保存但未粘贴的记录。"))
+            Some(("没有匹配的记录", "试试其他关键词，或切换筛选。"))
         } else {
-            Some(("没有匹配的记录", "没有识别失败的记录。"))
+            Some(("没有匹配的记录", "这个筛选下没有记录。"))
         };
         let context = self.context;
         div()
@@ -1067,10 +1297,28 @@ impl Render for History {
             .size_full()
             .flex()
             .flex_col()
-            .child(self.toolbar(counts, n_shown, cx))
-            .children(self.status_line())
-            .child(self.table(lines, latency, empty, cx))
-            .children(self.detail(cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .gap(px(16.))
+                    .pt(px(6.))
+                    .px(px(28.))
+                    .child(
+                        div()
+                            .w(px(380.))
+                            .flex_none()
+                            .flex()
+                            .flex_col()
+                            .gap(px(10.))
+                            .child(self.search_field(n_shown, cx))
+                            .child(self.chips(counts, cx))
+                            .children(self.status_line())
+                            .child(self.list(lines, marked, empty, cx)),
+                    )
+                    .child(self.detail(focus, cx)),
+            )
             .child(self.bottom(total, cx))
             .when_some(context, |d, at| d.child(self.context_menu(at, cx)))
             .when_some(self.sheet.as_ref(), |d, s| d.child(self.sheet(s, cx)))
@@ -1079,97 +1327,121 @@ impl Render for History {
 
 // --- Rows ------------------------------------------------------------------------------------------------------
 
+/// Day headers take a full row so the list stays uniform; the label sits at the bottom.
 fn day_row(label: String) -> Div {
     div()
         .w_full()
-        .h(px(20.))
+        .h(px(ROW_H))
         .flex()
-        .items_center()
-        .px(px(6.))
-        .bg(hex(RAISED))
-        .border_b_1()
-        .border_color(hexa(LINE))
-        .text_size(px(11.))
-        .font_weight(bold())
-        .text_color(hex(TEXT2))
+        .items_end()
+        .px(px(2.))
+        .pb(px(6.))
+        .font(mono())
+        .text_size(px(10.))
+        .text_color(hex(TEXT3))
         .child(label)
 }
 
-fn record_row(
-    r: &Record,
-    i: usize,
-    selected: bool,
-    latency: bool,
-    retrying: bool,
-) -> Stateful<Div> {
-    let local = r.at.with_timezone(&Local);
-    let color = hex;
-    let (status, status_color) = if retrying {
+/// The 2 px bar color and the panel tag for a record's path.
+fn path_tag(r: &Record, retrying: bool) -> (&'static str, u32) {
+    if retrying {
         ("重新识别中…", TEXT2)
     } else if r.is_failure() {
         ("识别失败", RED)
     } else if r.outcome.as_deref() == Some("saved") {
         ("未粘贴", AMBER)
+    } else if r.llm == "ok" {
+        ("LLM 润色", VIOLET)
     } else {
-        ("已粘贴", TEXT2)
+        ("直接粘贴", CYAN)
+    }
+}
+
+fn record_row(r: &Record, selected: bool, latency: bool, retrying: bool) -> Stateful<Div> {
+    let local = r.at.with_timezone(&Local);
+    let (tag, color) = path_tag(r, retrying);
+    let delivered = r.outcome.is_none() && !retrying;
+    let right = if delivered {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .when(r.edited.is_some(), |d| {
+                d.child(icon("plaid/pencil.svg", 10., hex(AMBER)))
+            })
+            .child(format!(
+                "{} 字",
+                r.text.chars().filter(|c| !c.is_whitespace()).count()
+            ))
+    } else {
+        div().text_color(hex(color)).child(tag)
     };
     let text = if r.text.is_empty() {
-        div().text_color(color(TEXT3)).child("没有识别结果")
+        div().text_color(hex(TEXT3)).child("没有识别结果")
     } else {
         div().child(r.text.replace('\n', " "))
     };
-    let delivered = r.outcome.is_none();
-    table_row(
-        format!("history-row-{}", r.at.timestamp_millis()),
-        i,
-        selected,
-    )
-    .w_full()
-    .h(px(20.))
-    .text_size(px(12.))
-    .child(cell(TIME_W).child(local.format("%H:%M").to_string()))
-    .child(
-        cell(APP_W).child(
+    hit(format!("history-row-{}", r.at.timestamp_millis()))
+        .size_full()
+        .flex()
+        .gap(px(10.))
+        .px(px(12.))
+        .py(px(6.))
+        .rounded(px(10.))
+        .border_1()
+        .map(|d| {
+            if selected {
+                d.bg(hex(RAISED)).border_color(hexa(LINE2))
+            } else {
+                d.border_color(gpui_kit::transparent_black())
+                    .hover(|s| s.bg(tint(TEXT, 0x08)))
+            }
+        })
+        .child(
             div()
-                .truncate()
-                .child(r.app.clone().unwrap_or_else(|| "未知应用".into())),
-        ),
-    )
-    .child(cell(0.).child(text.truncate()))
-    .when(latency, |d| {
-        let bad = !matches!(r.llm.as_str(), "ok" | "off");
-        d.child(
-            cell(LATENCY_W)
-                .text_size(px(11.))
-                .text_color(color(if bad { AMBER } else { TEXT2 }))
+                .w(px(2.))
+                .h_full()
+                .flex_none()
+                .rounded(px(1.))
+                .bg(hex(color)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .justify_center()
+                .gap(px(3.))
                 .child(
                     div()
-                        .truncate()
-                        .when(delivered, |d| d.child(latency_line(r))),
-                ),
+                        .flex()
+                        .gap(px(8.))
+                        .font(mono())
+                        .text_size(px(10.))
+                        .text_color(hex(TEXT2))
+                        .child(div().flex_none().child(local.format("%H:%M").to_string()))
+                        .child(
+                            div()
+                                .flex_none()
+                                .max_w(px(120.))
+                                .truncate()
+                                .child(r.app.clone().unwrap_or_else(|| "未知应用".into())),
+                        )
+                        .when(latency, |d| {
+                            let bad = !matches!(r.llm.as_str(), "ok" | "off");
+                            d.child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_color(hex(if bad { AMBER } else { TEXT3 }))
+                                    .when(r.outcome.is_none(), |d| d.child(latency_line(r))),
+                            )
+                        })
+                        .child(div().ml_auto().flex_none().child(right)),
+                )
+                .child(text.truncate().text_size(px(13.)).text_color(hex(TEXT))),
         )
-    })
-    .child(
-        cell(STATUS_W)
-            .flex()
-            .items_center()
-            .gap(px(3.))
-            .text_color(color(status_color))
-            .when(r.edited.is_some() && delivered, |d| {
-                d.child(icon("plaid/pencil.svg", 10., color(TEXT2)))
-            })
-            .child(div().truncate().child(status)),
-    )
-    .child(
-        cell(DURATION_W)
-            .flex()
-            .justify_end()
-            .child(if r.audio_ms > 0 {
-                format!("{:.1} s", r.audio_ms as f64 / 1000.)
-            } else {
-                "—".into()
-            }),
-    )
 }
 
 /// Swift's "首字 X · 识别 X · LLM X · 粘贴 X", in ms.
@@ -1213,7 +1485,7 @@ fn group(shown: &[&Record]) -> Vec<Line> {
                 WEEK[d.weekday().num_days_from_monday() as usize]
             )
         };
-        out.push(Line::Day(format!("{title} {n} 句")));
+        out.push(Line::Day(format!("{title} · {n} 条")));
         out.extend(
             shown[i..i + n]
                 .iter()
@@ -1232,6 +1504,105 @@ fn matches(r: &Record, q: &str) -> bool {
 }
 
 // --- Helpers ---------------------------------------------------------------------------------------------------
+
+/// The light pill for the main action of the panel.
+fn primary(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    hit(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .h(px(30.))
+        .px(px(16.))
+        .rounded_full()
+        .bg(hex(TEXT))
+        .text_color(hex(BG))
+        .text_size(px(13.))
+        .font_weight(medium())
+        .whitespace_nowrap()
+        .hover(|s| s.opacity(0.9))
+        .child(label.into())
+        .on_click(on_click)
+}
+
+/// A labeled text block in the panel.
+fn block(label: &'static str, body: Div) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .child(
+            div()
+                .font(mono())
+                .text_size(px(10.))
+                .text_color(hex(TEXT3))
+                .child(label),
+        )
+        .child(body)
+}
+
+/// Two-letter app mark: initials of a multi-word name, else its first letters (first character for CJK).
+fn badge(app: &str) -> String {
+    let words: Vec<&str> = app.split_whitespace().collect();
+    if words.len() > 1 && app.is_ascii() {
+        words
+            .iter()
+            .take(2)
+            .filter_map(|w| w.chars().next())
+            .collect()
+    } else if app.is_ascii() {
+        app.chars().take(2).collect()
+    } else {
+        app.chars().take(1).collect()
+    }
+}
+
+/// "今天 14:32", "昨天 09:10" or "11月18日 14:32".
+fn when(at: DateTime<Utc>) -> String {
+    let l = at.with_timezone(&Local);
+    let today = Local::now().date_naive();
+    let day = if l.date_naive() == today {
+        "今天".to_string()
+    } else if today.pred_opt() == Some(l.date_naive()) {
+        "昨天".into()
+    } else {
+        format!("{}月{}日", l.month(), l.day())
+    };
+    format!("{day} {}", l.format("%H:%M"))
+}
+
+/// 64 bucket peaks of a recording, 0..1 relative to its loudest bucket (flat when silent or unreadable).
+fn peaks(path: &Path) -> Vec<f32> {
+    const N: usize = 64;
+    let bytes = std::fs::read(path).unwrap_or_default();
+    let pcm = plaid_core::wav::decode(&bytes).unwrap_or(&[]);
+    let samples: Vec<i16> = pcm
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| i16::from_le_bytes(*b))
+        .collect();
+    let per = samples.len().div_ceil(N).max(1);
+    let mut v: Vec<f32> = (0..N)
+        .map(|i| {
+            samples
+                .get(i * per..((i + 1) * per).min(samples.len()))
+                .map_or(0, |c| c.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0))
+                as f32
+        })
+        .collect();
+    let top = v.iter().cloned().fold(0., f32::max);
+    // Below about -50 dBFS counts as silence.
+    if top > 100. {
+        v.iter_mut().for_each(|a| *a /= top);
+    } else {
+        v.iter_mut().for_each(|a| *a = 0.);
+    }
+    v
+}
 
 /// A button that does nothing and is drawn dimmed when `on` is false.
 fn enabled(on: bool, b: Stateful<Div>) -> Stateful<Div> {
@@ -1493,10 +1864,48 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &None,
     )?;
     expect(
-        "filter change clears the selection",
-        !ui.has("history-detail"),
+        "filter change shows the newest matching record",
+        ui.has("history-detail"),
         &None,
     )?;
+    for (i, name, keeps) in [
+        (
+            3,
+            "llm",
+            (|r: &Record| r.llm == "ok") as fn(&Record) -> bool,
+        ),
+        (4, "edited", |r: &Record| r.edited.is_some()),
+    ] {
+        ui.click(&format!("history-filter-{i}"))?;
+        let want: Vec<String> = all.iter().filter(|r| keeps(r)).map(row_id).collect();
+        let rows = painted();
+        expect(
+            &format!("{name} filter shows only its rows"),
+            !rows.is_empty() && rows.iter().all(|k| want.contains(k)),
+            &Some(format!("{} painted", rows.len())),
+        )?;
+        ui.shot(&format!("history-{name}"))?;
+    }
+    // A record the local rules changed: its recognized text shows with the removals struck through.
+    ui.click("history-filter-0")?;
+    if let Some(r) = all
+        .iter()
+        .rev()
+        .find(|r| r.asr.is_some() && !r.is_failure())
+    {
+        let id = row_id(r);
+        for _ in 0..20 {
+            if ui.bounds(&id).is_some() {
+                break;
+            }
+            let over = painted().into_iter().next().ok_or("no rows")?;
+            ui.scroll(&over, -300.)?;
+        }
+        ui.click(&id)?;
+        ui.shot("history-rules")?;
+        let over = painted().into_iter().next().ok_or("no rows")?;
+        ui.scroll(&over, 20000.)?;
+    }
 
     ui.click("history-filter-0")?;
     let before = config::raw(LATENCY);

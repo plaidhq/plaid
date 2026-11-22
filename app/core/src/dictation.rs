@@ -1096,8 +1096,8 @@ impl Controller {
             Ok(_) if !exists => Hud::Flash("原记录已删除，无法保存重试结果".into()),
             Ok(t) => {
                 p.log(&format!("recovered chars={}", t.chars().count()));
-                self.store
-                    .recovered(id, Rules::load(|k| p.setting(k)).apply(&t));
+                let ruled = Rules::load(|k| p.setting(k)).apply(&t);
+                self.store.recovered(id, t, ruled);
                 Hud::Note("识别结果已保存在原记录中".into())
             }
             Err(e) => {

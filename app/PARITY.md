@@ -76,11 +76,16 @@ Checked offscreen only: `plaid --ui-check <dir>` (snapshot feature, fixture data
 key access) clicks through every page and writes PNGs. Differences from Swift:
 
 - 设置: no 测试 button for the Volc key; no launch-at-login switch.
-- 历史: 重试 cannot be cancelled and its failure shows on the HUD only; export does not flush an unsaved 词典
-  draft first.
+- 历史: a list beside a detail panel (always shows the selected or newest record): waveform with playback, the
+  recognised text with the rules' deletions struck through, what was pasted with the LLM's insertions marked, and
+  the user's later edit. Filters add 润色 and 改过. 重试 cannot be cancelled and its failure shows on the HUD only;
+  export does not flush an unsaved 词典 draft first.
+- 报告: new summary cards above the Swift 性能 diagnostics: half a year of daily characters as a heatmap and
+  speaking speed (both from usage.json, so they survive 清空历史), a release → paste histogram split into direct and
+  LLM, and how many records the LLM (punctuation vs other characters) and each local rule changed.
 - 词典: rows drop the 来源 and 添加于 columns; adds a 全部 tab. The sidebar badge counts pending suggestions.
 - 命令: an actions.json parse error locks only the cards and the add menu (as in the Swift source).
-- 性能: the trend axis labels every second day.
+- 报告: the trend axis labels every second day.
 - No tooltips anywhere.
 
 ## Windows
