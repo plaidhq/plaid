@@ -70,12 +70,18 @@ enum Line {
     Rec(Box<Record>),
 }
 
-/// A retry posted to the controller. The controller reports only through the HUD, so the page infers the end from
-/// the record changing on disk, or gives up after the controller's own timeout.
+/// A retry or 重新润色 posted to the controller. The controller reports only through the HUD, so the page infers
+/// the end from the record changing on disk, or gives up after the controller's own timeout.
 struct Retry {
     id: DateTime<Utc>,
-    before: (String, Option<String>),
+    before: (String, Option<String>, String),
+    refine: bool,
     _timeout: Task<()>,
+}
+
+/// What a retry or 重新润色 changes in a record.
+fn fingerprint(r: &Record) -> (String, Option<String>, String) {
+    (r.text.clone(), r.outcome.clone(), r.llm.clone())
 }
 
 /// Navigates the settings window to another page.
@@ -157,9 +163,13 @@ impl History {
             .retain(|id| store.all.iter().any(|r| r.at == *id));
         if let Some(r) = &self.retry {
             match store.all.iter().rev().find(|x| x.at == r.id) {
-                Some(x) if (x.text.clone(), x.outcome.clone()) != r.before => {
+                Some(x) if fingerprint(x) != r.before => {
+                    self.note = Some(if r.refine {
+                        "润色结果已保存在原记录中，未自动粘贴。"
+                    } else {
+                        "识别结果已保存在原记录中，请手动复制；未自动粘贴。"
+                    });
                     self.retry = None;
-                    self.note = Some("识别结果已保存在原记录中，请手动复制；未自动粘贴。");
                 }
                 None => self.retry = None,
                 _ => {}
@@ -328,10 +338,37 @@ impl History {
         let Some(r) = self.record(id, cx) else {
             return;
         };
-        let before = (r.text.clone(), r.outcome.clone());
+        let before = fingerprint(r);
         // The controller gives up after max(30, audio + 10) s; allow a little more for the save.
         let secs = 30.max(r.audio_ms / 1000 + 10) as u64 + 5;
         send(Msg::Recover { id }, cx);
+        self.track(id, before, secs, false, cx);
+    }
+
+    /// 重新润色: the controller's request times out after at least 15 s.
+    fn rerefine(&mut self, id: DateTime<Utc>, cx: &mut Context<Self>) {
+        let Some(r) = self.record(id, cx) else {
+            return;
+        };
+        let before = fingerprint(r);
+        let secs = config::raw("llmTimeoutMs")
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(4000)
+            .max(15_000)
+            / 1000
+            + 3;
+        send(Msg::Refine { id }, cx);
+        self.track(id, before, secs, true, cx);
+    }
+
+    fn track(
+        &mut self,
+        id: DateTime<Utc>,
+        before: (String, Option<String>, String),
+        secs: u64,
+        refine: bool,
+        cx: &mut Context<Self>,
+    ) {
         let timeout = cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_secs(secs))
@@ -347,6 +384,7 @@ impl History {
         self.retry = Some(Retry {
             id,
             before,
+            refine,
             _timeout: timeout,
         });
         cx.notify();
@@ -676,8 +714,15 @@ impl History {
 
     /// Retry progress or result, and the export spinner, under the chips.
     fn status_line(&self) -> Option<Stateful<Div>> {
-        let (text, busy) = if self.retry.is_some() {
-            ("正在重新识别；不会自动粘贴…", true)
+        let (text, busy) = if let Some(r) = &self.retry {
+            (
+                if r.refine {
+                    "正在重新润色；不会自动粘贴…"
+                } else {
+                    "正在重新识别；不会自动粘贴…"
+                },
+                true,
+            )
         } else if self.exporting {
             ("正在导出…", true)
         } else {
@@ -724,7 +769,7 @@ impl History {
         let this = cx.entity().downgrade();
         let marked = Rc::new(marked);
         let latency = on_if_one(LATENCY);
-        let retrying = self.retry.as_ref().map(|r| r.id);
+        let retrying = self.retry.as_ref().filter(|r| !r.refine).map(|r| r.id);
         let focus = self.focus.clone();
         let order: Rc<Vec<DateTime<Utc>>> = Rc::new(
             lines
@@ -921,7 +966,7 @@ impl History {
         };
         let id = r.at;
         let wav = self.audio_path(&r, cx);
-        let retrying = self.retry.as_ref().is_some_and(|x| x.id == id);
+        let retrying = self.retry.as_ref().is_some_and(|x| x.id == id && !x.refine);
         let (tag, color) = path_tag(&r, retrying);
         let llm = r.llm == "ok";
         let mark = if llm { VIOLET } else { CYAN };
@@ -1214,8 +1259,8 @@ impl History {
             }));
 
         let text = r.text.clone();
-        let (t_copy, t_retry, t_delete, t_details) =
-            (this.clone(), this.clone(), this.clone(), this);
+        let (t_copy, t_retry, t_refine, t_delete, t_details) =
+            (this.clone(), this.clone(), this.clone(), this.clone(), this);
         let mut buttons = div()
             .flex()
             .flex_wrap()
@@ -1241,6 +1286,14 @@ impl History {
                 .child(button("history-reveal", reveal_label(), move |_, _, _| {
                     reveal(&path)
                 }));
+        }
+        if !r.raw.trim().is_empty() && !r.is_failure() {
+            buttons = buttons.child(enabled(
+                self.retry.is_none(),
+                button("history-refine", "重新润色", move |_, _, cx| {
+                    let _ = t_refine.update(cx, |h, cx| h.rerefine(id, cx));
+                }),
+            ));
         }
         buttons = buttons.child(enabled(
             !retrying,
@@ -2214,6 +2267,20 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     ui.key("cmd-a")?;
     ui.key("backspace")?;
     expect("search cleared", !painted().is_empty(), &None)?;
+    // 重新润色: drop the failed record whose retry is still in flight, then refine the newest pasted record.
+    ui.click("history-filter-2")?;
+    ui.click(&target)?;
+    ui.click("history-delete")?;
+    ui.click("history-delete-ok")?;
+    ui.click("history-filter-0")?;
+    expect(
+        "deleting the retried record ends the retry",
+        ui.has("history-refine") && !ui.has("history-status"),
+        &None,
+    )?;
+    ui.click("history-refine")?;
+    expect("refine in flight", ui.has("history-status"), &None)?;
+    ui.shot("history-refining")?;
 
     ui.click("history-clear")?;
     expect("clear asks first", ui.has("history-clear-ok"), &None)?;

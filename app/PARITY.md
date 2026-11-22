@@ -85,7 +85,9 @@ key access) clicks through every page and writes PNGs. Differences from Swift:
   recognised text with the rules' deletions struck through, what was pasted with the LLM's insertions marked, and
   the user's later edit; the waveform fills as the recording plays and the play button stops it. Records can be
   deleted (detail panel, right-click, ⌫; through the controller, refused while that record is being retried;
-  usage is kept). ↑↓ move the selection, ⌘F focuses the search. Filters add 润色 and 改过. 重试 cannot be cancelled and its failure shows on the HUD only;
+  usage is kept). ↑↓ move the selection, ⌘F focuses the search. Filters add 润色 and 改过. 重新润色 runs the LLM (the app's level,
+  at least 15 s timeout, no history context) on the recognised text again and overwrites the record; it never pastes.
+  重试 and 重新润色 cannot be cancelled and their failures show on the HUD only;
   export does not flush an unsaved 词典 draft first.
 - 报告: new summary cards above the Swift 性能 diagnostics: half a year of daily characters as a heatmap and
   speaking speed (both from usage.json, so they survive 清空历史), a release → paste histogram split into direct and

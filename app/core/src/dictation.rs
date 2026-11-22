@@ -146,6 +146,11 @@ pub enum Msg {
     Delete {
         ids: Vec<DateTime<Utc>>,
     },
+    /// Run the LLM again on record `id`'s recognized text (History's 重新润色) and keep the result in the record.
+    /// Never pastes; one at a time.
+    Refine {
+        id: DateTime<Utc>,
+    },
 }
 
 pub trait Platform {
@@ -341,6 +346,8 @@ pub struct Controller {
     u: Option<Utterance>,
     pending: Vec<Pending>,
     refine: Option<Refine>,
+    /// History's 重新润色 in flight: (llm request id, record).
+    rerefining: Option<(u64, DateTime<Utc>)>,
     learn: Learner,
     llm_seq: u64,
     /// A matched command marked `confirm`, waiting for ⏎ (esc drops it). Not a phase: it doesn't block the next press.
@@ -369,6 +376,7 @@ impl Controller {
             u: None,
             pending: vec![],
             refine: None,
+            rerefining: None,
             learn: Learner::default(),
             llm_seq: 0,
             confirm: None,
@@ -567,6 +575,7 @@ impl Controller {
                 self.relearn(p);
                 p.log("history cleared");
             }
+            Msg::Refine { id } => self.rerefine(id, p),
             Msg::Delete { ids } => {
                 if self.recovering.is_some_and(|r| ids.contains(&r)) {
                     return p.hud(Hud::Flash("请等重试结束后再删除".into()));
@@ -1223,6 +1232,46 @@ impl Controller {
         }
     }
 
+    /// History's 重新润色: the record's text after the local rules goes through the LLM at the level its app gets
+    /// (通顺 when that level skips the LLM, since the user asked for it), without history context.
+    fn rerefine(&mut self, id: DateTime<Utc>, p: &mut impl Platform) {
+        if self.rerefining.is_some() {
+            return p.hud(Hud::Flash("上一条还在润色".into()));
+        }
+        let Some(r) = self.store.all.iter().rev().find(|r| r.at == id).cloned() else {
+            return;
+        };
+        if r.raw.trim().is_empty() {
+            return p.hud(Hud::Flash("这条记录没有可润色的文字".into()));
+        }
+        let Some(ep) = Self::configured(p) else {
+            return p.hud(Hud::Flash(
+                "没有可用的 LLM：在「文字」里填好接口和 key".into(),
+            ));
+        };
+        let light = llm::level(|k| p.setting(k), r.app.as_deref()) == Level::Light;
+        let timeout = Duration::from_millis(
+            p.setting("llmTimeoutMs")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(4000)
+                .max(15_000),
+        );
+        let app = r.app.clone().unwrap_or_default();
+        match self.llm_request(&ep, &r.raw, &app, &[], light, timeout, p) {
+            Err(e) => p.hud(Hud::Flash(format!("重新润色失败：{e}"))),
+            Ok(req) => {
+                self.llm_seq += 1;
+                self.rerefining = Some((self.llm_seq, id));
+                p.log(&format!(
+                    "rerefine model={} chars={}",
+                    ep.model,
+                    r.raw.chars().count()
+                ));
+                p.llm(self.llm_seq, req);
+            }
+        }
+    }
+
     /// esc (paste the raw text) or a new utterance (only save it).
     fn skip_refine(&mut self, paste: bool, p: &mut impl Platform) {
         self.phase = Phase::Idle;
@@ -1251,6 +1300,28 @@ impl Controller {
                     };
                     self.deliver(&r.raw, &r.raw, llm, llm_ms, r.asr_at, true, p);
                 }
+            }
+        } else if let Some((_, rid)) = self.rerefining.take_if(|j| j.0 == id) {
+            let note = match result {
+                Ok(t) => {
+                    let t = Rules::load(|k| p.setting(k)).format(&t);
+                    p.log(&format!("rerefined chars={}", t.chars().count()));
+                    self.store.update(rid, |r| {
+                        r.text = t;
+                        r.llm = "ok".into();
+                    });
+                    "已重新润色，结果在历史里".to_string()
+                }
+                Err(f) => {
+                    p.log(&format!("rerefine failed: {}", f.message));
+                    format!(
+                        "重新润色失败：{}",
+                        if f.timed_out { "超时" } else { &f.message }
+                    )
+                }
+            };
+            if self.idle() {
+                p.hud(Hud::Flash(note));
             }
         } else if let Some((_, rid, raw)) = self.learn.running.take_if(|j| j.0 == id) {
             match result {
@@ -1765,6 +1836,27 @@ mod tests {
             window: Some("Inbox".into()),
         });
         t.done(g, Ok(raw))
+    }
+
+    #[test]
+    fn rerefine_rewrites_the_record_without_pasting() {
+        let mut t = T::new();
+        refining(&mut t, 1, "嗯你好，我们今天下午三点在公司楼下见面吧");
+        llm(&mut t, 1, Err("timeout"));
+        t.flush();
+        let id = t.c.store.all.last().unwrap().at;
+        let out = t.send(Msg::Refine { id });
+        assert!(has(&out, "llm 2") && !has(&out, "verify"), "{out:?}");
+        assert!(has(&t.send(Msg::Refine { id }), "上一条还在润色"));
+        let out = llm(&mut t, 2, Ok("你好，我们今天下午三点在公司楼下见面吧。"));
+        assert!(has(&out, "已重新润色") && !has(&out, "verify"), "{out:?}");
+        let r = t.c.store.all.last().unwrap();
+        assert_eq!(
+            (r.text.as_str(), r.llm.as_str()),
+            ("你好，我们今天下午三点在公司楼下见面吧。", "ok")
+        );
+        let reloaded = crate::store::Store::load(t.c.store.dir());
+        assert_eq!(reloaded.all.last().unwrap().llm, "ok");
     }
 
     #[test]
