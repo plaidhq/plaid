@@ -22,6 +22,8 @@ const LEARN_TIMEOUT: Duration = Duration::from_secs(20);
 const ANNOUNCE_AFTER: Duration = Duration::from_millis(1500);
 /// A command waiting for ⏎ is dropped after this.
 const CONFIRM_WAIT: Duration = Duration::from_secs(8);
+/// Shorter results paste as recognized: the LLM rarely changes them, and it adds 0.7-3.6 s.
+const REFINE_MIN_CHARS: usize = 20;
 /// UTF-16 units of the field text before the caret sent as ASR context (commands get all of `Msg::Field`'s).
 const ASR_BEFORE: usize = 300;
 
@@ -1132,6 +1134,10 @@ impl Controller {
         if p.setting("llmEnabled").as_deref() != Some("1") {
             return self.deliver(&raw, &raw, "off", None, asr_at, true, p);
         }
+        if raw.chars().count() < REFINE_MIN_CHARS {
+            p.log("refine skipped: short");
+            return self.deliver(&raw, &raw, "off", None, asr_at, true, p);
+        }
         let ep = Self::configured(p).unwrap_or_else(|| Endpoint::new("openai", "", ""));
         let u = self.u.as_ref().expect("utterance");
         let app = if p.setting("llmAppContext").as_deref() != Some("0") {
@@ -1718,11 +1724,28 @@ mod tests {
     }
 
     #[test]
+    fn short_results_skip_refine() {
+        let mut t = T::new();
+        let out = refining(&mut t, 1, "先就这样吧。");
+        assert!(
+            has(&out, "verify 1 先就这样吧。") && !has(&out, "llm 1"),
+            "{out:?}"
+        );
+        t.flush();
+        assert_eq!(t.c.store.all.last().unwrap().llm, "off");
+    }
+
+    #[test]
     fn refine_pastes_the_rewrite_or_fails_open() {
         let mut t = T::new();
-        let out = refining(&mut t, 1, "嗯你好");
+        let out = refining(&mut t, 1, "嗯你好，我们今天下午三点在公司楼下见面吧");
         assert!(
-            has(&out, "llm 1") && has(&out, "hud Refining(\"嗯你好\")") && !has(&out, "verify"),
+            has(&out, "llm 1")
+                && has(
+                    &out,
+                    "hud Refining(\"嗯你好，我们今天下午三点在公司楼下见面吧\")"
+                )
+                && !has(&out, "verify"),
             "{out:?}"
         );
         assert!(t.c.keys().escape && !t.c.idle());
@@ -1737,15 +1760,23 @@ mod tests {
                 r.llm.as_str(),
                 r.outcome.as_deref()
             ),
-            ("嗯你好", "你好。", "ok", None)
+            (
+                "嗯你好，我们今天下午三点在公司楼下见面吧",
+                "你好。",
+                "ok",
+                None
+            )
         );
         assert!(r.llm_ms.is_some());
 
         for (err, llm_field) in [("HTTP 500: x", "HTTP 500: x"), ("timeout", "timeout")] {
             let mut t = T::new();
-            refining(&mut t, 1, "原文");
+            refining(&mut t, 1, "这是一段识别出来的原文，长度超过二十个字");
             let out = llm(&mut t, 1, Err(err));
-            assert!(has(&out, "verify 1 原文"), "{out:?}");
+            assert!(
+                has(&out, "verify 1 这是一段识别出来的原文，长度超过二十个字"),
+                "{out:?}"
+            );
             t.flush();
             assert_eq!(t.c.store.all.last().unwrap().llm, llm_field);
         }
@@ -1755,16 +1786,22 @@ mod tests {
     fn refine_interrupted() {
         // esc: paste the raw text now; the late reply is ignored.
         let mut t = T::new();
-        refining(&mut t, 1, "原文");
+        refining(&mut t, 1, "这是一段识别出来的原文，长度超过二十个字");
         let out = t.send(Msg::Escape);
-        assert!(has(&out, "verify 1 原文"), "{out:?}");
+        assert!(
+            has(&out, "verify 1 这是一段识别出来的原文，长度超过二十个字"),
+            "{out:?}"
+        );
         let out = t.flush();
-        assert!(has(&out, "paste 原文"), "{out:?}");
+        assert!(
+            has(&out, "paste 这是一段识别出来的原文，长度超过二十个字"),
+            "{out:?}"
+        );
         assert_eq!(t.c.store.all.last().unwrap().llm, "skipped");
         assert!(llm(&mut t, 1, Ok("改写")).is_empty());
         // New press: the raw text is only saved.
         let mut t = T::new();
-        refining(&mut t, 1, "原文");
+        refining(&mut t, 1, "这是一段识别出来的原文，长度超过二十个字");
         let out = t.key(StartHold);
         assert!(has(&out, "session 2") && !has(&out, "verify"), "{out:?}");
         let r = t.c.store.all.last().unwrap();
@@ -1774,7 +1811,7 @@ mod tests {
         );
         // Chord cancel: dropped.
         let mut t = T::new();
-        refining(&mut t, 1, "原文");
+        refining(&mut t, 1, "这是一段识别出来的原文，长度超过二十个字");
         assert_eq!(t.key(Cancel), vec!["hud Hide"]);
         assert!(llm(&mut t, 1, Ok("改写")).is_empty());
         assert!(t.c.store.all.is_empty());

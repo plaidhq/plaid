@@ -46,12 +46,13 @@ const MORPH_S: f32 = 0.28;
 const FADE_S: f32 = 0.2;
 /// New text types on at a speed (characters per 60 Hz frame) that eases toward clearing the backlog in `TYPE_CATCH`
 /// frames, by `TYPE_EASE` per frame, never below `TYPE_MIN`. Speech is recognized 2-3 characters every half second
-/// or so; pacing to that rate, about half a second behind, keeps the text flowing between partials instead of
-/// typing each one at once and stalling (a real 27 s utterance: still 12% of the time instead of 73%). Once the
-/// key is released the backlog clears within a few hundred ms.
-const TYPE_CATCH: f32 = 45.;
-const TYPE_EASE: f32 = 0.05;
-const TYPE_MIN: f32 = 0.03;
+/// or so; pacing to that rate keeps the text flowing between partials instead of typing each one at once and
+/// stalling. Replaying a real 27 s utterance's partials, this trails the recognized text by about 0.7 s (p50) and
+/// waits with nothing left to type 23% of the time; a 45-frame catch trailed by 1.0 s, too slow for fast speech.
+/// Once the key is released the backlog clears within a few hundred ms.
+const TYPE_CATCH: f32 = 24.;
+const TYPE_EASE: f32 = 0.1;
+const TYPE_MIN: f32 = 0.04;
 const TYPE_CATCH_END: f32 = 12.;
 const TYPE_MIN_END: f32 = 0.2;
 /// Characters a correction changed fade in again from this alpha over `REFADE_S` instead of swapping at once.
