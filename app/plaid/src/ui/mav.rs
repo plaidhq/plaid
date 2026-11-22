@@ -871,3 +871,27 @@ pub fn spinner(size: f32, color: u32, phase: usize) -> Div {
                 )))
         }))
 }
+
+thread_local! {
+    static ICONS: std::cell::RefCell<std::collections::HashMap<String, Option<std::sync::Arc<Image>>>> =
+        Default::default();
+}
+
+/// The app's icon at `size` pt, looked up once per name; None when it can't be found (callers then
+/// draw their letter mark).
+pub fn app_icon(app: &str, size: f32) -> Option<Img> {
+    let image = ICONS.with(|icons| {
+        icons
+            .borrow_mut()
+            .entry(app.to_string())
+            .or_insert_with(|| {
+                #[cfg(target_os = "macos")]
+                let png = crate::mac::app_icon_png(app, 96.);
+                #[cfg(not(target_os = "macos"))]
+                let png: Option<Vec<u8>> = None;
+                png.map(|b| std::sync::Arc::new(Image::from_bytes(ImageFormat::Png, b)))
+            })
+            .clone()
+    })?;
+    Some(img(image).size(px(size)).flex_none())
+}

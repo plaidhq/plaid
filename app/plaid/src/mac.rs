@@ -108,6 +108,34 @@ pub fn proxy() -> Option<plaid_core::llm::SystemProxy> {
     })
 }
 
+/// The icon of the app shown under `name` (a record's app), as a PNG `px` pixels square: from a running app with
+/// that localized name, else from the app LaunchServices finds by that name.
+#[allow(deprecated)]
+pub fn app_icon_png(name: &str, px: f64) -> Option<Vec<u8>> {
+    use objc2::AllocAnyThread;
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep};
+    use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
+    let ws = NSWorkspace::sharedWorkspace();
+    let running = ws.runningApplications();
+    let image = running
+        .iter()
+        .find(|a| a.localizedName().is_some_and(|n| n.to_string() == name))
+        .and_then(|a| a.icon())
+        .or_else(|| {
+            let path = ws.fullPathForApplication(&NSString::from_str(name))?;
+            Some(ws.iconForFile(&path))
+        })?;
+    let mut rect = NSRect::new(NSPoint::new(0., 0.), NSSize::new(px, px));
+    // SAFETY: `rect` outlives the call; no context or hints.
+    let cg = unsafe { image.CGImageForProposedRect_context_hints(&mut rect, None, None) }?;
+    let rep = NSBitmapImageRep::initWithCGImage(NSBitmapImageRep::alloc(), &cg);
+    // SAFETY: an empty property dictionary.
+    let png = unsafe {
+        rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+    }?;
+    Some(png.to_vec())
+}
+
 /// Name, bundle id and pid of the frontmost app.
 pub fn front() -> Option<(String, Option<String>, i32)> {
     let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;

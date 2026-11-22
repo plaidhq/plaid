@@ -1036,19 +1036,23 @@ impl History {
             .flex()
             .items_center()
             .gap(px(10.))
-            .child(
-                div()
-                    .size(px(26.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(7.))
-                    .bg(hex(RAISED2))
-                    .font(mono())
-                    .text_size(px(10.))
-                    .child(badge(&app)),
-            )
+            .child(app_icon(&app, 28.).map_or_else(
+                || {
+                    div()
+                        .size(px(26.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(7.))
+                        .bg(hex(RAISED2))
+                        .font(mono())
+                        .text_size(px(10.))
+                        .child(badge(&app))
+                        .into_any_element()
+                },
+                IntoElement::into_any_element,
+            ))
             .child(
                 div()
                     .min_w_0()
@@ -1832,9 +1836,17 @@ fn record_row(r: &Record, selected: bool, latency: bool, retrying: bool) -> Stat
                         .child(
                             div()
                                 .flex_none()
-                                .max_w(px(120.))
-                                .truncate()
-                                .child(r.app.clone().unwrap_or_else(|| "未知应用".into())),
+                                .max_w(px(134.))
+                                .flex()
+                                .items_center()
+                                .gap(px(4.))
+                                .children(r.app.as_deref().and_then(|a| app_icon(a, 12.)))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .child(r.app.clone().unwrap_or_else(|| "未知应用".into())),
+                                ),
                         )
                         .when(latency, |d| {
                             let bad = !matches!(r.llm.as_str(), "ok" | "off");

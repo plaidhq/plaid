@@ -89,6 +89,8 @@ key access) clicks through every page and writes PNGs. Differences from Swift:
   at least 15 s timeout, no history context) on the recognised text again and overwrites the record; it never pastes.
   The detail texts are selectable (drag, ⌘C); with a selection, 加入词典 appends it to hotwords.txt as one line
   (skipped when the line exists, refused over 24 characters or across lines).
+  Rows and the detail header show the app's icon (running app by name, else Launch Services by name; cached per
+  name); the letter mark stays when none is found and always on Windows. 文字 → 按应用 rows do the same.
   重试 and 重新润色 cannot be cancelled and their failures show on the HUD only;
   export does not flush an unsaved 词典 draft first.
 - 报告: new summary cards above the Swift 性能 diagnostics: half a year of daily characters as a heatmap and

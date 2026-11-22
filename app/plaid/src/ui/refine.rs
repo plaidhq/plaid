@@ -526,7 +526,10 @@ impl Refine {
                     .gap(px(10.))
                     .h(px(34.))
                     .when(i > 0, |d| d.border_t_1().border_color(hexa(LINE)))
-                    .child(app_badge(app))
+                    .child(app_icon(app, 22.).map_or_else(
+                        || app_badge(app).into_any_element(),
+                        IntoElement::into_any_element,
+                    ))
                     .child(div().flex_1().min_w_0().truncate().child(app.clone()))
                     .child(tag)
                     .child(remove),
