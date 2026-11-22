@@ -338,6 +338,38 @@ pub fn toggle_row(
         .on_click(move |_, w, cx| on_toggle(!on, w, cx))
 }
 
+/// `toggle_row`'s layout with any control on the right (a segmented choice, a button).
+pub fn option_row(
+    label: impl Into<SharedString>,
+    sub: impl Into<SharedString>,
+    control: impl IntoElement,
+) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(16.))
+        .py(px(10.))
+        .border_t_1()
+        .border_color(hexa(LINE))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(label.into())
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .line_height(px(17.))
+                        .text_color(hex(TEXT2))
+                        .child(sub.into()),
+                ),
+        )
+        .child(control)
+}
+
 pub const LABEL_W: f32 = 150.;
 
 /// Form row: label column, then the control.

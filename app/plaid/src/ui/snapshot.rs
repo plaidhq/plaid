@@ -133,6 +133,11 @@ fn hud(out: &str) -> Result<(), String> {
             vec![H::Running("天气".into()), H::Done("天气".into())],
         ),
         ("hud-note", vec![H::Note("识别结果已保存在原记录中".into())]),
+        // 显示文字 off: the light alone.
+        (
+            "hud-bare",
+            [vec![H::Listen], levels.to_vec(), vec![text(partial, false)]].concat(),
+        ),
     ];
     let mut ui = Ui::new(out)?;
     for (name, msgs) in states {
@@ -141,6 +146,12 @@ fn hud(out: &str) -> Result<(), String> {
         ui.open_with(opts, |_, cx| {
             let hud = cx.new(|_| {
                 let mut h = crate::hud::Hud::new();
+                if name == "hud-bare" {
+                    h.set_opts(crate::hud::Opts {
+                        text: false,
+                        ..Default::default()
+                    });
+                }
                 for m in msgs {
                     h.apply(m);
                 }
@@ -259,7 +270,19 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
         &up,
     )?;
 
-    ui.scroll("asrContext", 600.)?;
+    ui.scroll("silenceRMS-1", -600.)?;
+    ui.click("hudText")?;
+    ui.click("hudReveal-2")?;
+    ui.click("hudLinger-2")?;
+    ui.click("hudSound")?;
+    let o = crate::hud::Opts::load();
+    expect(
+        "hud options stored",
+        !o.text && o.reveal == crate::hud::Reveal::Instant && o.linger == 1.5 && o.sound,
+        &None,
+    )?;
+    ui.shot("voice-hud")?;
+    ui.scroll("hudText", 1600.)?;
     ui.click("hold")?;
     ui.shot("voice-menu")?;
     let want = super::general::offered()[0];

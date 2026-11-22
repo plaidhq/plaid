@@ -63,6 +63,60 @@ const TYPE_FADE: f32 = 12.;
 /// Panel width, text rows and scroll close this share of the gap to their target per frame (about 200 ms).
 const SIZE_EASE: f32 = 0.25;
 
+/// How fast new text types on (`hudReveal`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Reveal {
+    /// Paced to the speech (the default).
+    Pace,
+    Fast,
+    /// All at once.
+    Instant,
+}
+
+/// `hudLinger` choices: seconds the pasted text stays before fading.
+pub const LINGER: [f32; 3] = [0.4, 0.7, 1.5];
+
+/// The HUD options on the 声音 page, read again on every shown change.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Opts {
+    /// `hudText`: off leaves only the edge light while dictating.
+    pub text: bool,
+    pub reveal: Reveal,
+    pub linger: f32,
+    /// `hudSound`: a short sound at the start and on the paste.
+    pub sound: bool,
+}
+
+impl Default for Opts {
+    fn default() -> Opts {
+        Opts {
+            text: true,
+            reveal: Reveal::Pace,
+            linger: LINGER[1],
+            sound: false,
+        }
+    }
+}
+
+impl Opts {
+    pub fn load() -> Opts {
+        let v = crate::config::value;
+        Opts {
+            text: v("hudText").as_deref() != Some("0"),
+            reveal: match v("hudReveal").as_deref() {
+                Some("fast") => Reveal::Fast,
+                Some("instant") => Reveal::Instant,
+                _ => Reveal::Pace,
+            },
+            linger: v("hudLinger")
+                .and_then(|s| s.parse::<f32>().ok())
+                .filter(|s| LINGER.contains(s))
+                .unwrap_or(LINGER[1]),
+            sound: v("hudSound").as_deref() == Some("1"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum State {
     Listen,
@@ -134,6 +188,7 @@ pub struct Hud {
     visible: bool,
     /// Bumped on every shown change; a pending auto-hide only fires if nothing changed since.
     epoch: u64,
+    opts: Opts,
 }
 
 /// What the light along the panel's bottom edge shows.
@@ -176,6 +231,7 @@ impl Hud {
             blank: false,
             visible: false,
             epoch: 0,
+            opts: Opts::default(),
         }
     }
 
@@ -231,7 +287,7 @@ impl Hud {
             Msg::Refining(t) => self.with(t, State::Refining, None),
             Msg::Done(t) => {
                 self.ran = prev == State::Running;
-                self.with(t, State::Done, Some(0.7))
+                self.with(t, State::Done, Some(self.opts.linger))
             }
             Msg::Saved(t) => self.with(t, State::Saved, Some(8.)),
             Msg::Flash(t) => self.with(t, State::Flash, Some(5.)),
@@ -277,6 +333,10 @@ impl Hud {
             } else {
                 self.chars as f32
             };
+            if self.opts.reveal == Reveal::Instant {
+                self.reveal = self.chars as f32;
+                self.refade = None;
+            }
         }
         if !matches!(state, State::Listen | State::Quiet | State::Finishing) {
             self.command = false;
@@ -412,7 +472,9 @@ impl Hud {
 
     /// Reveal pacing: steady while listening, catching up once the speech has ended.
     fn pace(&self) -> (f32, f32) {
-        if self.state == State::Listen {
+        if self.opts.reveal == Reveal::Fast {
+            (TYPE_CATCH_END / 2., TYPE_MIN_END)
+        } else if self.state == State::Listen {
             (TYPE_CATCH, TYPE_MIN)
         } else {
             (TYPE_CATCH_END, TYPE_MIN_END)
@@ -425,6 +487,11 @@ impl Hud {
             .char_indices()
             .nth(n)
             .map_or(self.text.len(), |(i, _)| i)
+    }
+
+    #[cfg(feature = "snapshot")]
+    pub(crate) fn set_opts(&mut self, o: Opts) {
+        self.opts = o;
     }
 
     #[cfg(feature = "snapshot")]
@@ -687,6 +754,31 @@ impl Render for Hud {
         } else {
             self.last = None;
         }
+        // 显示文字 off: while dictating, only the light at the minimum panel width, without the panel.
+        if !self.opts.text
+            && matches!(
+                self.state,
+                State::Listen | State::Finishing | State::Refining | State::Done
+            )
+        {
+            let track = PANEL_MIN_W - 2. * RADIUS;
+            return div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .justify_end()
+                .items_center()
+                .pb(px(PAD_BOTTOM))
+                .child(
+                    div()
+                        .relative()
+                        .opacity(self.opacity())
+                        .w(px(PANEL_MIN_W))
+                        .h(px(PANEL_PAD_Y))
+                        .child(light(RADIUS + lit.x * track, lit.w * track, lit.rgb, lit.a)),
+                )
+                .into_any_element();
+        }
         let edge = light(RADIUS + lit.x * track, lit.w * track, lit.rgb, lit.a);
         // The text wraps at the widest panel and is clipped to the rows in view, scrolled to keep the newest row
         // last; the panel easing around it never reflows it.
@@ -883,7 +975,20 @@ pub fn hide(handle: &WindowHandle<Hud>, cx: &mut App) {
 
 /// Applies one controller HUD change to the window: show, hide, schedule the auto-hide, animate the edge light.
 pub fn apply(handle: &WindowHandle<Hud>, m: Msg, cx: &mut App) {
+    let chime = match m {
+        Msg::Listen => Some(true),
+        Msg::Done(_) => Some(false),
+        _ => None,
+    };
     let Ok((effect, epoch)) = handle.update(cx, |hud, window, cx| {
+        if !matches!(m, Msg::Level(_)) {
+            hud.opts = Opts::load();
+        }
+        if hud.opts.sound
+            && let Some(start) = chime
+        {
+            native::chime(start);
+        }
         let effect = hud.apply(m);
         match effect {
             Effect::Ignore | Effect::Hide => {}
@@ -1000,7 +1105,20 @@ pub mod native {
         let Some(mtm) = objc2::MainThreadMarker::new() else {
             return;
         };
-        let Some(screen) = objc2_app_kit::NSScreen::mainScreen(mtm) else {
+        // 跟随鼠标: the screen under the pointer instead.
+        let mouse = (crate::config::value("hudMouseScreen").as_deref() == Some("1"))
+            .then(|| {
+                let p = objc2_app_kit::NSEvent::mouseLocation();
+                objc2_app_kit::NSScreen::screens(mtm).into_iter().find(|s| {
+                    let f = s.frame();
+                    p.x >= f.origin.x
+                        && p.x < f.origin.x + f.size.width
+                        && p.y >= f.origin.y
+                        && p.y < f.origin.y + f.size.height
+                })
+            })
+            .flatten();
+        let Some(screen) = mouse.or_else(|| objc2_app_kit::NSScreen::mainScreen(mtm)) else {
             return;
         };
         let f = screen.visibleFrame();
@@ -1010,6 +1128,15 @@ pub mod native {
         // Moving onto a screen with another scale: the layer's contents scale and drawable size follow on this call
         // (GPUI's view handles it); the caller then has GPUI's Window re-read the scale.
         view.viewDidChangeBackingProperties();
+    }
+
+    /// A short system sound: Tink as dictation starts, Pop on the paste.
+    pub fn chime(start: bool) {
+        let name = objc2_foundation::NSString::from_str(if start { "Tink" } else { "Pop" });
+        if let Some(s) = objc2_app_kit::NSSound::soundNamed(&name) {
+            s.setVolume(0.35);
+            s.play();
+        }
     }
 
     /// Main-thread facts for the activation test.
@@ -1048,11 +1175,33 @@ pub mod native {
     pub fn set_visible(_: &Window, _: bool) -> bool {
         false
     }
+    pub fn chime(_: bool) {}
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Effect, Hud, Msg, State, level};
+
+    #[test]
+    fn options_change_reveal_and_linger() {
+        let mut h = Hud::new();
+        h.opts = super::Opts {
+            reveal: super::Reveal::Instant,
+            linger: 1.5,
+            ..Default::default()
+        };
+        h.visible = true;
+        h.apply(Msg::Listen);
+        h.apply(Msg::Text {
+            text: "我们明天开会".into(),
+            command: false,
+        });
+        assert!(!h.typing());
+        assert_eq!(
+            h.apply(Msg::Done("我们明天开会。".into())),
+            Effect::Show(Some(1.5))
+        );
+    }
 
     #[test]
     fn transitions() {

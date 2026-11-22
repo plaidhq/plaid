@@ -1,7 +1,9 @@
 //! 声音 (shortcuts, microphone, recognition) and 设置 (API key, data): one view, two pages.
 use super::key_field::KeyField;
 use super::mav::*;
-use super::{Live, Model, bool_str, data_dir_label, field, on_unless_zero, pick_list, reveal};
+use super::{
+    Live, Model, bool_str, data_dir_label, field, on_if_one, on_unless_zero, pick_list, reveal,
+};
 use crate::config;
 use gpui_kit::base::input::{InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder;
@@ -782,8 +784,81 @@ impl General {
             .child(
                 group_body()
                     .child(card_head("屏幕底部光带", "说话时出现在当前屏幕底部"))
-                    .child(hud_states()),
+                    .child(hud_states())
+                    .child(div().h(px(6.)))
+                    .children(self.hud_options()),
             )
+    }
+
+    fn hud_options(&self) -> Vec<AnyElement> {
+        let opts = crate::hud::Opts::load();
+        let flag = |key: &'static str, on: bool, label, sub| {
+            let model = self.model.clone();
+            toggle_row(key, on, label, sub, move |v, _, cx| {
+                model.update(cx, |m, cx| m.set(key, bool_str(v), cx));
+            })
+            .into_any_element()
+        };
+        let reveal = {
+            let model = self.model.clone();
+            use crate::hud::Reveal;
+            let picked = match opts.reveal {
+                Reveal::Pace => 0,
+                Reveal::Fast => 1,
+                Reveal::Instant => 2,
+            };
+            segmented(
+                "hudReveal",
+                &["跟着说话", "快", "立即"],
+                picked,
+                move |i, _, cx| {
+                    let v = ["pace", "fast", "instant"][i.min(2)];
+                    model.update(cx, |m, cx| m.set("hudReveal", v, cx));
+                },
+            )
+        };
+        let linger = {
+            let model = self.model.clone();
+            use crate::hud::LINGER;
+            let picked = LINGER.iter().position(|&s| s == opts.linger).unwrap_or(1);
+            segmented(
+                "hudLinger",
+                &["0.4 s", "0.7 s", "1.5 s"],
+                picked,
+                move |i, _, cx| {
+                    let v = LINGER[i.min(LINGER.len() - 1)].to_string();
+                    model.update(cx, |m, cx| m.set("hudLinger", v, cx));
+                },
+            )
+        };
+        let mut rows = vec![
+            flag(
+                "hudText",
+                opts.text,
+                "显示文字",
+                "关掉后说话时只留光带；提示和出错仍显示文字",
+            ),
+            option_row("文字速度", "跟着说话的节奏逐字出现，或者更快", reveal).into_any_element(),
+            option_row("松开后停留", "粘贴完成后文字停留多久再淡出", linger).into_any_element(),
+            flag(
+                "hudSound",
+                opts.sound,
+                "声音提示",
+                "开始说话和粘贴时轻响一下",
+            ),
+        ];
+        if cfg!(target_os = "macos") {
+            rows.insert(
+                1,
+                flag(
+                    "hudMouseScreen",
+                    on_if_one("hudMouseScreen"),
+                    "跟随鼠标所在屏幕",
+                    "多屏时出现在鼠标所在的屏幕；默认跟随正在输入的窗口",
+                ),
+            );
+        }
+        rows
     }
 
     fn general_page(&self) -> Stateful<Div> {

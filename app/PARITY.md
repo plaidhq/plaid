@@ -68,7 +68,9 @@ removed afterwards (migrate.rs, commit fa9d596).
 Top tabs 今天, 报告, 历史 | 声音, 文字, 词典, 命令 | 设置. Space Grotesk and JetBrains Mono are bundled
 (resources/fonts); CJK falls back to the system font. Tray 历史/设置 open the window on that page.
 今天/报告/历史/词典/命令 carry over the Swift pages (概览, 性能, 历史, 词典, 命令). 声音 holds the shortcut,
-microphone list with a live meter, recognition options and HUD states; 设置 holds the Volc key and data folder.
+microphone list with a live meter, recognition options, HUD states and HUD options (text on/off, reveal speed
+跟着说话/快/立即, linger 0.4/0.7/1.5 s, start/paste chime, follow the mouse screen; chime and mouse screen are
+macOS-only, no-ops on Windows); 设置 holds the Volc key and data folder.
 文字 adds six local text rules (core/rules.rs: fillers, repeats, corrections, final 。, CJK–Latin spacing, Chinese
 numerals), all off by default, applied before the LLM pass and without it, so short sentences get them too; then
 the LLM level and its threshold (`llmMinChars`): 关 (rules only, `llmEnabled` 0), 轻度 (`llmLevel` light: a
