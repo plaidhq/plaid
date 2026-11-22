@@ -5,7 +5,7 @@ use crate::ui::mav;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use plaid_core::dictation::Hud as Msg;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// The panel per the design; the window adds room around it for the drop shadow. The panel sits at the bottom
 /// center of the window and fits the text: it widens up to `PANEL_MAX_W`, then grows upward up to `MAX_LINES`.
@@ -42,6 +42,10 @@ const SWEEP_W: f32 = 0.28;
 const SWEEP_S: f32 = 1.6;
 /// Animation frame interval while the edge moves.
 const FRAME_MS: u64 = 16;
+/// A state change morphs the edge light and text color over this long instead of cutting.
+const MORPH_S: f32 = 0.28;
+/// The auto-hide fades the panel out over this long.
+const FADE_S: f32 = 0.2;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum State {
@@ -89,6 +93,14 @@ pub struct Hud {
     rows: usize,
     /// Last measured text, so animation frames don't reshape it.
     fit: Option<(SharedString, (f32, usize))>,
+    /// What the last frame showed, the start of the next morph, and when that morph started.
+    lit: Lit,
+    from: Lit,
+    morph: Option<Instant>,
+    /// Auto-hide fade-out in progress since.
+    fade: Option<Instant>,
+    /// An animation loop is running.
+    looping: bool,
     visible: bool,
     /// Bumped on every shown change; a pending auto-hide only fires if nothing changed since.
     epoch: u64,
@@ -119,6 +131,11 @@ impl Hud {
             text_w: 0.,
             rows: 1,
             fit: None,
+            lit: Lit::default(),
+            from: Lit::default(),
+            morph: None,
+            fade: None,
+            looping: false,
             visible: false,
             epoch: 0,
         }
@@ -174,7 +191,7 @@ impl Hud {
             Msg::Refining(t) => self.with(t, State::Refining, None),
             Msg::Done(t) => {
                 self.ran = prev == State::Running;
-                self.with(t, State::Done, Some(0.5))
+                self.with(t, State::Done, Some(0.7))
             }
             Msg::Saved(t) => self.with(t, State::Saved, Some(8.)),
             Msg::Flash(t) => self.with(t, State::Flash, Some(5.)),
@@ -188,6 +205,14 @@ impl Hud {
         {
             self.clock = Instant::now();
         }
+        // Morph from what is on screen; a fresh show starts from its target.
+        if self.visible && state != prev {
+            self.from = self.lit;
+            self.morph = Some(Instant::now());
+        } else if !self.visible {
+            self.morph = None;
+        }
+        self.fade = None;
         self.state = state;
         if !matches!(state, State::Listen | State::Quiet | State::Finishing) {
             self.command = false;
@@ -213,15 +238,25 @@ impl Hud {
     /// The edge moves on its own: eases toward the level, or sweeps.
     fn animates(&self) -> bool {
         self.visible
-            && matches!(
-                self.state,
-                State::Listen | State::Quiet | State::Finishing | State::Running | State::Refining
-            )
+            && (self.morph.is_some()
+                || self.fade.is_some()
+                || matches!(
+                    self.state,
+                    State::Listen
+                        | State::Quiet
+                        | State::Finishing
+                        | State::Running
+                        | State::Refining
+                ))
     }
 
     /// One animation frame: about 60 ms to close most of the gap to the latest level.
     /// False when nothing on screen would change, so a steady level costs no redraw.
     pub(crate) fn frame(&mut self) -> bool {
+        if self.morph.is_some() || self.fade.is_some() {
+            self.shown += (self.level - self.shown) * 0.3;
+            return true;
+        }
         let gap = self.level - self.shown;
         if gap.abs() < 0.002 {
             self.shown = self.level;
@@ -242,6 +277,100 @@ impl Hud {
             State::Ask => Edge::Fixed(CYAN, 1.),
         }
     }
+
+    /// Where the edge light and text color should be now, ignoring any morph.
+    fn target(&self) -> Lit {
+        let (x, w, color, a) = match self.edge() {
+            Edge::Level(c, l) => {
+                let w = EDGE_MIN + (EDGE_MAX - EDGE_MIN) * l;
+                ((1. - w) / 2., w, c, 0.35 + 0.65 * l)
+            }
+            Edge::Fixed(c, f) => ((1. - f) / 2., f, c, 0.9),
+            Edge::Sweep(c) => {
+                let t = self.clock.elapsed().as_secs_f32() / SWEEP_S;
+                // Starts centered, where the level light was, then swings side to side.
+                let p = 0.5 + 0.5 * (t * std::f32::consts::TAU).sin();
+                ((1. - SWEEP_W) * p, SWEEP_W, c, 0.75)
+            }
+        };
+        let live = matches!(self.state, State::Listen | State::Finishing);
+        let text = if self.text.is_empty() {
+            0xffffff73
+        } else if matches!(
+            self.state,
+            State::Finishing | State::Refining | State::Running
+        ) {
+            0xffffff99
+        } else if self.state == State::Quiet {
+            AMBER << 8 | 0xff
+        } else if self.command && live {
+            CYAN << 8 | 0xff
+        } else {
+            0xffffffff
+        };
+        Lit {
+            x,
+            w,
+            rgb: rgba(color << 8 | 0xff),
+            a,
+            text: rgba(text),
+        }
+    }
+
+    /// This frame's edge light and text color: the target, or on the way to it after a state change.
+    fn current(&mut self) -> Lit {
+        let target = self.target();
+        let t = self
+            .morph
+            .map_or(1., |m| m.elapsed().as_secs_f32() / MORPH_S);
+        self.lit = if t >= 1. {
+            self.morph = None;
+            target
+        } else {
+            // Ease out: most of the move up front, settling gently.
+            self.from.lerp(&target, 1. - (1. - t).powi(3))
+        };
+        self.lit
+    }
+
+    /// Panel opacity: 1, or falling during the auto-hide fade.
+    fn opacity(&self) -> f32 {
+        self.fade.map_or(1., |f| {
+            (1. - f.elapsed().as_secs_f32() / FADE_S).clamp(0., 1.)
+        })
+    }
+}
+
+/// Edge light geometry (fractions of the track), color and alpha, plus the text color; all interpolate.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+struct Lit {
+    x: f32,
+    w: f32,
+    rgb: [f32; 4],
+    a: f32,
+    text: [f32; 4],
+}
+
+impl Lit {
+    fn lerp(&self, to: &Lit, k: f32) -> Lit {
+        let f = |a: f32, b: f32| a + (b - a) * k;
+        let v = |a: [f32; 4], b: [f32; 4]| std::array::from_fn(|i| f(a[i], b[i]));
+        Lit {
+            x: f(self.x, to.x),
+            w: f(self.w, to.w),
+            rgb: v(self.rgb, to.rgb),
+            a: f(self.a, to.a),
+            text: v(self.text, to.text),
+        }
+    }
+}
+
+fn rgba(c: u32) -> [f32; 4] {
+    std::array::from_fn(|i| ((c >> (24 - 8 * i)) & 0xff) as f32 / 255.)
+}
+
+fn color([r, g, b, a]: [f32; 4]) -> Rgba {
+    Rgba { r, g, b, a }
 }
 
 /// Buffer RMS (Int16 scale) to 0...1: log scale between 60 (silence) and 3000 (loud speech).
@@ -257,13 +386,14 @@ const GREEN: u32 = 0x7ee08a;
 const RED: u32 = 0xff7a70;
 
 /// A light segment `w` wide starting at `x`, fading out toward both ends, with a soft glow from its middle.
-fn light(x: f32, w: f32, color: u32, alpha: f32) -> Div {
-    let a = (alpha.clamp(0., 1.) * 255.) as u32;
-    let half = |from: u32, to: u32| {
+fn light(x: f32, w: f32, rgb: [f32; 4], alpha: f32) -> Div {
+    let a = alpha.clamp(0., 1.);
+    let at = |a: f32| color([rgb[0], rgb[1], rgb[2], a]);
+    let half = |from: f32, to: f32| {
         div().w(px(w / 2.)).h_full().bg(linear_gradient(
             90.,
-            linear_color_stop(mav::hexa(color << 8 | from), 0.),
-            linear_color_stop(mav::hexa(color << 8 | to), 1.),
+            linear_color_stop(at(from), 0.),
+            linear_color_stop(at(to), 1.),
         ))
     };
     div()
@@ -273,8 +403,8 @@ fn light(x: f32, w: f32, color: u32, alpha: f32) -> Div {
         .w(px(w))
         .h(px(EDGE_H))
         .flex()
-        .child(half(0, a))
-        .child(half(a, 0))
+        .child(half(0., a))
+        .child(half(a, 0.))
         .child(
             // Glow: a short core whose blurred shadow lights the panel edge around the middle.
             div()
@@ -283,14 +413,13 @@ fn light(x: f32, w: f32, color: u32, alpha: f32) -> Div {
                 .left(px(w * 0.35))
                 .w(px(w * 0.3))
                 .h(px(EDGE_H))
-                .shadow(vec![mav::shadow(
-                    0.,
-                    0.,
-                    10.,
-                    0.,
-                    color << 8 | (a as f32 * 0.6) as u32,
-                    false,
-                )]),
+                .shadow(vec![BoxShadow {
+                    color: at(a * 0.6).into(),
+                    offset: point(px(0.), px(0.)),
+                    blur_radius: px(10.),
+                    spread_radius: px(0.),
+                    inset: false,
+                }]),
         )
 }
 
@@ -335,10 +464,6 @@ impl Render for Hud {
             _ => None,
         };
         let live = matches!(self.state, State::Listen | State::Finishing);
-        let dim = matches!(
-            self.state,
-            State::Finishing | State::Refining | State::Running
-        );
         let (text, placeholder) = if self.text.is_empty() {
             let p = match self.state {
                 State::Listen => "请说话…",
@@ -347,17 +472,6 @@ impl Render for Hud {
             (SharedString::from(p), true)
         } else {
             (self.text.clone(), false)
-        };
-        let text_color = if placeholder {
-            mav::hexa(0xffffff73)
-        } else if dim {
-            mav::hexa(0xffffff99)
-        } else if self.state == State::Quiet {
-            mav::hex(AMBER)
-        } else if self.command && live {
-            mav::hex(CYAN)
-        } else {
-            mav::hex(WHITE)
         };
         let (w, rows) = match &self.fit {
             Some((t, m)) if *t == text => *m,
@@ -374,28 +488,13 @@ impl Render for Hud {
         let panel_w = (self.text_w + CHROME_W).clamp(PANEL_MIN_W, PANEL_MAX_W);
         // The light runs between the corner curves, so it never spills past the rounded edge.
         let track = panel_w - 2. * RADIUS;
-        let edge = match self.edge() {
-            Edge::Level(c, l) => {
-                let w = track * (EDGE_MIN + (EDGE_MAX - EDGE_MIN) * l);
-                light(RADIUS + (track - w) / 2., w, c, 0.35 + 0.65 * l)
-            }
-            Edge::Fixed(c, f) => {
-                let w = track * f;
-                light(RADIUS + (track - w) / 2., w, c, 0.9)
-            }
-            Edge::Sweep(c) => {
-                let t = self.clock.elapsed().as_secs_f32() / SWEEP_S;
-                // Starts centered, where the level light was, then swings side to side.
-                let p = 0.5 + 0.5 * (t * std::f32::consts::TAU).sin();
-                let w = track * SWEEP_W;
-                light(RADIUS + (track - w) * p, w, c, 0.75)
-            }
-        };
+        let lit = self.current();
+        let edge = light(RADIUS + lit.x * track, lit.w * track, lit.rgb, lit.a);
         let line = div()
             .min_h(px(self.rows as f32 * LINE_H))
             .text_size(px(TEXT_SIZE))
             .line_height(px(LINE_H))
-            .text_color(text_color)
+            .text_color(color(lit.text))
             .line_clamp(MAX_LINES);
         // Live partials keep their newest words; everything else keeps its start.
         let line = if live {
@@ -413,6 +512,7 @@ impl Render for Hud {
             .child(
                 div()
                     .relative()
+                    .opacity(self.opacity())
                     .w(px(panel_w))
                     .px(px(PANEL_PAD_X))
                     .py(px(PANEL_PAD_Y))
@@ -525,14 +625,14 @@ pub fn hide(handle: &WindowHandle<Hud>, cx: &mut App) {
     let _ = handle.update(cx, |hud, window, _| {
         hud.epoch += 1;
         hud.visible = false;
+        hud.fade = None;
         native::set_visible(window, false);
     });
 }
 
 /// Applies one controller HUD change to the window: show, hide, schedule the auto-hide, animate the edge light.
 pub fn apply(handle: &WindowHandle<Hud>, m: Msg, cx: &mut App) {
-    let Ok((effect, anim_started, epoch)) = handle.update(cx, |hud, window, cx| {
-        let was_animating = hud.animates();
+    let Ok((effect, epoch)) = handle.update(cx, |hud, window, cx| {
         let effect = hud.apply(m);
         match effect {
             Effect::Ignore | Effect::Hide => {}
@@ -547,7 +647,7 @@ pub fn apply(handle: &WindowHandle<Hud>, m: Msg, cx: &mut App) {
                 cx.notify();
             }
         }
-        (effect, !was_animating && hud.animates(), hud.epoch)
+        (effect, hud.epoch)
     }) else {
         return;
     };
@@ -556,14 +656,31 @@ pub fn apply(handle: &WindowHandle<Hud>, m: Msg, cx: &mut App) {
         Effect::Hide => hide(&handle, cx),
         Effect::Show(Some(secs)) => {
             cx.spawn(async move |cx| {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs_f32(secs))
-                    .await;
+                let wait = |s: f32| cx.background_executor().timer(Duration::from_secs_f32(s));
+                wait(secs).await;
+                // Fade out, then hide, as long as nothing was shown meanwhile.
+                let current = |hud: &Hud| hud.epoch == epoch;
+                let fading = cx.update(|cx| {
+                    let go = handle
+                        .update(cx, |hud, _, _| {
+                            let go = current(hud);
+                            if go {
+                                hud.fade = Some(Instant::now());
+                            }
+                            go
+                        })
+                        .unwrap_or(false);
+                    if go {
+                        animate(handle, cx);
+                    }
+                    go
+                });
+                if !fading {
+                    return;
+                }
+                wait(FADE_S).await;
                 cx.update(|cx| {
-                    if handle
-                        .read_with(cx, |hud, _| hud.epoch == epoch)
-                        .unwrap_or(false)
-                    {
+                    if handle.read_with(cx, |hud, _| current(hud)).unwrap_or(false) {
                         hide(&handle, cx);
                     }
                 });
@@ -572,30 +689,44 @@ pub fn apply(handle: &WindowHandle<Hud>, m: Msg, cx: &mut App) {
         }
         _ => {}
     }
-    if anim_started {
-        cx.spawn(async move |cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(FRAME_MS))
-                    .await;
-                let go = cx.update(|cx| {
-                    handle
-                        .update(cx, |hud, _, cx| {
-                            let go = hud.animates();
-                            if go && hud.frame() {
-                                cx.notify();
-                            }
-                            go
-                        })
-                        .unwrap_or(false)
-                });
-                if !go {
-                    break;
-                }
-            }
+    animate(handle, cx);
+}
+
+/// Runs the frame loop while the HUD animates; at most one loop at a time.
+fn animate(handle: WindowHandle<Hud>, cx: &mut App) {
+    let start = handle
+        .update(cx, |hud, _, _| {
+            let start = !hud.looping && hud.animates();
+            hud.looping |= start;
+            start
         })
-        .detach();
+        .unwrap_or(false);
+    if !start {
+        return;
     }
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(FRAME_MS))
+                .await;
+            let go = cx.update(|cx| {
+                handle
+                    .update(cx, |hud, _, cx| {
+                        let go = hud.animates();
+                        if go && hud.frame() {
+                            cx.notify();
+                        }
+                        hud.looping = go;
+                        go
+                    })
+                    .unwrap_or(false)
+            });
+            if !go {
+                break;
+            }
+        }
+    })
+    .detach();
 }
 
 #[cfg(target_os = "macos")]
@@ -734,10 +865,10 @@ mod tests {
         assert_eq!(h.apply(Msg::Level(100.)), Effect::Ignore);
         h.apply(Msg::Running("天气".into()));
         assert!(!h.command);
-        assert_eq!(h.apply(Msg::Done("天气".into())), Effect::Show(Some(0.5)));
+        assert_eq!(h.apply(Msg::Done("天气".into())), Effect::Show(Some(0.7)));
         assert!(h.ran);
         h.apply(Msg::Listen);
-        assert_eq!(h.apply(Msg::Done("text".into())), Effect::Show(Some(0.5)));
+        assert_eq!(h.apply(Msg::Done("text".into())), Effect::Show(Some(0.7)));
         assert!(!h.ran);
         assert_eq!(h.apply(Msg::Failed("x".into())), Effect::Show(Some(5.)));
         assert_eq!(h.apply(Msg::Hide), Effect::Hide);
@@ -788,5 +919,37 @@ mod tests {
         assert!(h.shown > 0.85, "{}", h.shown);
         h.apply(Msg::Listen);
         assert_eq!(h.shown, 0.);
+    }
+
+    #[test]
+    fn state_change_morphs_from_what_was_shown() {
+        let mut h = Hud::new();
+        h.visible = true;
+        h.apply(Msg::Listen);
+        h.current();
+        h.apply(Msg::Text {
+            text: "hi".into(),
+            command: false,
+        });
+        assert!(
+            h.morph.is_none(),
+            "new text in the same state doesn't morph"
+        );
+        h.apply(Msg::Finishing);
+        let sweep = h.current();
+        h.apply(Msg::Done("hi".into()));
+        let start = h.current();
+        assert!((start.w - sweep.w).abs() < 0.05, "{start:?}");
+        h.morph = Some(super::Instant::now() - super::Duration::from_secs_f32(super::MORPH_S));
+        let end = h.current();
+        assert_eq!(
+            (end.w, end.rgb),
+            (1., super::rgba(super::GREEN << 8 | 0xff))
+        );
+        assert!(h.morph.is_none());
+        // Hidden: a fresh show starts at its target.
+        h.visible = false;
+        h.apply(Msg::Listen);
+        assert!(h.morph.is_none());
     }
 }

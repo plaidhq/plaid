@@ -1,6 +1,6 @@
 // Plaid: hold-to-talk dictation.
 //   plaid                 normal run
-//   plaid --hud-test [s]  show the HUD, log activation/key-window facts, quit (exit 1 if focus moved)
+//   plaid --hud-test [s]  show the HUD, feed levels, finish, auto-hide; log activation/key-window facts, quit (exit 1 if focus moved)
 //   plaid --file a.wav    one utterance through the controller with the WAV as the mic; prints partials and the paste
 //   plaid --recover [at]  recognize a record's saved audio again (default: newest with audio), save in place
 //   plaid --store-key     read the API key from stdin into this app's credential store
@@ -201,9 +201,10 @@ fn hud_test(hud: WindowHandle<hud::Hud>, hold: u64, cx: &mut App) {
         cx.update(|cx| hud::apply(&hud, Hud::Finishing, cx));
         sleep(hold * 1000).await;
         let end = probe("end of hold", cx);
-        cx.update(|cx| hud::hide(&hud, cx));
-        sleep(100).await;
-        let hidden = probe("after hide", cx);
+        // The final result morphs the edge to green, then the auto-hide fades the panel out.
+        cx.update(|cx| hud::apply(&hud, Hud::Done("测试 HUD".into()), cx));
+        sleep(1200).await;
+        let hidden = probe("after auto-hide", cx);
         let pid = |p: &Option<hud::native::Probe>| p.as_ref().map(|x| x.frontmost.0);
         let ok = [&after, &late, &end, &hidden]
             .iter()
