@@ -99,6 +99,8 @@ pub struct Commands {
     wake: Entity<InputState>,
     adding: bool,
     next_uid: usize,
+    /// uid of the card whose editor is expanded; the others show as one row.
+    open: Option<usize>,
 }
 
 impl Commands {
@@ -123,6 +125,7 @@ impl Commands {
             wake,
             adding: false,
             next_uid: 0,
+            open: None,
         };
         this.reload(window, cx);
         this
@@ -278,6 +281,7 @@ impl Commands {
         };
         let card = self.card(window, cx);
         fill(&card, &a, window, cx);
+        self.open = Some(card.uid);
         self.cards.push(card);
         self.list.push(a);
         self.save();
@@ -375,58 +379,143 @@ impl Commands {
             .collect()
     }
 
-    fn trigger_rows(&self, window: &Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn trigger_card(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let bare = config::value("commandMode").as_deref() == Some("bare");
         let model = self.model.clone();
-        let mut rows = vec![
-            row(
-                "触发方式：",
-                div().flex().child(segmented(
-                    "commandMode",
-                    &["唤醒词", "直接说命令名"],
-                    usize::from(bare),
-                    move |i, _, cx| {
-                        let v = if i == 1 { "bare" } else { "wake" };
-                        model.update(cx, |m, cx| m.set("commandMode", v, cx));
-                    },
-                )),
-            )
-            .into_any_element(),
-            row(
-                "",
-                if bare {
-                    hint("以命令名开头的句子都会执行。口述内容碰巧以命令名开头也会触发，例如「搜索引擎优化……」会执行「搜索」").text_color(hex(AMBER))
-                } else {
-                    hint("只有以唤醒词开头的句子当作命令；唤醒词后没有匹配的命令时提示，不粘贴")
-                },
-            )
-            .into_any_element(),
-        ];
-        if !bare {
-            let w = self.wake.read(cx).value();
-            let w = w.trim();
-            rows.push(
-                row(
-                    "唤醒词：",
-                    hit("wakeWord")
-                        .w(px(200.))
-                        .child(super::field(&self.wake, 200., window, cx)),
-                )
-                .into_any_element(),
-            );
-            rows.push(
-                row(
-                    "",
-                    hint(if w.is_empty() {
-                        "为空时等同直接说命令名".to_string()
-                    } else {
-                        format!("例如「{w}，搜索 Swift 并发」")
+        let w = self.wake.read(cx).value();
+        let w = w.trim().to_string();
+        let note = if bare {
+            hint("以命令名开头的句子都会执行。口述内容碰巧以命令名开头也会触发，例如「搜索引擎优化……」会执行「搜索」")
+                .text_color(hex(AMBER))
+        } else if w.is_empty() {
+            hint("唤醒词为空时等同直接说命令名")
+        } else {
+            hint(format!(
+                "只有以唤醒词开头的句子当作命令，例如「{w}，搜索 Swift 并发」；唤醒词后没有匹配的命令时提示，不粘贴"
+            ))
+        };
+        group_body()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(14.))
+                    .child(div().text_size(px(15.)).font_weight(medium()).child("触发"))
+                    .child(segmented(
+                        "commandMode",
+                        &["唤醒词", "直接说命令名"],
+                        usize::from(bare),
+                        move |i, _, cx| {
+                            let v = if i == 1 { "bare" } else { "wake" };
+                            model.update(cx, |m, cx| m.set("commandMode", v, cx));
+                        },
+                    ))
+                    .when(!bare, |d| {
+                        d.child(div().text_color(hex(TEXT2)).child("唤醒词")).child(
+                            hit("wakeWord")
+                                .w(px(160.))
+                                .child(super::field(&self.wake, 160., window, cx)),
+                        )
                     }),
+            )
+            .child(note)
+    }
+
+    /// One command folded to a line: 「name」, aliases, a leader, then the shell line and how its output is used.
+    fn command_row(&self, i: usize, open: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+        let a = &self.list[i];
+        let uid = self.cards[i].uid;
+        let broken =
+            a.name.trim().is_empty() || a.run.trim().is_empty() || !self.conflicts(i).is_empty();
+        let name = a.name.trim();
+        let run = a.run.trim().lines().next().unwrap_or("").to_string();
+        let output = match a.output {
+            Output::None => None,
+            Output::Hud => Some("HUD"),
+            Output::Paste => Some("粘贴"),
+        };
+        hit(SharedString::from(format!("cmd-{i}-row")))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .min_h(px(42.))
+            .py(px(8.))
+            .when(i > 0, |d| d.border_t_1().border_color(hexa(LINE)))
+            .cursor_pointer()
+            .child(icon(
+                if open {
+                    "plaid/chev-down.svg"
+                } else {
+                    "plaid/chev-right.svg"
+                },
+                11.,
+                hex(TEXT3),
+            ))
+            .child(
+                div()
+                    .flex_none()
+                    .max_w(px(220.))
+                    .truncate()
+                    .font_weight(medium())
+                    .map(|d| {
+                        if name.is_empty() {
+                            d.text_color(hex(TEXT3)).child("未命名")
+                        } else {
+                            d.child(format!("「{name}」"))
+                        }
+                    }),
+            )
+            .when(!a.aliases.is_empty(), |d| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .max_w(px(180.))
+                        .truncate()
+                        .text_size(px(12.))
+                        .text_color(hex(TEXT3))
+                        .child(format!("也说 {}", a.aliases.join(" / "))),
                 )
-                .into_any_element(),
-            );
-        }
-        rows
+            })
+            .when(broken, |d| d.child(div().text_color(hex(AMBER)).child("⚠")))
+            .child(div().flex_1().min_w(px(16.)).h(px(1.)).bg(hexa(LINE)))
+            .child(
+                div()
+                    .flex_none()
+                    .max_w(px(340.))
+                    .truncate()
+                    .px(px(8.))
+                    .py(px(2.))
+                    .rounded(px(6.))
+                    .bg(hex(WELL))
+                    .border_1()
+                    .border_color(hexa(LINE))
+                    .font(mono())
+                    .text_size(px(12.))
+                    .map(|d| {
+                        if run.is_empty() {
+                            d.text_color(hex(TEXT3)).child("（空）")
+                        } else {
+                            d.text_color(hex(TEXT2)).child(run)
+                        }
+                    }),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(32.))
+                    .text_size(px(11.))
+                    .text_color(hex(TEXT3))
+                    .child(output.unwrap_or("—")),
+            )
+            .when(a.confirm, |d| d.child(keycap("⏎")))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.open = if this.open == Some(uid) {
+                    None
+                } else {
+                    Some(uid)
+                };
+                cx.notify();
+            }))
     }
 
     fn add_menu(&self, cx: &mut Context<Self>) -> Div {
@@ -528,7 +617,12 @@ impl Commands {
             cx.listener(move |this, _, _, cx| this.try_run(i, cx)),
         );
         let lock = |el: Stateful<Div>| if locked { disabled(el) } else { el };
-        let mut body = group_body()
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .pt(px(4.))
+            .pb(px(14.))
             .child(row(
                 "命令名：",
                 div()
@@ -647,37 +741,31 @@ impl Render for Commands {
                 "打开 actions.json",
                 cx.listener(|this, _, _, cx| this.open_file(cx)),
             ));
+        let mut list = group_body().gap(px(0.)).child(
+            card_head("命令", format!("{n} 个 · 点一行展开编辑"))
+                .items_center()
+                .pb(px(8.))
+                .child(self.add_menu(cx)),
+        );
+        if n == 0 {
+            list = list.child(
+                div()
+                    .py(px(10.))
+                    .child(hint("还没有命令。从「添加」里选一个示例开始。")),
+            );
+        }
+        for i in 0..n {
+            let open = self.open == Some(self.cards[i].uid);
+            list = list.child(self.command_row(i, open, cx));
+            if open {
+                list = list.child(self.card_view(i, window, cx));
+            }
+        }
         let commands = div()
             .flex()
             .flex_col()
-            .child(
-                div()
-                    .flex()
-                    .items_end()
-                    .justify_between()
-                    .mb(px(4.))
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(hex(TEXT2))
-                            .ml(px(6.))
-                            .child(format!("命令（{n}）")),
-                    )
-                    .child(self.add_menu(cx)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(10.))
-                    .when(n == 0, |d| {
-                        d.child(
-                            group_body().child(hint("还没有命令。从「添加」里选一个示例开始。")),
-                        )
-                    })
-                    .children((0..n).map(|i| self.card_view(i, window, cx))),
-            )
-            .child(div().mt(px(6.)).mx(px(6.)).child(hint(FOOTNOTE)));
+            .child(list)
+            .child(div().mt(px(8.)).mx(px(6.)).child(hint(FOOTNOTE)));
         super::page_body("commands")
             .child(header)
             .when_some(self.error.clone(), |d, e| {
@@ -702,7 +790,7 @@ impl Render for Commands {
                         ),
                 )
             })
-            .child(section("触发", self.trigger_rows(window, cx)))
+            .child(self.trigger_card(window, cx))
             .child(commands)
     }
 }
@@ -719,7 +807,7 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     ui.shot("commands")?;
     expect(
         "fixture commands shown",
-        ui.has("cmd-0-name") && ui.has("cmd-1-name") && !ui.has("cmd-2-name"),
+        ui.has("cmd-0-row") && ui.has("cmd-1-row") && !ui.has("cmd-2-row") && !ui.has("cmd-0-name"),
         &None,
     )?;
     let untouched = std::fs::read_to_string(path()).ok();
@@ -750,6 +838,22 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         config::raw("wakeWord").as_deref() == Some("Hey"),
         &config::raw("wakeWord"),
     )?;
+
+    ui.click("cmd-0-row")?;
+    expect(
+        "row expands",
+        ui.has("cmd-0-name") && !ui.has("cmd-1-name"),
+        &None,
+    )?;
+    ui.shot("commands-open")?;
+    ui.click("cmd-1-row")?;
+    expect(
+        "one open at a time",
+        ui.has("cmd-1-name") && !ui.has("cmd-0-name"),
+        &None,
+    )?;
+    ui.click("cmd-1-row")?;
+    expect("row folds", !ui.has("cmd-1-name"), &None)?;
 
     ui.click("cmd-add")?;
     ui.shot("commands-add")?;
@@ -801,7 +905,7 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     std::fs::write(path(), "[{").map_err(|e| e.to_string())?;
     ui.frame()?;
     expect("parse error shown", ui.has("actions-error"), &None)?;
-    ui.scroll("cmd-2-name", 3000.)?;
+    ui.scroll("cmd-2-row", 3000.)?;
     ui.shot("commands-error")?;
     ui.click("cmd-add")?;
     expect(
@@ -813,7 +917,7 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     ui.frame()?;
     expect(
         "error cleared",
-        !ui.has("actions-error") && !ui.has("cmd-0-name"),
+        !ui.has("actions-error") && !ui.has("cmd-0-row"),
         &None,
     )?;
     ui.close()

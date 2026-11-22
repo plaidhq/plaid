@@ -92,7 +92,9 @@ key access) clicks through every page and writes PNGs. Differences from Swift:
   (tinted when a rewrite rule targets them); the field filters the wall and adds a word on ⏎; clicking a pill opens
   the edit sheet, which also deletes. Aliases and replacements list in 改写规则; learned rules in 最近学会 with 保留
   (adds a 替换 line and drops the learned rule) or 撤销. No 来源 or 添加于. The tab badge counts pending suggestions.
-- 命令: an actions.json parse error locks only the cards and the add menu (as in the Swift source).
+- 命令: each command folds to one row (「name」, aliases, first shell line, output, ⏎ when it confirms); clicking a
+  row expands its editor, one at a time, and a newly added command opens. An actions.json parse error locks only
+  the editors and the add menu (as in the Swift source).
 - 报告: the trend axis labels every second day.
 - No tooltips anywhere.
 
