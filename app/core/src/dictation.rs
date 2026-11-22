@@ -180,6 +180,8 @@ pub trait Platform {
     fn llm_key(&mut self, base: &str) -> Option<String>;
     /// Sends the request off-thread, then posts `Msg::Llm { id }`.
     fn llm(&mut self, id: u64, req: llm::Request);
+    /// Opens a pooled connection to the refine endpoint off-thread, so the request after release skips the handshake.
+    fn warm(&mut self, base: &str);
     /// After a paste: watch the generation's field for manual corrections of `text`; posts `Msg::Edited`.
     fn watch_edits(&mut self, generation: u64, id: DateTime<Utc>, text: &str);
     /// Compare a watched field now (the next utterance started).
@@ -700,6 +702,13 @@ impl Controller {
                     u.mic_start_ms.unwrap_or(-1)
                 ));
                 u.mic = Some(name);
+                let app = u.app.clone();
+                if llm::level(|k| p.setting(k), app.as_deref()) > Level::Off
+                    && let Some(ep) = Self::configured(p)
+                    && !llm::loopback(&ep.base)
+                {
+                    p.warm(&ep.base);
+                }
             }
             Err(e) => {
                 p.log(&format!("start failed: {e}"));
@@ -1433,6 +1442,7 @@ mod tests {
         actions: Vec<Action>,
         terms: Vec<String>,
         llm_key: bool,
+        warmed: Vec<String>,
     }
 
     impl Platform for Fake {
@@ -1501,6 +1511,9 @@ mod tests {
         }
         fn llm(&mut self, id: u64, _: llm::Request) {
             self.out.push(format!("llm {id}"));
+        }
+        fn warm(&mut self, base: &str) {
+            self.warmed.push(base.into());
         }
         fn watch_edits(&mut self, g: u64, _: DateTime<Utc>, text: &str) {
             self.out.push(format!("watch {g} {text}"));
@@ -1882,6 +1895,34 @@ mod tests {
         t.p.settings.push(("llmMinChars", "0"));
         let out = refining(&mut t, 1, "先就这样吧。");
         assert!(has(&out, "llm 1"), "{out:?}");
+    }
+
+    #[test]
+    fn key_down_warms_the_refine_endpoint_only_when_it_will_be_used() {
+        let warmed = |settings: &[(&'static str, &'static str)]| {
+            let mut t = T::new();
+            t.p.settings.extend_from_slice(settings);
+            t.key(StartHold);
+            t.p.warmed.clone()
+        };
+        let remote = ("llmBaseUrl", "https://api.example.com/v1");
+        assert_eq!(
+            warmed(&[("llmEnabled", "1"), remote]),
+            ["https://api.example.com/v1"]
+        );
+        assert!(warmed(&[remote]).is_empty(), "LLM off");
+        assert!(
+            warmed(&[("llmEnabled", "1"), remote, ("llmApps", "Notes\traw")]).is_empty(),
+            "front app set to 原文"
+        );
+        assert!(
+            warmed(&[
+                ("llmEnabled", "1"),
+                ("llmBaseUrl", "http://localhost:11434/v1")
+            ])
+            .is_empty(),
+            "loopback has no handshake to save"
+        );
     }
 
     #[test]

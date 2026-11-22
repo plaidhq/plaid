@@ -366,6 +366,11 @@ impl Platform for Driver {
         });
     }
 
+    fn warm(&mut self, base: &str) {
+        let base = base.to_owned();
+        std::thread::spawn(move || llm::warm(&base, os::proxy().as_ref()));
+    }
+
     /// Baseline is the field value read at key-down; the pasted span is located once the paste has landed.
     fn watch_edits(&mut self, generation: u64, id: DateTime<Utc>, text: &str) {
         let Mode::Live {

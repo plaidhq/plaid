@@ -36,6 +36,9 @@ removed afterwards (migrate.rs, commit fa9d596).
      - Windows: WinHttpGetIEProxyConfigForCurrentUser.
 
   PAC files and SOCKS-only setups are not followed.
+- **Refine connection is warmed at key-down.** When refine will run for the front app and the endpoint is not
+  loopback, key-down sends a bare GET to the base URL so the TLS connection is pooled (60 s idle) by release. Saves
+  the 100–400 ms handshake through the proxy.
 - **Commands get the login shell's PATH.** It is resolved once (`$SHELL -lic`). It is prewarmed at launch when
   actions.json has entries.
 - **Commands on Windows** run through `powershell -NoProfile -NonInteractive -Command`. A timeout kills only

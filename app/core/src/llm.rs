@@ -457,32 +457,51 @@ static AGENT: std::sync::LazyLock<ureq::Agent> = std::sync::LazyLock::new(|| {
         .provider(TlsProvider::NativeTls)
         .root_certs(RootCerts::PlatformVerifier)
         .build();
+    // ureq's default 15 s idle age drops the connection warmed at key-down during a longer dictation.
     ureq::Agent::config_builder()
         .http_status_as_error(false)
         .tls_config(tls)
+        .max_idle_age(Duration::from_secs(60))
         .build()
         .into()
 });
 
-/// Blocking; call off the controller thread. Loopback goes direct; otherwise a proxy from the environment wins
-/// (a terminal launch), else the system one.
+/// Timeout and proxy for one request. Loopback goes direct; otherwise a proxy from the environment wins (a
+/// terminal launch), else the system one. `send` and `warm` must route alike to share the pooled connection.
+fn route<B>(
+    req: ureq::RequestBuilder<B>,
+    url: &str,
+    system: Option<&SystemProxy>,
+    timeout: Duration,
+) -> ureq::RequestBuilder<B> {
+    let mut config = req.config().timeout_global(Some(timeout));
+    if loopback(url) {
+        config = config.proxy(None);
+    } else if ureq::Proxy::try_from_env().is_none() {
+        config = config.proxy(
+            system
+                .and_then(|s| s.for_url(url))
+                .and_then(|p| ureq::Proxy::new(&p).ok()),
+        );
+    }
+    config.build()
+}
+
+/// Opens a connection to `base` and leaves it in the pool for the next `send`. The response (usually a 404
+/// or 401) is read and dropped; errors are ignored.
+pub fn warm(base: &str, system: Option<&SystemProxy>) {
+    if let Ok(mut resp) = route(AGENT.get(base), base, system, Duration::from_secs(5)).call() {
+        let _ = resp.body_mut().read_to_vec();
+    }
+}
+
+/// Blocking; call off the controller thread.
 pub fn send(r: &Request, system: Option<&SystemProxy>) -> Result<String, Failure> {
     let mut req = AGENT.post(&r.url);
     for (k, v) in &r.headers {
         req = req.header(*k, v);
     }
-    let mut config = req.config().timeout_global(Some(r.timeout));
-    if loopback(&r.url) {
-        config = config.proxy(None);
-    } else if ureq::Proxy::try_from_env().is_none() {
-        config = config.proxy(
-            system
-                .and_then(|s| s.for_url(&r.url))
-                .and_then(|p| ureq::Proxy::new(&p).ok()),
-        );
-    }
-    let req = config.build();
-    match req.send(&r.body[..]) {
+    match route(req, &r.url, system, r.timeout).send(&r.body[..]) {
         Ok(mut resp) => {
             let status = resp.status().as_u16();
             let body = resp.body_mut().read_to_vec().map_err(|e| Failure {
