@@ -46,6 +46,12 @@ const FRAME_MS: u64 = 16;
 const MORPH_S: f32 = 0.28;
 /// The auto-hide fades the panel out over this long.
 const FADE_S: f32 = 0.2;
+/// New text types on: each frame reveals this share of the unrevealed characters, at least `TYPE_MIN`, so a burst
+/// of recognized text spreads over a few hundred ms and the reveal keeps up with any backlog.
+const TYPE_SHARE: f32 = 0.12;
+const TYPE_MIN: f32 = 0.35;
+/// The newest characters fade in over this many characters behind the reveal head.
+const TYPE_TAIL: f32 = 3.;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum State {
@@ -93,6 +99,9 @@ pub struct Hud {
     rows: usize,
     /// Last measured text, so animation frames don't reshape it.
     fit: Option<(SharedString, (f32, usize))>,
+    /// Characters in `text` and how many of them are revealed so far (fractional: the head is fading in).
+    chars: usize,
+    reveal: f32,
     /// What the last frame showed, the start of the next morph, and when that morph started.
     lit: Lit,
     from: Lit,
@@ -131,6 +140,8 @@ impl Hud {
             text_w: 0.,
             rows: 1,
             fit: None,
+            chars: 0,
+            reveal: 0.,
             lit: Lit::default(),
             from: Lit::default(),
             morph: None,
@@ -144,6 +155,7 @@ impl Hud {
     /// Updates the state for one controller message.
     pub fn apply(&mut self, m: Msg) -> Effect {
         let prev = self.state;
+        let old = self.text.clone();
         let (state, hide_after) = match m {
             Msg::Level(r) => {
                 if !matches!(self.state, State::Listen | State::Quiet) {
@@ -214,6 +226,21 @@ impl Hud {
         }
         self.fade = None;
         self.state = state;
+        if self.text != old {
+            self.chars = self.text.chars().count();
+            // Within one visible utterance, keep what is already shown and type on the rest; anything else appears whole.
+            let utterance = |s| {
+                matches!(
+                    s,
+                    State::Listen | State::Finishing | State::Refining | State::Done
+                )
+            };
+            self.reveal = if self.visible && utterance(prev) && utterance(state) {
+                self.reveal.min(common_prefix(&old, &self.text) as f32)
+            } else {
+                self.chars as f32
+            };
+        }
         if !matches!(state, State::Listen | State::Quiet | State::Finishing) {
             self.command = false;
         }
@@ -240,6 +267,7 @@ impl Hud {
         self.visible
             && (self.morph.is_some()
                 || self.fade.is_some()
+                || self.typing()
                 || matches!(
                     self.state,
                     State::Listen
@@ -250,20 +278,68 @@ impl Hud {
                 ))
     }
 
-    /// One animation frame: about 60 ms to close most of the gap to the latest level.
+    /// Some of the text is still to be revealed.
+    fn typing(&self) -> bool {
+        self.reveal < self.chars as f32
+    }
+
+    /// One animation frame: reveal more text, and take about 60 ms to close most of the gap to the latest level.
     /// False when nothing on screen would change, so a steady level costs no redraw.
     pub(crate) fn frame(&mut self) -> bool {
-        if self.morph.is_some() || self.fade.is_some() {
-            self.shown += (self.level - self.shown) * 0.3;
-            return true;
+        let typing = self.typing();
+        if typing {
+            let left = self.chars as f32 - self.reveal;
+            self.reveal = (self.reveal + (left * TYPE_SHARE).max(TYPE_MIN)).min(self.chars as f32);
         }
         let gap = self.level - self.shown;
-        if gap.abs() < 0.002 {
-            self.shown = self.level;
-            return !matches!(self.edge(), Edge::Fixed(..) | Edge::Level(..));
+        let level = gap.abs() >= 0.002;
+        self.shown = if level {
+            self.shown + gap * 0.3
+        } else {
+            self.level
+        };
+        typing
+            || level
+            || self.morph.is_some()
+            || self.fade.is_some()
+            || matches!(self.edge(), Edge::Sweep(_))
+    }
+
+    /// The revealed text, and per-character fades for the newest characters still coming in.
+    fn revealed(&self) -> (SharedString, Vec<(std::ops::Range<usize>, HighlightStyle)>) {
+        if !self.typing() {
+            return (self.text.clone(), vec![]);
         }
-        self.shown += gap * 0.3;
-        true
+        let n = self.reveal.ceil() as usize;
+        let end = self
+            .text
+            .char_indices()
+            .nth(n)
+            .map_or(self.text.len(), |(i, _)| i);
+        let shown = &self.text[..end];
+        let fades = shown
+            .char_indices()
+            .enumerate()
+            .skip(n.saturating_sub(TYPE_TAIL as usize + 1))
+            .filter_map(|(k, (i, c))| {
+                let alpha = ((self.reveal - k as f32) / TYPE_TAIL).clamp(0., 1.);
+                (alpha < 1.).then(|| {
+                    (
+                        i..i + c.len_utf8(),
+                        HighlightStyle {
+                            fade_out: Some(1. - alpha),
+                            ..Default::default()
+                        },
+                    )
+                })
+            })
+            .collect();
+        (shown.to_string().into(), fades)
+    }
+
+    #[cfg(feature = "snapshot")]
+    pub(crate) fn mid_reveal(&mut self, behind: f32) {
+        self.reveal = self.chars as f32 - behind;
     }
 
     fn edge(&self) -> Edge {
@@ -373,6 +449,11 @@ fn color([r, g, b, a]: [f32; 4]) -> Rgba {
     Rgba { r, g, b, a }
 }
 
+/// Characters `a` and `b` share at the start.
+fn common_prefix(a: &str, b: &str) -> usize {
+    a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count()
+}
+
 /// Buffer RMS (Int16 scale) to 0...1: log scale between 60 (silence) and 3000 (loud speech).
 fn level(rms: f64) -> f32 {
     let (lo, hi) = (60f64.ln(), 3000f64.ln());
@@ -464,14 +545,14 @@ impl Render for Hud {
             _ => None,
         };
         let live = matches!(self.state, State::Listen | State::Finishing);
-        let (text, placeholder) = if self.text.is_empty() {
+        let ((text, fades), placeholder) = if self.text.is_empty() {
             let p = match self.state {
                 State::Listen => "请说话…",
                 _ => "等待最终结果…",
             };
-            (SharedString::from(p), true)
+            ((SharedString::from(p), vec![]), true)
         } else {
-            (self.text.clone(), false)
+            (self.revealed(), false)
         };
         let (w, rows) = match &self.fit {
             Some((t, m)) if *t == text => *m,
@@ -554,7 +635,7 @@ impl Render for Hud {
                                 })),
                         )
                     })
-                    .child(line.child(text))
+                    .child(line.child(StyledText::new(text).with_highlights(fades)))
                     .child(edge),
             )
     }
@@ -951,5 +1032,36 @@ mod tests {
         h.visible = false;
         h.apply(Msg::Listen);
         assert!(h.morph.is_none());
+    }
+
+    #[test]
+    fn new_text_types_on() {
+        let text = |t: &str| Msg::Text {
+            text: t.into(),
+            command: false,
+        };
+        let mut h = Hud::new();
+        h.visible = true;
+        h.apply(Msg::Listen);
+        h.apply(text("hello"));
+        assert_eq!(h.revealed().0.as_ref(), "");
+        h.frame();
+        let (shown, fades) = h.revealed();
+        assert_eq!(shown.as_ref(), "h");
+        assert_eq!(fades.len(), 1);
+        let mut frames = 1;
+        while h.typing() {
+            h.frame();
+            frames += 1;
+        }
+        assert!((5..=20).contains(&frames), "{frames}");
+        assert_eq!(h.revealed(), ("hello".into(), vec![]));
+        // A rewrite keeps the shared start and types on the rest.
+        h.apply(text("help me"));
+        assert_eq!(h.reveal, 3.);
+        // Not on screen: appears whole.
+        h.visible = false;
+        h.apply(text("other"));
+        assert!(!h.typing());
     }
 }

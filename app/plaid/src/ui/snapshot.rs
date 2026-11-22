@@ -87,6 +87,19 @@ fn hud(out: &str) -> Result<(), String> {
             ]
             .concat(),
         ),
+        (
+            "hud-typing",
+            [vec![H::Listen], levels.to_vec(), vec![text(partial, false)]].concat(),
+        ),
+        (
+            "hud-typing-long",
+            [
+                vec![H::Listen, H::Continuous],
+                levels.to_vec(),
+                vec![text(&[partial, partial, partial].join("。"), false)],
+            ]
+            .concat(),
+        ),
         ("hud-command", vec![H::Listen, text("Plaid 打开日历", true)]),
         (
             "hud-quiet",
@@ -134,6 +147,10 @@ fn hud(out: &str) -> Result<(), String> {
                 // Let the edge light settle on the last level.
                 for _ in 0..30 {
                     h.frame();
+                }
+                // Caught mid type-on: the newest characters still fading in.
+                if name.starts_with("hud-typing") {
+                    h.mid_reveal(2.5);
                 }
                 h
             });
