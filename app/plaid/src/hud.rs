@@ -11,16 +11,16 @@ use std::time::Instant;
 /// center of the window and fits the text: it widens up to `PANEL_MAX_W`, then grows upward up to `MAX_LINES`.
 /// The window is sized for the largest panel. The panel holds only the text; the light along its bottom edge carries
 /// the input level and the state.
-const PANEL_MIN_W: f32 = 280.;
+const PANEL_MIN_W: f32 = 260.;
 const PANEL_MAX_W: f32 = 560.;
 const PANEL_PAD_X: f32 = 16.;
-const PANEL_PAD_Y: f32 = 11.;
+const PANEL_PAD_Y: f32 = 10.;
 const RADIUS: f32 = 12.;
 /// Label and key hints above the text, only for states that ask something of the user.
 const HEADER_H: f32 = 16.;
 const HEADER_GAP: f32 = 4.;
-const TEXT_SIZE: f32 = 15.;
-const LINE_H: f32 = 21.;
+const TEXT_SIZE: f32 = 13.5;
+const LINE_H: f32 = 19.;
 const MAX_LINES: usize = 3;
 /// Panel width around the text.
 const CHROME_W: f32 = 2. * PANEL_PAD_X;
