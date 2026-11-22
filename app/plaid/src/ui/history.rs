@@ -5,7 +5,7 @@ use super::{Model, Page, on_if_one, reveal, send};
 use crate::config;
 use chrono::{DateTime, Datelike, Local, Utc};
 use gpui_kit::base::input::{Input, InputEvent, InputState};
-use gpui_kit::base::{ElementExt as _, SelectableText};
+use gpui_kit::base::{ElementExt as _, SelectableText, TextSelection};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use plaid_core::dictation::Msg;
@@ -103,6 +103,8 @@ pub struct History {
     details: bool,
     retry: Option<Retry>,
     note: Option<SharedString>,
+    /// 加入词典's result, shown where its button was for a few seconds: record, message, success, when.
+    added: Option<(DateTime<Utc>, SharedString, bool, Instant)>,
     exporting: bool,
     player: Option<std::process::Child>,
     playing: Option<Playing>,
@@ -147,6 +149,7 @@ impl History {
             details: false,
             retry: None,
             note: None,
+            added: None,
             exporting: false,
             player: None,
             playing: None,
@@ -246,21 +249,36 @@ impl History {
         cx.notify();
     }
 
-    /// 加入词典: the text selected in the detail box becomes one hotword line.
-    fn add_word(&mut self, selected: &str, cx: &mut Context<Self>) {
+    /// 加入词典: the text selected in record `id`'s detail box becomes one hotword line.
+    fn add_word(&mut self, id: DateTime<Utc>, selected: &str, cx: &mut Context<Self>) {
         let word = selected.trim();
-        let note = if word.is_empty() {
-            "先在上面的文字里选中要加入的词。".into()
+        let (text, ok): (SharedString, bool) = if word.is_empty() {
+            ("先选中要加入的词".into(), false)
         } else if word.contains('\n') || word.chars().count() > 24 {
-            "选中的文字太长；词典每行放一个词或短语。".into()
+            ("太长了，词典每行放一个词".into(), false)
         } else {
             match super::dictionary::add_word(word, &self.model.read(cx).store) {
-                Ok(true) => format!("已加入词典：{word}").into(),
-                Ok(false) => format!("词典里已经有「{word}」。").into(),
-                Err(e) => format!("没能写入词典：{e}").into(),
+                Ok(true) => {
+                    // Observers recount 词典's pending suggestions the new line may cover.
+                    self.model.update(cx, |_, cx| cx.notify());
+                    (format!("已加入词典：{word}").into(), true)
+                }
+                Ok(false) => (format!("词典里已有「{word}」").into(), true),
+                Err(e) => (format!("没能写入词典：{e}").into(), false),
             }
         };
-        self.note = Some(note);
+        let at = Instant::now();
+        self.added = Some((id, text, ok, at));
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(3)).await;
+            let _ = this.update(cx, |h, cx| {
+                if h.added.as_ref().is_some_and(|a| a.3 == at) {
+                    h.added = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
         cx.notify();
     }
 
@@ -479,6 +497,12 @@ impl History {
             self.search.update(cx, |s, cx| s.focus(window, cx));
             return cx.stop_propagation();
         }
+        // ⌘C copies text selected in the detail box (the selection layer has no key binding of its own).
+        if cmd && k.key == "c" && TextSelection::has_selection(window, cx) {
+            let text = TextSelection::selected_text(window, cx);
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            return cx.stop_propagation();
+        }
         if k.key == "escape" && self.sheet.is_some() {
             self.sheet = None;
             cx.notify();
@@ -489,8 +513,11 @@ impl History {
             return;
         }
         match k.key.as_str() {
-            "up" => self.step(-1, cx),
-            "down" => self.step(1, cx),
+            "up" | "down" => {
+                // The selection belongs to the record being left.
+                TextSelection::clear(window, cx);
+                self.step(if k.key == "up" { -1 } else { 1 }, cx);
+            }
             "backspace" | "delete" if !self.selected.is_empty() => {
                 self.sheet = Some(Sheet::Delete(self.selected.clone()));
                 cx.notify();
@@ -1252,23 +1279,46 @@ impl History {
             ));
         }
 
-        // Over the first label's line, so offering it moves nothing.
         let t_word = this.clone();
         let live = cx.try_global::<super::Live>().is_some();
-        let texts = texts.relative().when(selecting, |d| {
-            let spot = div().absolute().top(px(-4.)).right_0().child(
-                small_button("history-add-word", "加入词典", move |_, window, cx| {
-                    let word = gpui_kit::base::TextSelection::selected_text(window, cx);
-                    let _ = t_word.update(cx, |h, cx| h.add_word(&word, cx));
-                })
-                .keep_text_selection("history-add-word-keep"),
-            );
-            // Live only: fades in as the selection appears; snapshots draw it at rest.
+        let added = self
+            .added
+            .as_ref()
+            .filter(|a| a.0 == id)
+            .map(|a| (a.1.clone(), a.2));
+        let spot = if selecting {
+            Some(
+                div().absolute().top(px(-4.)).right_0().child(
+                    small_button("history-add-word", "加入词典", move |_, window, cx| {
+                        let word = TextSelection::selected_text(window, cx);
+                        TextSelection::clear(window, cx);
+                        let _ = t_word.update(cx, |h, cx| h.add_word(id, &word, cx));
+                    })
+                    .keep_text_selection("history-add-word-keep"),
+                ),
+            )
+        } else {
+            added.map(|(text, ok)| {
+                div().absolute().top_0().right_0().child(
+                    hit("history-word-note")
+                        .text_size(px(12.))
+                        .line_height(px(17.))
+                        .text_color(hex(if ok { GREEN } else { AMBER }))
+                        .child(text),
+                )
+            })
+        };
+        // Over the first label's line, so it moves nothing. Live only: fades in; snapshots draw it at rest.
+        let texts = texts.relative().when_some(spot, |d, spot| {
             d.child(if live {
                 spot.with_animation(
-                    "history-add-word-in",
+                    if selecting {
+                        "history-add-word-in"
+                    } else {
+                        "history-word-note-in"
+                    },
                     Animation::new(Duration::from_millis(140)).with_easing(ease_out_quint()),
-                    |d, t| d.opacity(t).top(px(-4. + (1. - t) * 3.)),
+                    |d, t| d.opacity(t).mt(px((1. - t) * 3.)),
                 )
                 .into_any_element()
             } else {
@@ -1675,11 +1725,7 @@ impl Render for History {
                             .children(self.status_line())
                             .child(self.list(lines, marked, empty, cx)),
                     )
-                    .child(self.detail(
-                        focus,
-                        gpui_kit::base::TextSelection::has_selection(window, cx),
-                        cx,
-                    )),
+                    .child(self.detail(focus, TextSelection::has_selection(window, cx), cx)),
             )
             .child(self.bottom(total, cx))
             .when_some(context, |d, at| d.child(self.context_menu(at, cx)))
@@ -2369,6 +2415,30 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         !ui.has("history-delete-ok") && !ui.has("history-retry-ok"),
         &None,
     )?;
+    // A 词典 page already open keeps a word added from 历史 when it saves its own next edit.
+    ui.open(Page::Dictionary, super::snapshot::facts())?;
+    ui.click("history")?;
+    let out = ui.bounds("history-out").ok_or("FAIL no history-out")?;
+    let y = out.origin.y + px(15.);
+    ui.drag(
+        point(out.origin.x + px(62.), y),
+        point(out.origin.x + px(100.), y),
+    )?;
+    ui.click("history-add-word")?;
+    ui.click("dictionary")?;
+    ui.click("dict-search")?;
+    super::dictionary::type_text(ui, "张小明")?;
+    super::dictionary::press(ui, "enter")?;
+    let hot = std::fs::read_to_string(dir.join("hotwords.txt")).unwrap_or_default();
+    let lines: Vec<&str> = hot.lines().collect();
+    expect(
+        &format!(
+            "cached 词典 keeps the word from 历史 ({:?})",
+            lines.iter().rev().take(2).collect::<Vec<_>>()
+        ),
+        lines.ends_with(&["这个", "张小明"]),
+        &None,
+    )?;
     // 重新润色 on a fresh page (no retry in flight) for the newest pasted record.
     ui.open(Page::History, super::snapshot::facts())?;
     expect(
@@ -2386,11 +2456,16 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     )?;
     let out = ui.bounds("history-out").ok_or("FAIL no history-out")?;
     let y = out.origin.y + px(15.);
-    ui.drag(
-        point(out.origin.x + px(1.), y),
-        point(out.origin.x + px(50.), y),
-    )?;
+    let select = |ui: &mut super::snapshot::Ui| {
+        ui.drag(
+            point(out.origin.x + px(1.), y),
+            point(out.origin.x + px(50.), y),
+        )
+    };
+    select(ui)?;
     ui.shot("history-selection")?;
+    ui.key("cmd-c")?;
+    let copied = ui.clipboard();
     ui.click("history-add-word")?;
     let after = std::fs::read_to_string(&hot).unwrap_or_default();
     let added = after
@@ -2403,6 +2478,17 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         !added.is_empty() && !added.contains('\n') && after.ends_with('\n'),
         &None,
     )?;
+    expect(
+        &format!("⌘C copies the selection ({copied:?})"),
+        copied.as_deref() == Some(added.as_str()),
+        &None,
+    )?;
+    expect(
+        "the result replaces the button",
+        ui.has("history-word-note") && !ui.has("history-add-word"),
+        &None,
+    )?;
+    select(ui)?;
     ui.click("history-add-word")?;
     expect(
         "same word not added twice",
@@ -2410,10 +2496,19 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &None,
     )?;
     ui.shot("history-word-added")?;
-    ui.click("history-status")?;
+    select(ui)?;
+    ui.click("history-out")?;
     expect(
-        "a press elsewhere drops the selection and the button",
+        "a plain click drops the selection and the button",
         !ui.has("history-add-word"),
+        &None,
+    )?;
+    select(ui)?;
+    ui.key("down")?;
+    ui.key("up")?;
+    expect(
+        "moving to another record drops the selection",
+        ui.has("history-out") && !ui.has("history-add-word"),
         &None,
     )?;
     ui.click("history-refine")?;

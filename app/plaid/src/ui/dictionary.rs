@@ -1686,7 +1686,7 @@ fn poke(
 
 /// Types into the focused field as one keystroke carrying the text (as an IME commit would).
 #[cfg(feature = "snapshot")]
-fn type_text(ui: &mut super::snapshot::Ui, text: &str) -> Result<(), String> {
+pub(super) fn type_text(ui: &mut super::snapshot::Ui, text: &str) -> Result<(), String> {
     let handled = Rc::new(std::cell::Cell::new(false));
     let (h, text) = (handled.clone(), text.to_owned());
     poke(ui, move |_, w, cx| {
@@ -1704,7 +1704,7 @@ fn type_text(ui: &mut super::snapshot::Ui, text: &str) -> Result<(), String> {
 
 /// Presses one named key (`escape`, `enter`) in the focused element.
 #[cfg(feature = "snapshot")]
-fn press(ui: &mut super::snapshot::Ui, key: &'static str) -> Result<(), String> {
+pub(super) fn press(ui: &mut super::snapshot::Ui, key: &'static str) -> Result<(), String> {
     poke(ui, move |_, w, cx| {
         w.dispatch_keystroke(
             Keystroke {

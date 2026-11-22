@@ -541,6 +541,10 @@ impl Ui {
         self.frame()
     }
 
+    pub(super) fn clipboard(&mut self) -> Option<String> {
+        self.cx.update(|cx| cx.read_from_clipboard()?.text())
+    }
+
     pub(super) fn bounds(&self, id: &str) -> Option<Bounds<Pixels>> {
         mav::PROBES.with(|p| p.borrow().get(id).copied())
     }
