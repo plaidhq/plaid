@@ -12,7 +12,7 @@ use plaid_core::store::{self, LIMIT, Record};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const LATENCY: &str = "historyLatency";
 
@@ -53,6 +53,15 @@ impl Filter {
 enum Sheet {
     Clear(usize),
     Retry(DateTime<Utc>),
+    Delete(Vec<DateTime<Utc>>),
+}
+
+/// A recording being played: drives the waveform's progress until `ms` has passed.
+struct Playing {
+    path: PathBuf,
+    start: Instant,
+    ms: i64,
+    generation: u64,
 }
 
 /// One line of the table: a day header or a record.
@@ -87,6 +96,12 @@ pub struct History {
     note: Option<&'static str>,
     exporting: bool,
     player: Option<std::process::Child>,
+    playing: Option<Playing>,
+    plays: u64,
+    /// The page's keyboard target: ↑↓ move the selection, ⌫ deletes, ⌘F jumps to the search field.
+    focus: FocusHandle,
+    /// Shown records in list order with their line index, for ↑↓.
+    order: Vec<(DateTime<Utc>, usize)>,
     audio_bytes: u64,
     scroll: UniformListScrollHandle,
     wave: RefCell<Option<(PathBuf, Rc<Vec<f32>>)>>,
@@ -125,6 +140,10 @@ impl History {
             note: None,
             exporting: false,
             player: None,
+            playing: None,
+            plays: 0,
+            focus: cx.focus_handle(),
+            order: vec![],
             audio_bytes,
             scroll: UniformListScrollHandle::new(),
             wave: RefCell::new(None),
@@ -226,8 +245,51 @@ impl History {
         }
     }
 
-    fn play(&mut self, path: &Path) {
+    fn play(&mut self, path: &Path, ms: i64, cx: &mut Context<Self>) {
         self.stop();
+        self.plays += 1;
+        let generation = self.plays;
+        if cx.try_global::<super::Live>().is_none() {
+            // Snapshot runs never start a player; show the strip half played.
+            self.playing = Some(Playing {
+                path: path.to_path_buf(),
+                start: Instant::now() - Duration::from_millis(ms as u64 / 2),
+                ms,
+                generation,
+            });
+            return cx.notify();
+        }
+        self.playing = Some(Playing {
+            path: path.to_path_buf(),
+            start: Instant::now(),
+            ms,
+            generation,
+        });
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(33))
+                    .await;
+                let go_on = this.update(cx, |h, cx| {
+                    cx.notify();
+                    match &h.playing {
+                        Some(p) if p.generation == generation => {
+                            if p.start.elapsed().as_millis() as i64 > p.ms + 100 {
+                                h.playing = None;
+                                false
+                            } else {
+                                true
+                            }
+                        }
+                        _ => false,
+                    }
+                });
+                if !matches!(go_on, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
         #[cfg(target_os = "macos")]
         let r = std::process::Command::new("afplay").arg(path).spawn();
         #[cfg(windows)]
@@ -255,6 +317,7 @@ impl History {
     }
 
     fn stop(&mut self) {
+        self.playing = None;
         if let Some(mut c) = self.player.take() {
             let _ = c.kill();
             let _ = c.wait();
@@ -287,6 +350,84 @@ impl History {
             _timeout: timeout,
         });
         cx.notify();
+    }
+
+    /// Through the controller when the app runs (it refuses while that record is being retried); snapshot runs
+    /// edit the fixture directly.
+    fn delete(&mut self, ids: Vec<DateTime<Utc>>, cx: &mut Context<Self>) {
+        if self
+            .playing
+            .as_ref()
+            .is_some_and(|p| self.record_ids_audio(&ids, cx).contains(&p.path))
+        {
+            self.stop();
+        }
+        if cx.try_global::<super::Live>().is_some() {
+            send(Msg::Delete { ids: ids.clone() }, cx);
+        } else {
+            self.model.update(cx, |m, cx| {
+                m.store.remove(&ids);
+                cx.notify();
+            });
+        }
+        self.selected.retain(|x| !ids.contains(x));
+        self.anchor = None;
+        self.audio_bytes = dir_size(&self.model.read(cx).store.audio_dir());
+        cx.notify();
+    }
+
+    fn record_ids_audio(&self, ids: &[DateTime<Utc>], cx: &App) -> Vec<PathBuf> {
+        ids.iter()
+            .filter_map(|id| self.record(*id, cx))
+            .filter_map(|r| self.audio_path(r, cx))
+            .collect()
+    }
+
+    /// Selects the record `step` rows away from the current one and keeps it in view.
+    fn step(&mut self, step: isize, cx: &mut Context<Self>) {
+        if self.order.is_empty() {
+            return;
+        }
+        let current = self.anchor.or_else(|| self.selected.last().copied());
+        let at = current.and_then(|c| self.order.iter().position(|(id, _)| *id == c));
+        let next = match at {
+            Some(i) => (i as isize + step).clamp(0, self.order.len() as isize - 1) as usize,
+            None => 0,
+        };
+        let (id, line) = self.order[next];
+        self.selected = vec![id];
+        self.anchor = Some(id);
+        self.context = None;
+        self.scroll.scroll_to_item(line, ScrollStrategy::Nearest);
+        cx.notify();
+    }
+
+    fn on_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let k = &e.keystroke;
+        let cmd = k.modifiers.secondary(cx);
+        if cmd && k.key == "f" {
+            self.search.update(cx, |s, cx| s.focus(window, cx));
+            return cx.stop_propagation();
+        }
+        if k.key == "escape" && self.sheet.is_some() {
+            self.sheet = None;
+            cx.notify();
+            return cx.stop_propagation();
+        }
+        // Keys typed into the search field stay there.
+        if !self.focus.is_focused(window) || self.sheet.is_some() {
+            return;
+        }
+        match k.key.as_str() {
+            "up" => self.step(-1, cx),
+            "down" => self.step(1, cx),
+            "backspace" | "delete" if !self.selected.is_empty() => {
+                self.sheet = Some(Sheet::Delete(self.selected.clone()));
+                cx.notify();
+            }
+            _ => return,
+        }
+        cx.stop_propagation();
     }
 
     /// Through the controller when the app runs (it refuses while busy); snapshot runs clear the fixture directly.
@@ -584,6 +725,7 @@ impl History {
         let marked = Rc::new(marked);
         let latency = on_if_one(LATENCY);
         let retrying = self.retry.as_ref().map(|r| r.id);
+        let focus = self.focus.clone();
         let order: Rc<Vec<DateTime<Utc>>> = Rc::new(
             lines
                 .iter()
@@ -602,12 +744,14 @@ impl History {
                         Line::Rec(r) => {
                             let id = r.at;
                             let (t1, t2, ord) = (this.clone(), this.clone(), order.clone());
+                            let page = focus.clone();
                             let row =
                                 record_row(r, marked.contains(&id), latency, retrying == Some(id))
-                                    .on_click(move |e, _, cx| {
+                                    .on_click(move |e, window, cx| {
                                         if e.is_right_click() {
                                             return;
                                         }
+                                        page.focus(window, cx);
                                         let m = e.modifiers();
                                         let _ = t1.update(cx, |h, cx| h.click_row(id, m, &ord, cx));
                                     })
@@ -648,6 +792,15 @@ impl History {
             MenuEntry {
                 label: format!("导出选中的 {n} 条…").into(),
                 checked: false,
+                rule: true,
+            },
+            MenuEntry {
+                label: if n > 1 {
+                    format!("删除 {n} 条…").into()
+                } else {
+                    "删除…".into()
+                },
+                checked: false,
                 rule: false,
             },
         ];
@@ -662,10 +815,10 @@ impl History {
                         let _ = this.update(cx, |h, cx| {
                             h.context = None;
                             let ids = h.selected.clone();
-                            if i == 0 {
-                                h.copy(&ids, cx);
-                            } else {
-                                h.export(ids, w, cx);
+                            match i {
+                                0 => h.copy(&ids, cx),
+                                1 => h.export(ids, w, cx),
+                                _ => h.sheet = Some(Sheet::Delete(ids)),
                             }
                             cx.notify();
                         });
@@ -710,8 +863,9 @@ impl History {
         if self.selected.len() > 1 {
             let n = self.selected.len();
             let ids = self.selected.clone();
-            let (t1, t2) = (this.clone(), this);
+            let (t1, t2, t3) = (this.clone(), this.clone(), this);
             let ids2 = ids.clone();
+            let ids3 = ids.clone();
             return panel().child(
                 hit("history-detail")
                     .flex()
@@ -725,7 +879,7 @@ impl History {
                             .font_weight(medium())
                             .child(format!("已选 {n} 条")),
                     )
-                    .child(hint("⌘ 点击加减，⇧ 点击连选。"))
+                    .child(hint("⌘ 点击加减，⇧ 点击连选，⌫ 删除。"))
                     .child(
                         div()
                             .flex()
@@ -747,6 +901,17 @@ impl History {
                                         let _ = t2.update(cx, |h, cx| h.export(ids, w, cx));
                                     },
                                 ),
+                            ))
+                            .child(button(
+                                "history-delete-many",
+                                format!("删除 {n} 条…"),
+                                move |_, _, cx| {
+                                    let ids = ids3.clone();
+                                    let _ = t3.update(cx, |h, cx| {
+                                        h.sheet = Some(Sheet::Delete(ids));
+                                        cx.notify();
+                                    });
+                                },
                             )),
                     ),
             );
@@ -825,6 +990,13 @@ impl History {
         if let Some(path) = wav.clone() {
             let peaks = self.peaks(&path);
             let t_play = this.clone();
+            let audio_ms = r.audio_ms.max(1);
+            let progress = self
+                .playing
+                .as_ref()
+                .filter(|p| p.path == path)
+                .map(|p| (p.start.elapsed().as_millis() as f32 / p.ms.max(1) as f32).min(1.));
+            let bars = peaks.len().max(1) as f32;
             strip = strip
                 .child(
                     hit("history-play")
@@ -836,10 +1008,20 @@ impl History {
                         .rounded_full()
                         .bg(hex(mark))
                         .shadow(vec![glow(mark, 12., 0x55)])
-                        .child(icon("plaid/tri-right.svg", 10., hex(BG)).ml(px(2.)))
+                        .child(match progress {
+                            Some(_) => icon("plaid/pause.svg", 10., hex(BG)),
+                            None => icon("plaid/tri-right.svg", 10., hex(BG)).ml(px(2.)),
+                        })
                         .on_click(move |_, _, cx| {
                             let p = path.clone();
-                            let _ = t_play.update(cx, |h, _| h.play(&p));
+                            let _ = t_play.update(cx, |h, cx| {
+                                if h.playing.as_ref().is_some_and(|x| x.path == p) {
+                                    h.stop();
+                                    cx.notify();
+                                } else {
+                                    h.play(&p, audio_ms, cx);
+                                }
+                            });
                         }),
                 )
                 .child(
@@ -849,12 +1031,17 @@ impl History {
                         .flex()
                         .items_center()
                         .gap(px(2.))
-                        .children(peaks.iter().map(|a| {
+                        .children(peaks.iter().enumerate().map(|(k, a)| {
+                            let alpha = match progress {
+                                Some(p) if (k as f32 + 0.5) / bars <= p => 0xff,
+                                Some(_) => 0x48,
+                                None => 0xa0,
+                            };
                             div()
                                 .flex_1()
                                 .h(px(2. + a * 26.))
                                 .rounded(px(1.))
-                                .bg(tint(mark, 0xa0))
+                                .bg(tint(mark, alpha))
                         })),
                 );
         } else {
@@ -1027,7 +1214,8 @@ impl History {
             }));
 
         let text = r.text.clone();
-        let (t_copy, t_retry, t_details) = (this.clone(), this.clone(), this);
+        let (t_copy, t_retry, t_delete, t_details) =
+            (this.clone(), this.clone(), this.clone(), this);
         let mut buttons = div()
             .flex()
             .flex_wrap()
@@ -1054,6 +1242,15 @@ impl History {
                     reveal(&path)
                 }));
         }
+        buttons = buttons.child(enabled(
+            !retrying,
+            button("history-delete", "删除…", move |_, _, cx| {
+                let _ = t_delete.update(cx, |h, cx| {
+                    h.sheet = Some(Sheet::Delete(vec![id]));
+                    cx.notify();
+                });
+            }),
+        ));
 
         let mut fields: Vec<(&str, String, bool)> = vec![];
         if let Some(e) = &r.error {
@@ -1172,6 +1369,16 @@ impl History {
                 "「今天」和「报告」里的用量统计会保留。",
                 "删除",
             ),
+            Sheet::Delete(ids) => (
+                "history-delete",
+                if ids.len() > 1 {
+                    format!("删除这 {} 条记录和录音？", ids.len())
+                } else {
+                    "删除这条记录和录音？".to_string()
+                },
+                "删除后无法恢复。「今天」和「报告」里的用量统计会保留。",
+                "删除",
+            ),
             Sheet::Retry(_) => (
                 "history-retry",
                 "重新识别这段录音？".to_string(),
@@ -1179,8 +1386,9 @@ impl History {
                 "重新识别",
             ),
         };
-        let retry = match sheet {
-            Sheet::Retry(id) => Some(*id),
+        let action = match sheet {
+            Sheet::Retry(id) => Some(Ok(*id)),
+            Sheet::Delete(ids) => Some(Err(ids.clone())),
             Sheet::Clear(_) => None,
         };
         let this = cx.entity().downgrade();
@@ -1236,8 +1444,9 @@ impl History {
                             .child(default_button(format!("{key}-ok"), ok, move |_, _, cx| {
                                 let _ = this.update(cx, |h, cx| {
                                     h.sheet = None;
-                                    match retry {
-                                        Some(id) => h.retry(id, cx),
+                                    match action.clone() {
+                                        Some(Ok(id)) => h.retry(id, cx),
+                                        Some(Err(ids)) => h.delete(ids, cx),
                                         None => h.clear(cx),
                                     }
                                     cx.notify();
@@ -1255,7 +1464,10 @@ impl Drop for History {
 }
 
 impl Render for History {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if window.focused(cx).is_none() {
+            self.focus.focus(window, cx);
+        }
         let q = self.query(cx);
         let store = &self.model.read(cx).store;
         let total = store.all.len();
@@ -1278,6 +1490,14 @@ impl Render for History {
             self.selected.clone()
         };
         let lines = Rc::new(group(&shown));
+        let order: Vec<(DateTime<Utc>, usize)> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(i, l)| match l {
+                Line::Rec(r) => Some((r.at, i)),
+                Line::Day(_) => None,
+            })
+            .collect();
         let n_shown = shown.len();
         let empty = if total == 0 {
             Some((
@@ -1292,7 +1512,11 @@ impl Render for History {
             Some(("没有匹配的记录", "这个筛选下没有记录。"))
         };
         let context = self.context;
+        self.order = order;
         div()
+            .id("history-page")
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::on_key))
             .relative()
             .size_full()
             .flex()
@@ -1850,6 +2074,10 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         ui.has("history-status") && !ui.has("history-retry-ok"),
         &None,
     )?;
+    // Snapshot runs start no player; the strip shows half played.
+    ui.click("history-play")?;
+    ui.shot("history-playing")?;
+    ui.click("history-play")?;
 
     ui.click("history-filter-1")?;
     let saved: Vec<String> = all
@@ -1940,6 +2168,44 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         config::raw(LATENCY).as_deref() == Some("0"),
         &None,
     )?;
+
+    // Keyboard: ↓ moves to the next record, ⌫ asks, then deletes it.
+    let count = || plaid_core::store::Store::load(&dir).all.len();
+    let n = count();
+    let over = painted().into_iter().next().ok_or("no rows")?;
+    ui.scroll(&over, 20000.)?;
+    ui.click(&first)?;
+    ui.key("down")?;
+    ui.key("backspace")?;
+    expect("⌫ asks first", ui.has("history-delete-ok"), &None)?;
+    ui.shot("history-delete-confirm")?;
+    ui.key("escape")?;
+    expect(
+        "esc closes the sheet",
+        !ui.has("history-delete-ok") && count() == n,
+        &None,
+    )?;
+    ui.key("backspace")?;
+    ui.click("history-delete-ok")?;
+    let left = plaid_core::store::Store::load(&dir).all;
+    let newest: Vec<DateTime<Utc>> = all.iter().rev().take(2).map(|r| r.at).collect();
+    expect(
+        "the second newest record is deleted",
+        left.len() == n - 1
+            && left.iter().any(|r| r.at == newest[0])
+            && !left.iter().any(|r| r.at == newest[1]),
+        &Some(format!("{} → {}", n, left.len())),
+    )?;
+    ui.click("history-delete")?;
+    ui.click("history-delete-cancel")?;
+    expect("cancel keeps it", count() == n - 1, &None)?;
+    // ⌘F jumps to the search field from the list.
+    ui.key("cmd-f")?;
+    ui.type_text("qqqzzz")?;
+    expect("⌘F focuses search", ui.has("history-empty"), &None)?;
+    ui.key("cmd-a")?;
+    ui.key("backspace")?;
+    expect("search cleared", !painted().is_empty(), &None)?;
 
     ui.click("history-clear")?;
     expect("clear asks first", ui.has("history-clear-ok"), &None)?;

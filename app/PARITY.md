@@ -83,7 +83,9 @@ key access) clicks through every page and writes PNGs. Differences from Swift:
 - 设置: no 测试 button for the Volc key; no launch-at-login switch.
 - 历史: a list beside a detail panel (always shows the selected or newest record): waveform with playback, the
   recognised text with the rules' deletions struck through, what was pasted with the LLM's insertions marked, and
-  the user's later edit. Filters add 润色 and 改过. 重试 cannot be cancelled and its failure shows on the HUD only;
+  the user's later edit; the waveform fills as the recording plays and the play button stops it. Records can be
+  deleted (detail panel, right-click, ⌫; through the controller, refused while that record is being retried;
+  usage is kept). ↑↓ move the selection, ⌘F focuses the search. Filters add 润色 and 改过. 重试 cannot be cancelled and its failure shows on the HUD only;
   export does not flush an unsaved 词典 draft first.
 - 报告: new summary cards above the Swift 性能 diagnostics: half a year of daily characters as a heatmap and
   speaking speed (both from usage.json, so they survive 清空历史), a release → paste histogram split into direct and

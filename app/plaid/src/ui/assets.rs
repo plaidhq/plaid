@@ -25,6 +25,7 @@ fn icon(name: &str) -> Option<String> {
         "updown" => r##"<path d="M5 6l3-3 3 3M5 10l3 3 3-3" stroke-width="1.7"/>"##,
         "check" => r##"<path d="M2.5 8.5l3.6 3.6L13.5 3" stroke-width="2.4"/>"##,
         "tri-right" => r##"<path d="M4 2l8 6-8 6z" fill="#000" stroke="none"/>"##,
+        "pause" => r##"<path d="M4 3h3v10H4zM9 3h3v10H9z" fill="#000" stroke="none"/>"##,
         "tri-down" => r##"<path d="M2 4h12l-6 8z" fill="#000" stroke="none"/>"##,
         "up" => r##"<path d="M2 11L8 4l6 7z" fill="#000" stroke="none"/>"##,
         "down" => r##"<path d="M2 5l6 7 6-7z" fill="#000" stroke="none"/>"##,

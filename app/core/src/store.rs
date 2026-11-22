@@ -255,6 +255,24 @@ impl Store {
         let _ = std::fs::remove_dir_all(self.audio_dir());
     }
 
+    /// Deletes the records with these ids and their recordings; usage totals are kept. Returns how many went.
+    pub fn remove(&mut self, ids: &[DateTime<Utc>]) -> usize {
+        let before = self.all.len();
+        let audio = self.audio_dir();
+        self.all.retain(|r| {
+            let gone = ids.contains(&r.at);
+            if gone && let Some(a) = &r.audio {
+                let _ = std::fs::remove_file(audio.join(a));
+            }
+            !gone
+        });
+        let n = before - self.all.len();
+        if n > 0 {
+            self.persist();
+        }
+        n
+    }
+
     /// Changes the newest record with this id (key-down time) and rewrites the log.
     pub fn update(&mut self, id: DateTime<Utc>, change: impl FnOnce(&mut Record)) {
         if let Some(r) = self.all.iter_mut().rev().find(|r| r.at == id) {

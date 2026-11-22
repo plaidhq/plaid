@@ -142,6 +142,10 @@ pub enum Msg {
     },
     /// Delete all records and recordings (History's 清空历史); refused while dictating or retrying.
     Clear,
+    /// Delete these records and their recordings (History's 删除); refused while one of them is being retried.
+    Delete {
+        ids: Vec<DateTime<Utc>>,
+    },
 }
 
 pub trait Platform {
@@ -562,6 +566,14 @@ impl Controller {
                 self.store.clear();
                 self.relearn(p);
                 p.log("history cleared");
+            }
+            Msg::Delete { ids } => {
+                if self.recovering.is_some_and(|r| ids.contains(&r)) {
+                    return p.hud(Hud::Flash("请等重试结束后再删除".into()));
+                }
+                let n = self.store.remove(&ids);
+                self.relearn(p);
+                p.log(&format!("records deleted n={n}"));
             }
             _ => {}
         }
@@ -2260,6 +2272,31 @@ mod tests {
         t.send(Msg::Clear);
         assert!(t.c.store.all.is_empty());
         assert!(!t.c.store.dir().join("records.jsonl").exists());
+        assert_eq!(t.c.store.usage.values().map(|u| u.n).sum::<i64>(), usage);
+    }
+
+    #[test]
+    fn delete_removes_records_and_audio_but_keeps_usage() {
+        let mut t = T::new();
+        for (g, text) in [(1, "一"), (2, "二")] {
+            t.key(gesture::Action::StartHold);
+            t.loud(g, 30);
+            t.key(gesture::Action::Stop);
+            t.quiet(g);
+            t.flush();
+            t.done(g, Ok(text));
+        }
+        let first = t.c.store.all[0].clone();
+        let audio = first.audio.clone().map(|a| t.c.store.audio_dir().join(a));
+        let usage: i64 = t.c.store.usage.values().map(|u| u.n).sum();
+        t.send(Msg::Delete {
+            ids: vec![first.at],
+        });
+        assert_eq!(t.c.store.all.len(), 1);
+        assert_eq!(t.c.store.all[0].text, "二");
+        assert!(audio.is_none_or(|a| !a.exists()));
+        let reloaded = crate::store::Store::load(t.c.store.dir());
+        assert_eq!(reloaded.all.len(), 1);
         assert_eq!(t.c.store.usage.values().map(|u| u.n).sum::<i64>(), usage);
     }
 }
