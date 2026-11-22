@@ -440,8 +440,12 @@ impl Commands {
             .gap(px(10.))
             .min_h(px(42.))
             .py(px(8.))
+            .mx(px(-10.))
+            .px(px(10.))
+            .rounded(px(8.))
             .when(i > 0, |d| d.border_t_1().border_color(hexa(LINE)))
             .cursor_pointer()
+            .hover(|s| s.bg(hexa(0xffffff08)))
             .child(icon(
                 if open {
                     "plaid/chev-down.svg"

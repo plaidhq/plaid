@@ -23,7 +23,7 @@ use mav::*;
 use plaid_core::dictation::Msg;
 use plaid_core::store::Store;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 actions!(plaid, [CloseWindow, Minimize, Quit]);
 
@@ -428,6 +428,22 @@ impl Settings {
         v
     }
 
+    /// The page area. In the app a page switch fades the new page in while it settles 6 px up; snapshot runs draw
+    /// it at rest so shots never catch the fade.
+    fn page_frame(&self, page: AnyView, cx: &App) -> AnyElement {
+        let frame = div().flex_1().min_h_0().relative().child(page);
+        if cx.try_global::<Live>().is_none() {
+            return frame.into_any_element();
+        }
+        frame
+            .with_animation(
+                ElementId::Name(format!("page-{}", self.page.slug()).into()),
+                Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()),
+                |d, t| d.opacity(t).top(px((1. - t) * 6.)),
+            )
+            .into_any_element()
+    }
+
     /// 56 px header: window lights, wordmark, page pills. Only the wordmark and the empty space drag the window,
     /// so the pills keep their clicks (Windows hit-tests drag areas natively).
     fn header(&self, active: bool, cx: &mut Context<Self>) -> Div {
@@ -557,7 +573,7 @@ impl Render for Settings {
             .flex()
             .flex_col()
             .child(self.header(window.is_window_active(), cx))
-            .child(div().flex_1().min_h_0().child(page))
+            .child(self.page_frame(page, cx))
             .child(self.footer(cx))
     }
 }

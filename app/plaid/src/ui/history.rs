@@ -2172,8 +2172,16 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     // Keyboard: ↓ moves to the next record, ⌫ asks, then deletes it.
     let count = || plaid_core::store::Store::load(&dir).all.len();
     let n = count();
-    let over = painted().into_iter().next().ok_or("no rows")?;
-    ui.scroll(&over, 20000.)?;
+    for _ in 0..5 {
+        if ui.bounds(&first).is_some() {
+            break;
+        }
+        let over = painted()
+            .into_iter()
+            .find(|k| ui.bounds(k).is_some())
+            .ok_or("no rows")?;
+        ui.scroll(&over, 20000.)?;
+    }
     ui.click(&first)?;
     ui.key("down")?;
     ui.key("backspace")?;

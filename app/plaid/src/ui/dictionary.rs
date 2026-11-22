@@ -944,8 +944,12 @@ impl Dictionary {
                 .gap(px(10.))
                 .min_h(px(36.))
                 .py(px(6.))
+                .mx(px(-10.))
+                .px(px(10.))
+                .rounded(px(8.))
                 .when(n > 0, |d| d.border_t_1().border_color(hexa(LINE)))
                 .cursor_pointer()
+                .hover(|s| s.bg(hexa(0xffffff08)))
                 .map(|d| match &to {
                     Some(to) => d
                         .child(
