@@ -40,8 +40,6 @@ const EDGE_MAX: f32 = 0.8;
 /// While processing, a segment of this fraction of the panel sweeps across once per `SWEEP_S` (there and back).
 const SWEEP_W: f32 = 0.28;
 const SWEEP_S: f32 = 1.6;
-/// Animation frame interval while the edge moves.
-const FRAME_MS: u64 = 16;
 /// A state change morphs the edge light and text color over this long instead of cutting.
 const MORPH_S: f32 = 0.28;
 /// The auto-hide fades the panel out over this long.
@@ -119,8 +117,8 @@ pub struct Hud {
     morph: Option<Instant>,
     /// Auto-hide fade-out in progress since.
     fade: Option<Instant>,
-    /// An animation loop is running.
-    looping: bool,
+    /// When the last animation frame was drawn, while frames keep coming; steps scale with the real interval.
+    last: Option<Instant>,
     /// Hiding: render nothing.
     blank: bool,
     visible: bool,
@@ -163,7 +161,7 @@ impl Hud {
             from: Lit::default(),
             morph: None,
             fade: None,
-            looping: false,
+            last: None,
             blank: false,
             visible: false,
             epoch: 0,
@@ -285,23 +283,6 @@ impl Hud {
         self.rows = 1;
     }
 
-    /// The edge moves on its own: eases toward the level, or sweeps.
-    fn animates(&self) -> bool {
-        self.visible
-            && (self.morph.is_some()
-                || self.fade.is_some()
-                || self.typing()
-                || self.sizing()
-                || matches!(
-                    self.state,
-                    State::Listen
-                        | State::Quiet
-                        | State::Finishing
-                        | State::Running
-                        | State::Refining
-                ))
-    }
-
     /// Some of the text is still to be revealed.
     fn typing(&self) -> bool {
         self.reveal < self.chars as f32
@@ -320,14 +301,17 @@ impl Hud {
         ]
     }
 
-    /// One animation frame: reveal more text, ease the panel size, and take about 60 ms to close most of the gap to
-    /// the latest level. False when nothing on screen would change, so a steady level costs no redraw.
-    pub(crate) fn frame(&mut self) -> bool {
+    /// Advances animation by `n` 60 Hz frames (fractional: frames come at the display's rate, with jitter): reveal
+    /// more text, ease the panel size, and take about 60 ms to close most of the gap to the latest level. False when
+    /// nothing on screen would change, so a steady level costs no redraw.
+    pub(crate) fn frame(&mut self, n: f32) -> bool {
+        // A per-frame easing share, compounded over `n` frames.
+        let ease = |k: f32| 1. - (1. - k).powf(n);
         let typing = self.typing();
         if typing {
             let left = self.chars as f32 - self.reveal;
-            self.vel += (left / TYPE_CATCH - self.vel) * TYPE_EASE;
-            self.reveal = (self.reveal + self.vel.max(TYPE_MIN)).min(self.chars as f32);
+            self.vel += (left / TYPE_CATCH - self.vel) * ease(TYPE_EASE);
+            self.reveal = (self.reveal + self.vel.max(TYPE_MIN) * n).min(self.chars as f32);
         }
         let sizing = self.sizing();
         if sizing {
@@ -339,14 +323,14 @@ impl Hud {
                 if gap.abs() < near[i] {
                     target[i]
                 } else {
-                    self.size[i] + gap * SIZE_EASE
+                    self.size[i] + gap * ease(SIZE_EASE)
                 }
             });
         }
         let gap = self.level - self.shown;
         let level = gap.abs() >= 0.002;
         self.shown = if level {
-            self.shown + gap * 0.3
+            self.shown + gap * ease(0.3)
         } else {
             self.level
         };
@@ -588,8 +572,17 @@ impl Render for Hud {
     fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         use Hint::*;
         if self.blank {
+            self.last = None;
             return div().into_any_element();
         }
+        // Animation runs on the display's frames: each render steps by the time since the last one and asks for the
+        // next while anything moves.
+        let now = Instant::now();
+        let n = self
+            .last
+            .map_or(1., |t| (now - t).as_secs_f32() * 60.)
+            .min(4.);
+        let busy = self.visible && self.frame(n);
         // Only states that ask something of the user get a header; everything else is the text alone.
         let header: Option<(&str, Vec<Hint>)> = match self.state {
             State::Refining => Some(("优化中", vec![Key("esc"), Text("用原文")])),
@@ -628,8 +621,7 @@ impl Render for Hud {
             self.rows = self.rows.max((row + 1).min(MAX_LINES));
         }
         self.top = (row + 1).saturating_sub(MAX_LINES) as f32;
-        // A size change with no frame loop to ease it (nothing else animating) lands at once.
-        if self.snap || (!self.looping && self.sizing()) {
+        if self.snap {
             self.size = self.size_target();
             self.snap = false;
         }
@@ -640,6 +632,12 @@ impl Render for Hud {
         // The light runs between the corner curves, so it never spills past the rounded edge.
         let track = panel_w - 2. * RADIUS;
         let lit = self.current();
+        if busy || (self.visible && self.sizing()) {
+            self.last = Some(now);
+            window.request_animation_frame();
+        } else {
+            self.last = None;
+        }
         let edge = light(RADIUS + lit.x * track, lit.w * track, lit.rgb, lit.a);
         // The text wraps at the widest panel and is clipped to the rows in view, scrolled to keep the newest row
         // last; the panel easing around it never reflows it.
@@ -790,6 +788,9 @@ pub fn options(origin: Point<Pixels>) -> WindowOptions {
         is_resizable: false,
         is_minimizable: false,
         window_background: WindowBackgroundAppearance::Transparent,
+        // The HUD is never the active window; GPUI's default caps inactive windows at 30 fps, which made the typing
+        // and the edge light visibly step. It animates only while shown and moving.
+        inactive_frame_interval: None,
         ..Default::default()
     }
 }
@@ -847,19 +848,16 @@ pub fn apply(handle: &WindowHandle<Hud>, m: Msg, cx: &mut App) {
                 // Fade out, then hide, as long as nothing was shown meanwhile.
                 let current = |hud: &Hud| hud.epoch == epoch;
                 let fading = cx.update(|cx| {
-                    let go = handle
-                        .update(cx, |hud, _, _| {
+                    handle
+                        .update(cx, |hud, _, cx| {
                             let go = current(hud);
                             if go {
                                 hud.fade = Some(Instant::now());
+                                cx.notify();
                             }
                             go
                         })
-                        .unwrap_or(false);
-                    if go {
-                        animate(handle, cx);
-                    }
-                    go
+                        .unwrap_or(false)
                 });
                 if !fading {
                     return;
@@ -875,44 +873,6 @@ pub fn apply(handle: &WindowHandle<Hud>, m: Msg, cx: &mut App) {
         }
         _ => {}
     }
-    animate(handle, cx);
-}
-
-/// Runs the frame loop while the HUD animates; at most one loop at a time.
-fn animate(handle: WindowHandle<Hud>, cx: &mut App) {
-    let start = handle
-        .update(cx, |hud, _, _| {
-            let start = !hud.looping && hud.animates();
-            hud.looping |= start;
-            start
-        })
-        .unwrap_or(false);
-    if !start {
-        return;
-    }
-    cx.spawn(async move |cx| {
-        loop {
-            cx.background_executor()
-                .timer(Duration::from_millis(FRAME_MS))
-                .await;
-            let go = cx.update(|cx| {
-                handle
-                    .update(cx, |hud, _, cx| {
-                        let go = hud.animates();
-                        if go && hud.frame() {
-                            cx.notify();
-                        }
-                        hud.looping = go;
-                        go
-                    })
-                    .unwrap_or(false)
-            });
-            if !go {
-                break;
-            }
-        }
-    })
-    .detach();
 }
 
 #[cfg(target_os = "macos")]
@@ -1096,11 +1056,11 @@ mod tests {
         let mut h = Hud::new();
         h.apply(Msg::Listen);
         h.apply(Msg::Level(3000.));
-        h.frame();
+        h.frame(1.);
         assert!(h.shown > 0.2 && h.shown < 0.4, "{}", h.shown);
         // Six frames (~100 ms, one audio buffer) close most of the gap.
         for _ in 0..5 {
-            h.frame();
+            h.frame(1.);
         }
         assert!(h.shown > 0.85, "{}", h.shown);
         h.apply(Msg::Listen);
@@ -1151,7 +1111,7 @@ mod tests {
         h.apply(text("hello"));
         // Laid out whole, all hidden; the first frame starts fading in "h".
         assert_eq!(h.fades()[0].0, 0..5);
-        h.frame();
+        h.frame(1.);
         let fades = h.fades();
         assert_eq!(
             fades.iter().map(|f| f.0.clone()).collect::<Vec<_>>(),
@@ -1160,7 +1120,7 @@ mod tests {
         assert!(fades[0].1.fade_out.unwrap() < 1.);
         let mut frames = 1;
         while h.typing() {
-            h.frame();
+            h.frame(1.);
             frames += 1;
         }
         assert!((5..=40).contains(&frames), "{frames}");

@@ -146,7 +146,7 @@ fn hud(out: &str) -> Result<(), String> {
                 }
                 // Let the edge light settle on the last level.
                 for _ in 0..30 {
-                    h.frame();
+                    h.frame(1.);
                 }
                 // Caught mid type-on: the newest characters still fading in.
                 if name.starts_with("hud-typing") {
