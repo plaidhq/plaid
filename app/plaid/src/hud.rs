@@ -341,7 +341,6 @@ impl Render for Hud {
         );
         let (text, placeholder) = if self.text.is_empty() {
             let p = match self.state {
-                State::Listen if self.continuous => "再按快捷键或 ⏎ 结束",
                 State::Listen => "请说话…",
                 _ => "等待最终结果…",
             };
@@ -386,7 +385,8 @@ impl Render for Hud {
             }
             Edge::Sweep(c) => {
                 let t = self.clock.elapsed().as_secs_f32() / SWEEP_S;
-                let p = 0.5 - 0.5 * (t * std::f32::consts::TAU).cos();
+                // Starts centered, where the level light was, then swings side to side.
+                let p = 0.5 + 0.5 * (t * std::f32::consts::TAU).sin();
                 let w = track * SWEEP_W;
                 light(RADIUS + (track - w) * p, w, c, 0.75)
             }

@@ -183,9 +183,20 @@ fn hud_test(hud: WindowHandle<hud::Hud>, hold: u64, cx: &mut App) {
                 cx,
             )
         });
-        sleep(300).await;
+        // Speech-like levels at the real 10 Hz buffer rate, so the edge light animates.
+        let mut levels = [
+            300., 1500., 3000., 900., 2200., 400., 2600., 1200., 200., 1800.,
+        ]
+        .into_iter();
+        let mut feed = async |n: usize, cx: &mut AsyncApp| {
+            for rms in levels.by_ref().take(n) {
+                cx.update(|cx| hud::apply(&hud, Hud::Level(rms), cx));
+                sleep(100).await;
+            }
+        };
+        feed(3, cx).await;
         let after = probe("300 ms after show", cx);
-        sleep(700).await;
+        feed(7, cx).await;
         let late = probe("1 s after show", cx);
         cx.update(|cx| hud::apply(&hud, Hud::Finishing, cx));
         sleep(hold * 1000).await;
