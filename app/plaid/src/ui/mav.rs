@@ -151,7 +151,7 @@ pub fn root() -> Div {
 }
 
 /// The settings window's ground on macOS, where the window blurs the desktop behind it: a translucent near-black
-/// that gets denser toward the edges, densest at the bottom and in the corners. Elsewhere the window is opaque and
+/// that gets denser toward the top and side edges; the bottom (under the footer) stays as translucent as the middle. Elsewhere the window is opaque and
 /// this is plain BG. Sits under everything as the root's first child.
 pub fn backdrop() -> Div {
     let band = |angle: f32, from: u32, to: u32| {
@@ -176,15 +176,6 @@ pub fn backdrop() -> Div {
                 .right_0()
                 .h(px(150.))
                 .bg(band(180., bg | 0xb0, bg)),
-        )
-        .child(
-            div()
-                .absolute()
-                .bottom_0()
-                .left_0()
-                .right_0()
-                .h(relative(0.45))
-                .bg(band(180., bg, bg | 0xd8)),
         )
         .child(
             div()

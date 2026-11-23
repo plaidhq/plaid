@@ -525,7 +525,7 @@ impl Settings {
             .bg(linear_gradient(
                 180.,
                 linear_color_stop(hexa(BG << 8), 0.),
-                linear_color_stop(hexa(BG << 8 | 0xe0), 1.),
+                linear_color_stop(hexa(BG << 8 | 0xa0), 1.),
             ));
         let frame = div()
             .flex_1()
