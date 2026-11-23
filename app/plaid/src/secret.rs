@@ -15,7 +15,7 @@ pub fn api_key() -> Result<String, String> {
     if let Ok(k) = std::env::var("PLAID_API_KEY") {
         return Ok(k);
     }
-    get("apiKey")?.ok_or_else(|| "未设置火山引擎 API Key（设置 › 通用）".into())
+    get("apiKey")?.ok_or_else(|| "未设置火山引擎 API Key（设置 › 识别）".into())
 }
 
 #[cfg(target_os = "macos")]

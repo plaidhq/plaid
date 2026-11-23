@@ -1,4 +1,4 @@
-//! In-app updates. A check runs shortly after launch and every 6 h (failures only logged), or from 设置 › 通用
+//! In-app updates. A check runs shortly after launch and every 6 h (failures only logged), or from 设置 › 关于
 //! (failures shown). On macOS a newer release is downloaded, verified against GitHub's digest and unpacked in
 //! the background; the user applies it from the tray or settings, which swaps the bundle in place and
 //! relaunches, never during a dictation. Where the app can't replace itself (Windows for now, a bare binary, a

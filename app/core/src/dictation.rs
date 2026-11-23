@@ -246,7 +246,7 @@ impl Utterance {
 
     fn low_note(&self) -> String {
         format!(
-            "{} 音量过低，识别会漏字；可在 设置 › 麦克风 换输入设备",
+            "{} 音量过低，识别会漏字；可在 设置 › 通用 换输入设备",
             self.mic.as_deref().unwrap_or("麦克风")
         )
     }
