@@ -1149,7 +1149,7 @@ impl Refine {
                     .child(field(&self.llm_model, 300., window, cx)),
             )
             .into_any_element(),
-            row("API key：", self.key.clone()).into_any_element(),
+            row("API Key", self.key.clone()).into_any_element(),
             row("", hint("按接口地址的域名分别保存")).into_any_element(),
             top_row(
                 "额外请求体：",
@@ -2058,19 +2058,21 @@ impl Refine {
             );
         }
         body.child(
-            group_body()
-                .child(card_head("语音识别", "火山引擎 bigmodel；key 只存在本机"))
-                .child(row("API Key", self.asr_key.clone()))
-                .child(toggle(
-                    "asrContext",
-                    "发送上下文",
-                    "前台应用和输入框里光标前的文字，帮助识别专有名词",
-                ))
-                .child(toggle(
-                    "nonstream",
-                    "二遍识别",
-                    "松键后用整段音频再识别一次，更准，约慢 300 ms",
-                )),
+            group("语音识别").child(
+                group_body()
+                    .child(card_head("火山引擎", "豆包语音大模型；key 只存在本机"))
+                    .child(row("API Key", self.asr_key.clone()))
+                    .child(toggle(
+                        "asrContext",
+                        "发送上下文",
+                        "前台应用和输入框里光标前的文字，帮助识别专有名词",
+                    ))
+                    .child(toggle(
+                        "nonstream",
+                        "二遍识别",
+                        "松键后用整段音频再识别一次，更准，约慢 300 ms",
+                    )),
+            ),
         )
         .child(div().pt(px(8.)).child(group("LLM")))
         .child(section("服务商", self.provider_rows(window, cx)))

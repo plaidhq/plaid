@@ -731,8 +731,9 @@ impl Settings {
     /// 40 px mono status line, then the 2 px cyan→violet edge light along the window's bottom.
     fn footer(&self, cx: &mut Context<Self>) -> Div {
         let facts = &self.model.read(cx).facts;
-        let (status, text) = if !facts.volc_key {
-            (Status::Warn, "未设置 API Key")
+        let volc_key = facts.volc_key;
+        let (status, text) = if !volc_key {
+            (Status::Warn, "未设置火山 API Key")
         } else if !facts.trusted {
             (Status::Warn, "需要辅助功能权限")
         } else {
@@ -750,7 +751,14 @@ impl Settings {
             .font(mono())
             .text_size(px(11.))
             .text_color(hex(TEXT2))
-            .child(badge(status, text))
+            .child(
+                hit("footer-status")
+                    .child(badge(status, text))
+                    .when(!volc_key, |d| {
+                        d.hover(|s| s.opacity(0.8))
+                            .on_click(cx.listener(|this, _, _, cx| this.show(Page::Service, cx)))
+                    }),
+            )
             .child(format!("{words} 条记录"))
             .child(div().ml_auto())
             .when_some(

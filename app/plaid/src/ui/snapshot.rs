@@ -354,13 +354,15 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
     expect("no offer", !ui.has("footer-update"), &None)?;
     ui.close()?;
 
+    // No Volcengine key: the footer warning opens 服务.
     ui.open(
-        Page::Service,
+        Page::About,
         Facts {
             volc_key: false,
             ..facts()
         },
     )?;
+    ui.click("footer-status")?;
     expect(
         "key field in edit mode",
         ui.has("key-save") && !ui.has("key-change"),

@@ -1409,10 +1409,7 @@ impl Dictionary {
                 .flex_col()
                 .items_start()
                 .gap(px(6.))
-                .child(
-                    hint("没有可用的 LLM：在「设置 → 服务」里填好 LLM 接口和 key")
-                        .text_color(hex(AMBER)),
-                )
+                .child(hint("没有可用的 LLM，后台校对不会运行").text_color(hex(AMBER)))
                 .child(small_button(
                     "open-service",
                     "打开服务",

@@ -30,7 +30,7 @@ impl KeyField {
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .masked(true)
-                .placeholder("粘贴 API key")
+                .placeholder("粘贴 API Key")
         });
         cx.subscribe_in(&input, window, |this, _, e: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = e {
@@ -90,7 +90,7 @@ impl KeyField {
                 self.stored = Some((account.clone(), !v.is_empty()));
                 self.input.update(cx, |i, cx| {
                     i.set_value("", window, cx);
-                    i.set_placeholder("粘贴 API key", window, cx);
+                    i.set_placeholder("粘贴 API Key", window, cx);
                 });
                 if account == "apiKey" {
                     self.model.update(cx, |m, cx| {

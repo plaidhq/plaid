@@ -885,9 +885,9 @@ impl General {
             )
             .child(
                 group_body()
-                    .child(card_head("链接", "源码与许可"))
+                    .child(card_head("链接", "Plaid 以 Apache-2.0 许可开源"))
                     .child(row(
-                        "",
+                        "源码与许可",
                         div()
                             .flex()
                             .items_center()
