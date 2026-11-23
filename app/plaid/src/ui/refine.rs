@@ -166,6 +166,8 @@ pub struct Refine {
     key: Entity<KeyField>,
     /// The Volcengine key.
     asr_key: Entity<KeyField>,
+    /// 服务 shows the Cloud tab. View state only: Cloud isn't available yet, so BYOK stays in use.
+    cloud: bool,
     menu: Option<Menu>,
     base: Entity<InputState>,
     llm_model: Entity<InputState>,
@@ -296,6 +298,7 @@ impl Refine {
             nav,
             key,
             asr_key,
+            cloud: false,
             menu: None,
             base,
             llm_model,
@@ -2021,7 +2024,8 @@ impl Refine {
             })
     }
 
-    /// 服务: recognition (Volcengine key and options), and the LLM endpoint with its prompts and a test.
+    /// 服务: a BYOK / Cloud tab, then for BYOK recognition (Volcengine key and options) and the LLM endpoint with
+    /// its prompts and a test; Cloud is a placeholder until it exists.
     fn service_page(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let toggle = |key: &'static str, label: &'static str, sub: &'static str| {
             let model = self.model.clone();
@@ -2029,26 +2033,52 @@ impl Refine {
                 model.update(cx, |m, cx| m.set(key, bool_str(v), cx));
             })
         };
-        super::page_body("service")
-            .child(
+        let this = cx.entity().downgrade();
+        let tab = segmented(
+            "service-mode",
+            &["BYOK", "Cloud"],
+            self.cloud as usize,
+            move |i, _, cx| {
+                let _ = this.update(cx, |r, cx| {
+                    r.cloud = i == 1;
+                    cx.notify();
+                });
+            },
+        );
+        let body = super::page_body("service").child(div().flex().child(tab));
+        if self.cloud {
+            return body.child(
                 group_body()
-                    .child(card_head("语音识别", "火山引擎 bigmodel；key 只存在本机"))
-                    .child(row("API Key", self.asr_key.clone()))
-                    .child(toggle(
-                        "asrContext",
-                        "发送上下文",
-                        "前台应用和输入框里光标前的文字，帮助识别专有名词",
+                    .child(card_head("Plaid Cloud", "正在开发"))
+                    .child(hint(
+                        "识别和润色都由 Plaid 提供，不用自己申请 key，也不用配置模型。上线前一直使用 BYOK 里的设置。",
                     ))
-                    .child(toggle(
-                        "nonstream",
-                        "二遍识别",
-                        "松键后用整段音频再识别一次，更准，约慢 300 ms",
-                    )),
-            )
-            .child(div().pt(px(8.)).child(group("LLM")))
-            .child(section("服务商", self.provider_rows(window, cx)))
-            .child(section("提示词", self.prompt_rows(window, cx)))
-            .child(section("测试", self.test_rows(window, cx)))
+                    .child(div().flex().child(small_button(
+                        "cloud-progress",
+                        "在 GitHub 上看进展",
+                        |_, _, _| super::open_url(super::general::REPO),
+                    ))),
+            );
+        }
+        body.child(
+            group_body()
+                .child(card_head("语音识别", "火山引擎 bigmodel；key 只存在本机"))
+                .child(row("API Key", self.asr_key.clone()))
+                .child(toggle(
+                    "asrContext",
+                    "发送上下文",
+                    "前台应用和输入框里光标前的文字，帮助识别专有名词",
+                ))
+                .child(toggle(
+                    "nonstream",
+                    "二遍识别",
+                    "松键后用整段音频再识别一次，更准，约慢 300 ms",
+                )),
+        )
+        .child(div().pt(px(8.)).child(group("LLM")))
+        .child(section("服务商", self.provider_rows(window, cx)))
+        .child(section("提示词", self.prompt_rows(window, cx)))
+        .child(section("测试", self.test_rows(window, cx)))
     }
 }
 
@@ -2241,6 +2271,26 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &None,
     )?;
     ui.shot("service")?;
+    // Cloud is a placeholder tab: it hides the BYOK settings and stores nothing.
+    let stored = std::fs::read_to_string(config::data_dir().join("settings.json")).ok();
+    ui.click("service-mode-1")?;
+    expect(
+        "cloud placeholder",
+        ui.has("cloud-progress") && !ui.has("asrContext"),
+        &None,
+    )?;
+    ui.shot("service-cloud")?;
+    ui.click("service-mode-0")?;
+    expect(
+        "byok back",
+        ui.has("asrContext") && !ui.has("cloud-progress"),
+        &None,
+    )?;
+    expect(
+        "cloud tab stores nothing",
+        std::fs::read_to_string(config::data_dir().join("settings.json")).ok() == stored,
+        &None,
+    )?;
     let before = config::raw("nonstream");
     ui.click("nonstream")?;
     expect(
