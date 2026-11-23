@@ -2025,7 +2025,7 @@ impl Refine {
     }
 
     /// 服务: a BYOK / Cloud tab, then for BYOK recognition (Volcengine key and options) and the LLM endpoint with
-    /// its prompts and a test; Cloud is a placeholder until it exists.
+    /// its prompts and a test; Cloud is a placeholder card until it exists.
     fn service_page(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let toggle = |key: &'static str, label: &'static str, sub: &'static str| {
             let model = self.model.clone();
@@ -2048,16 +2048,13 @@ impl Refine {
         let body = super::page_body("service").child(div().flex().child(tab));
         if self.cloud {
             return body.child(
-                group_body()
-                    .child(card_head("Plaid Cloud", "正在开发"))
-                    .child(hint(
-                        "识别和润色都由 Plaid 提供，不用自己申请 key，也不用配置模型。上线前一直使用 BYOK 里的设置。",
-                    ))
-                    .child(div().flex().child(small_button(
-                        "cloud-progress",
-                        "在 GitHub 上看进展",
-                        |_, _, _| super::open_url(super::general::REPO),
-                    ))),
+                hit("cloud").child(
+                    group_body()
+                        .child(card_head("Plaid Cloud", "正在开发"))
+                        .child(hint(
+                            "识别和润色都由 Plaid 提供，不用自己申请 key，也不用配置模型。上线前一直使用 BYOK 里的设置。",
+                        )),
+                ),
             );
         }
         body.child(
@@ -2276,16 +2273,12 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     ui.click("service-mode-1")?;
     expect(
         "cloud placeholder",
-        ui.has("cloud-progress") && !ui.has("asrContext"),
+        ui.has("cloud") && !ui.has("asrContext"),
         &None,
     )?;
     ui.shot("service-cloud")?;
     ui.click("service-mode-0")?;
-    expect(
-        "byok back",
-        ui.has("asrContext") && !ui.has("cloud-progress"),
-        &None,
-    )?;
+    expect("byok back", ui.has("asrContext") && !ui.has("cloud"), &None)?;
     expect(
         "cloud tab stores nothing",
         std::fs::read_to_string(config::data_dir().join("settings.json")).ok() == stored,

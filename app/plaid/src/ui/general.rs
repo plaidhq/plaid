@@ -1023,7 +1023,7 @@ impl Render for General {
     }
 }
 
-pub(super) const REPO: &str = "https://github.com/plaidhq/plaid";
+const REPO: &str = "https://github.com/plaidhq/plaid";
 
 /// Version, system, mic and recognition settings, then the last 200 events.log lines (no dictated text).
 fn diagnostics(facts: &super::Facts) -> String {
