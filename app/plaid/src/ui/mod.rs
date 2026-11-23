@@ -514,7 +514,26 @@ impl Settings {
     /// The page area. In the app a page switch fades the new page in while it settles 6 px up; snapshot runs draw
     /// it at rest so shots never catch the fade.
     fn page_frame(&self, page: AnyView, cx: &App) -> AnyElement {
-        let frame = div().flex_1().min_h_0().min_w_0().relative().child(page);
+        // 历史 doesn't scroll as a whole (its list scrolls above a fixed bottom row), so it has no fade.
+        // Elsewhere content scrolling under the footer fades into the ground instead of being cut off at a hard line.
+        let fade = div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .h(px(FADE))
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(hexa(BG << 8), 0.),
+                linear_color_stop(hexa(BG << 8 | 0xe0), 1.),
+            ));
+        let frame = div()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .relative()
+            .child(page)
+            .when(self.page != Page::History, |d| d.child(fade));
         if cx.try_global::<Live>().is_none() {
             return frame.into_any_element();
         }
@@ -852,8 +871,12 @@ pub fn page_body(id: &'static str) -> Stateful<Div> {
         .gap(px(14.))
         .pt(px(6.))
         .px(px(28.))
-        .pb(px(20.))
+        .pb(px(FADE))
 }
+
+/// Height of the fade at the bottom of the page area; also the page body's bottom padding, so the end of a page
+/// clears it.
+const FADE: f32 = 24.;
 
 pub const W: f32 = 1100.;
 pub const H: f32 = 720.;
