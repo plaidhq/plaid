@@ -16,6 +16,7 @@ mod config;
 mod driver;
 mod hotkey;
 mod hud;
+mod login;
 #[cfg(target_os = "macos")]
 mod mac;
 #[cfg(target_os = "macos")]
@@ -137,6 +138,7 @@ fn run(hud: WindowHandle<hud::Hud>, cx: &mut App) {
         crate::run::prewarm();
     }
     update::start(cx);
+    login::default_on();
     if ui::onboarding::needed() {
         ui::onboarding::open(cx);
     }

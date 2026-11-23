@@ -284,6 +284,14 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
         &None,
     )?;
     ui.shot("general-hud")?;
+    ui.scroll("hudSound", -600.)?;
+    ui.click("launchAtLogin")?;
+    expect(
+        "launch at login stored",
+        config::value("launchAtLogin").as_deref() == Some("1"),
+        &None,
+    )?;
+    ui.shot("general-login")?;
     expect("update card moved off 通用", !ui.has("update-check"), &None)?;
     ui.scroll("hudText", 2400.)?;
     ui.click("hold")?;

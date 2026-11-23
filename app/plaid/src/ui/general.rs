@@ -838,6 +838,21 @@ impl General {
                     .child(div().h(px(6.)))
                     .children(self.hud_options()),
             )
+            .child({
+                let this = cx.entity().downgrade();
+                group_body().child(card_head("启动", "")).child(toggle_row(
+                    "launchAtLogin",
+                    crate::login::enabled(),
+                    "登录时启动",
+                    "开机后直接按键说话，不用先打开 Plaid",
+                    move |on, _, cx| {
+                        if let Err(e) = crate::login::set(on) {
+                            crate::trace::log(&format!("login item: {e}"));
+                        }
+                        let _ = this.update(cx, |_, cx| cx.notify());
+                    },
+                ))
+            })
     }
 
     /// 关于: version and updates, diagnostics, links.
