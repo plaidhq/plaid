@@ -96,8 +96,8 @@ impl Perf {
                 .justify_end()
                 .gap(px(2.))
                 .when(hovering && self.hover_hist != Some(i), |c| c.opacity(0.4))
-                .when(*l > 0, |c| c.child(seg(*l, LLM, true)))
-                .when(*d > 0, |c| c.child(seg(*d, ACCENT, *l == 0)))
+                .when(*l > 0, |c| c.child(seg(*l, VIOLET, true)))
+                .when(*d > 0, |c| c.child(seg(*d, CYAN, *l == 0)))
                 .on_hover(cx.listener(move |this, on: &bool, _, cx| {
                     if *on {
                         this.hover_hist = Some(i);
@@ -159,8 +159,8 @@ impl Perf {
                     .items_center()
                     .gap(px(12.))
                     .child(title("松开到粘贴").flex_1())
-                    .child(key("直接", ACCENT))
-                    .child(key("LLM", LLM)),
+                    .child(key("直接", CYAN))
+                    .child(key("LLM", VIOLET)),
             )
             .child(
                 div()
@@ -169,7 +169,7 @@ impl Perf {
                     .gap(px(14.))
                     .font(mono())
                     .children(p50(r.p50.0, 28., TEXT, "P50 直接"))
-                    .children(p50(r.p50.1, 20., LLM, "P50 LLM")),
+                    .children(p50(r.p50.1, 20., VIOLET, "P50 LLM")),
             )
             .child(
                 div()

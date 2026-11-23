@@ -679,7 +679,7 @@ impl Perf {
         let h = 164.;
         let (lines, labels) = grid(step, top, h);
         let series: Vec<(Vec<Option<i64>>, u32)> = vec![
-            (days.iter().map(|d| d.asr.map(|v| v.0)).collect(), ACCENT),
+            (days.iter().map(|d| d.asr.map(|v| v.0)).collect(), CYAN),
             (days.iter().map(|d| d.tot.map(|v| v.0)).collect(), TEXT2),
         ];
         let plot = canvas(
@@ -766,7 +766,7 @@ impl Perf {
                 .gap(px(6.))
                 .child(caption_line(
                     caption,
-                    legend(&[("识别", ACCENT), ("粘贴", TEXT2)]),
+                    legend(&[("识别", CYAN), ("粘贴", TEXT2)]),
                 ))
                 .child(plot_frame(labels, lines, h, |d| {
                     d.child(div().absolute().inset_0().flex().children(columns))
@@ -852,8 +852,8 @@ impl Perf {
                 }))
                 .child(seg(rest, TEXT3))
                 .child(seg(bad, AMBER))
-                .child(seg(good, LLM))
-                .child(seg(asr, ACCENT))
+                .child(seg(good, VIOLET))
+                .child(seg(asr, CYAN))
         });
         card(
             "阶段拆分",
@@ -865,8 +865,8 @@ impl Perf {
                 .child(caption_line(
                     caption,
                     legend(&[
-                        ("识别", ACCENT),
-                        ("LLM", LLM),
+                        ("识别", CYAN),
+                        ("LLM", VIOLET),
                         ("LLM 失败", AMBER),
                         ("其余", TEXT3),
                     ]),
@@ -997,7 +997,7 @@ impl Perf {
                 .flex()
                 .items_end()
                 .child(bar(noise[i], TEXT3))
-                .child(bar(speech[i], ACCENT))
+                .child(bar(speech[i], CYAN))
         });
         let mark = |v: f64, color: u32| {
             div()
@@ -1059,7 +1059,7 @@ impl Perf {
                         "静音阈值 {}（橙线）· 语音过低 {QUIET_RMS}（灰线）",
                         silence as i64
                     ),
-                    legend(&[("噪声", TEXT3), ("语音", ACCENT)]),
+                    legend(&[("噪声", TEXT3), ("语音", CYAN)]),
                 ))
                 .child(plot_frame(labels, lines, h, |d| {
                     d.child(div().absolute().inset_0().flex().items_end().children(bins))
@@ -1167,7 +1167,7 @@ impl Perf {
                     .justify_between()
                     .px(px(6.))
                     .when(i > 0, |d| d.border_l_1().border_color(hexa(LINE)))
-                    .when(i == col, |d| d.bg(tint(ACCENT, 0x1f)))
+                    .when(i == col, |d| d.bg(tint(CYAN, 0x1f)))
                     .child(div().whitespace_nowrap().child(label.to_string()))
                     .when(i == col, |d| {
                         d.child(icon(

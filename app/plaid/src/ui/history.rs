@@ -1033,7 +1033,7 @@ impl History {
         let retrying = self.retry.as_ref().is_some_and(|x| x.id == id && !x.refine);
         let (tag, color) = path_tag(&r, retrying);
         let llm = r.llm == "ok";
-        let mark = if llm { LLM } else { ACCENT };
+        let mark = if llm { VIOLET } else { CYAN };
         let app = r.app.clone().unwrap_or_else(|| "未知应用".into());
 
         let header = div()
@@ -1767,9 +1767,9 @@ fn path_tag(r: &Record, retrying: bool) -> (&'static str, u32) {
     } else if r.outcome.as_deref() == Some("saved") {
         ("未粘贴", AMBER)
     } else if r.llm == "ok" {
-        ("LLM 润色", LLM)
+        ("LLM 润色", VIOLET)
     } else {
-        ("直接粘贴", ACCENT)
+        ("直接粘贴", CYAN)
     }
 }
 

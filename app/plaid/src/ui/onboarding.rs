@@ -79,19 +79,15 @@ impl Onboarding {
                     .bg(hex(RAISED2))
                     .shadow(vec![
                         shadow(0., 0., 0., 1., LINE2, true),
-                        glow(ACCENT, 18., 0x26),
+                        glow(CYAN, 18., 0x26),
                     ])
                     .flex()
                     .items_center()
                     .justify_center()
                     .gap(px(4.))
-                    .children(bars.map(|h| {
-                        div()
-                            .w(px(3.5))
-                            .h(px(h + 3.))
-                            .rounded(px(2.))
-                            .bg(hex(ACCENT))
-                    })),
+                    .children(
+                        bars.map(|h| div().w(px(3.5)).h(px(h + 3.)).rounded(px(2.)).bg(hex(CYAN))),
+                    ),
             )
             .child(h2("欢迎使用 Plaid"))
             .child(para(
@@ -420,7 +416,7 @@ impl Render for Onboarding {
                                     .shadow(vec![shadow(0., 0., 0., 1., LINE3, true)]);
                                 let d = match i.cmp(&step) {
                                     std::cmp::Ordering::Equal => {
-                                        d.bg(hex(ACCENT)).shadow(vec![glow(ACCENT, 8., 0x66)])
+                                        d.bg(hex(CYAN)).shadow(vec![glow(CYAN, 8., 0x66)])
                                     }
                                     std::cmp::Ordering::Less => d.bg(hex(TEXT3)),
                                     std::cmp::Ordering::Greater => d.bg(hex(RAISED2)),
@@ -508,7 +504,7 @@ fn perm(
         .border_t_1()
         .border_color(hexa(LINE))
         .when(last, |d| d.border_b_1())
-        .child(icon(glyph, 32., hex(ACCENT)))
+        .child(icon(glyph, 32., hex(CYAN)))
         .child(
             div()
                 .flex_1()

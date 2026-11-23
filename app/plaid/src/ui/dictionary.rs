@@ -831,17 +831,17 @@ impl Dictionary {
                 .bg(hexa(GLASS_WELL))
                 .border_1()
                 .border_color(if focused {
-                    tint(ACCENT, 0x80)
+                    tint(CYAN, 0x80)
                 } else {
                     hexa(LINE2)
                 })
-                .child(div().text_size(px(16.)).text_color(hex(ACCENT)).child("+"))
+                .child(div().text_size(px(16.)).text_color(hex(CYAN)).child("+"))
                 .child(div().flex_1().min_w_0().child(Input::new(&self.search))),
         );
         let legend_dot = |tinted: bool| {
             let d = div().size(px(8.)).rounded_full();
             if tinted {
-                d.bg(hex(ACCENT))
+                d.bg(hex(CYAN))
             } else {
                 d.border_1().border_color(hex(TEXT2))
             }
@@ -883,13 +883,13 @@ impl Dictionary {
                 .child(text);
             let p = p.cursor_pointer();
             if tinted {
-                p.bg(tint(ACCENT, if big { 0x22 } else { 0x12 }))
-                    .border_color(tint(ACCENT, if big { 0x66 } else { 0x33 }))
-                    .text_color(hex(if big { TEXT } else { 0xcacccb }))
-                    .hover(|s| s.bg(tint(ACCENT, 0x2c)))
+                p.bg(tint(CYAN, if big { 0x22 } else { 0x12 }))
+                    .border_color(tint(CYAN, if big { 0x66 } else { 0x33 }))
+                    .text_color(hex(if big { TEXT } else { 0xc9cbd1 }))
+                    .hover(|s| s.bg(tint(CYAN, 0x2c)))
             } else {
                 p.border_color(hexa(LINE3))
-                    .text_color(hex(if big { TEXT } else { 0xa5a8a6 }))
+                    .text_color(hex(if big { TEXT } else { 0xa4a7ae }))
                     .hover(|s| s.bg(hexa(0xffffff0d)).border_color(hexa(0xffffff3d)))
             }
         };
@@ -1018,7 +1018,7 @@ impl Dictionary {
                                         .flex_none()
                                         .max_w(relative(0.6))
                                         .truncate()
-                                        .text_color(hex(ACCENT))
+                                        .text_color(hex(CYAN))
                                         .child(to.clone())
                                 })
                                 .when_some(shape.block(), |d, b| {
@@ -1324,7 +1324,7 @@ impl Dictionary {
                         .w(px(130.))
                         .flex_none()
                         .truncate()
-                        .text_color(hex(if active { ACCENT } else { TEXT }))
+                        .text_color(hex(if active { CYAN } else { TEXT }))
                         .child(to.clone()),
                 )
                 .child(
