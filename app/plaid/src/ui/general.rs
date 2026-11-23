@@ -501,7 +501,7 @@ impl General {
                 } else if i >= 38 {
                     AMBER
                 } else {
-                    CYAN
+                    ACCENT
                 };
                 let cell = div().flex_1().rounded(px(2.));
                 if i == mark {
@@ -604,8 +604,8 @@ impl General {
 /// The HUD's four looks, drawn small: label, sample text, and the bottom light in the state's color.
 fn hud_states() -> Div {
     let states = [
-        ("在听", "我们明天下午四点", TEXT, CYAN, 0.7),
-        ("润色中", "我们明天下午四点开会。", TEXT, VIOLET, 0.8),
+        ("在听", "我们明天下午四点", TEXT, ACCENT, 0.7),
+        ("润色中", "我们明天下午四点开会。", TEXT, LLM, 0.8),
         ("麦克风太小", "没有听到声音", AMBER, AMBER, 0.4),
         ("出错", "网络不可用，已保存录音", RED, RED, 0.4),
     ];
@@ -695,12 +695,12 @@ fn update_card(cx: &App) -> Div {
         State::Downloading(r) => (format!("正在下载 {}…", r.version), TEXT2, vec![]),
         State::Ready(r, _) => (
             format!("{} 已下载，重启后生效", r.version),
-            CYAN,
+            ACCENT,
             vec![notes(r.page), apply("重启以更新")],
         ),
         State::Available(r) => (
             format!("有新版本 {}，需要下载后手动替换", r.version),
-            CYAN,
+            ACCENT,
             vec![notes(r.page.clone()), apply("下载新版本")],
         ),
         State::Failed(e) => (e, AMBER, vec![check()]),
@@ -808,8 +808,8 @@ impl General {
                                             .rounded(px(12.))
                                             .text_size(px(20.))
                                             .shadow(vec![
-                                                shadow(0., 3., 0., 0., 0x08090bff, false),
-                                                glow(CYAN, 22., 0x22),
+                                                shadow(0., 3., 0., 0., 0x090a09ff, false),
+                                                glow(ACCENT, 22., 0x22),
                                             ]),
                                     )
                                     .child(hint("按住说话")),

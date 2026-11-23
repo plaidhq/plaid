@@ -74,8 +74,8 @@ pub fn init(cx: &mut App) {
     c.surface = hex(WELL);
     c.background = hex(BG);
     c.border = hexa(LINE2);
-    c.accent = hex(0x2f6f8c);
-    c.selection = tint(CYAN, 0x55);
+    c.accent = hex(0x5a7a2c);
+    c.selection = tint(ACCENT, 0x55);
     // gpui-component's root plugin fills every kit window with its own theme's background, white by default,
     // under whatever the window paints. Each window paints its own ground, and the settings window's must let
     // the blurred desktop through.
@@ -720,7 +720,7 @@ impl Settings {
             .child(list)
     }
 
-    /// 40 px mono status line, then the 2 px cyan→violet edge light along the window's bottom.
+    /// 40 px mono status line, then the 2 px lime→coral edge light along the window's bottom.
     fn footer(&self, cx: &mut Context<Self>) -> Div {
         let facts = &self.model.read(cx).facts;
         let volc_key = facts.volc_key;
@@ -760,7 +760,7 @@ impl Settings {
                 |d, v| {
                     d.child(
                         hit("footer-update")
-                            .text_color(hex(CYAN))
+                            .text_color(hex(ACCENT))
                             .hover(|s| s.text_color(hex(TEXT)))
                             .child(format!("更新到 {v}"))
                             .on_click(|_, _, cx| crate::update::apply(cx)),
@@ -781,10 +781,25 @@ impl Settings {
                     .bottom_0()
                     .h(px(2.))
                     .flex()
-                    .shadow(vec![shadow(0., -4., 18., 0., 0x7fd8ff59, false)])
-                    .child(div().flex_1().h_full().bg(hgrada(0x7fd8ff00, 0x7fd8ffff)))
-                    .child(div().flex_1().h_full().bg(hgrada(0x7fd8ffff, 0xb59cffff)))
-                    .child(div().flex_1().h_full().bg(hgrada(0xb59cffff, 0xb59cff00))),
+                    .shadow(vec![shadow(0., -4., 18., 0., ACCENT << 8 | 0x59, false)])
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .bg(hgrada(ACCENT << 8, ACCENT << 8 | 0xff)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .bg(hgrada(ACCENT << 8 | 0xff, LLM << 8 | 0xff)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .bg(hgrada(LLM << 8 | 0xff, LLM << 8)),
+                    ),
             )
     }
 }
@@ -820,7 +835,7 @@ impl Render for Settings {
     }
 }
 
-/// The cyan count pill on 设置 and 词典 (词典 suggestions waiting for a decision).
+/// The lime count pill on 设置 and 词典 (词典 suggestions waiting for a decision).
 fn count_badge(n: usize) -> Div {
     div()
         .ml(px(6.))
@@ -831,7 +846,7 @@ fn count_badge(n: usize) -> Div {
         .items_center()
         .justify_center()
         .rounded_full()
-        .bg(hex(CYAN))
+        .bg(hex(ACCENT))
         .text_color(hex(BG))
         .font(mono())
         .text_size(px(10.))

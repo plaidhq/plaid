@@ -451,12 +451,12 @@ pub(super) fn boxed(title: impl Into<SharedString>, trailing: Option<AnyElement>
     (head, body)
 }
 
-/// A plot column: cyan, brightest at the top.
+/// A plot column: lime, brightest at the top.
 pub(super) fn bar() -> Div {
     div().rounded_t(px(3.)).bg(linear_gradient(
         180.,
-        linear_color_stop(hex(CYAN), 0.),
-        linear_color_stop(tint(CYAN, 0x59), 1.),
+        linear_color_stop(hex(ACCENT), 0.),
+        linear_color_stop(tint(ACCENT, 0x59), 1.),
     ))
 }
 
@@ -637,13 +637,13 @@ fn fact(label: &str, value: String, color: u32) -> Div {
 fn bar_now() -> Div {
     div().rounded_t(px(3.)).bg(linear_gradient(
         180.,
-        linear_color_stop(hex(VIOLET), 0.),
-        linear_color_stop(tint(VIOLET, 0x4d), 1.),
+        linear_color_stop(hex(LLM), 0.),
+        linear_color_stop(tint(LLM, 0x4d), 1.),
     ))
 }
 
 /// Segment colors of the app split, most used first; the last is 其他.
-const APP_COLORS: [u32; 5] = [CYAN, VIOLET, GREEN, AMBER, TEXT3];
+const APP_COLORS: [u32; 5] = [ACCENT, LLM, GREEN, AMBER, TEXT3];
 
 impl Overview {
     /// 今天: the reading row (characters, speaking time, time saved, polish latency) and the speed scale.
@@ -652,7 +652,7 @@ impl Overview {
         let s = d.sum;
         let words = reading(
             "字数",
-            figure(thousands(s.chars), None, 52., CYAN),
+            figure(thousands(s.chars), None, 52., ACCENT),
             div()
                 .flex()
                 .gap(px(6.))
@@ -825,7 +825,7 @@ impl Overview {
                             .h(px(2.))
                             .w(relative(at(v)))
                             .rounded(px(1.))
-                            .bg(hgrada((CYAN << 8) | 0x33, (CYAN << 8) | 0xff))
+                            .bg(hgrada((ACCENT << 8) | 0x33, (ACCENT << 8) | 0xff))
                     }))
                     .child(mark(TYPING_CPM, hex(TEXT3), false))
                     .child(label(
@@ -836,8 +836,8 @@ impl Overview {
                     ))
                     .children(avg.map(|a| mark(a, tint(TEXT, 0x80), false)))
                     .children(avg.map(|a| label(a, format!("均 {a:.0}"), TEXT3, false)))
-                    .children(now.map(|v| mark(v, hex(CYAN), true)))
-                    .children(now.map(|v| label(v, format!("{v:.0}"), CYAN, true)))
+                    .children(now.map(|v| mark(v, hex(ACCENT), true)))
+                    .children(now.map(|v| label(v, format!("{v:.0}"), ACCENT, true)))
                     .when(now.is_none(), |t| {
                         t.child(
                             div()

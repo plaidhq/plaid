@@ -1,7 +1,7 @@
 // Recording HUD: a small always-on-top window that never takes focus and lets the mouse through.
 // GPUI's PopUp kind gives a non-activating NSPanel at NSPopUpWindowLevel on macOS and a
 // WS_EX_TOOLWINDOW | WS_EX_TOPMOST window on Windows; the rest is patched through the native handle.
-use crate::ui::mav;
+use crate::ui::mav::{self, ACCENT, AMBER, GREEN, LLM, RED};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use plaid_core::dictation::Hud as Msg;
@@ -501,15 +501,15 @@ impl Hud {
 
     fn edge(&self) -> Edge {
         match self.state {
-            State::Listen => Edge::Level(if self.command { CYAN } else { WHITE }, self.shown),
+            State::Listen => Edge::Level(if self.command { ACCENT } else { WHITE }, self.shown),
             State::Quiet => Edge::Fixed(AMBER, 0.3),
             State::Finishing | State::Running => Edge::Sweep(WHITE),
             // The LLM pass is told apart by color alone; esc still pastes the raw text.
-            State::Refining => Edge::Sweep(VIOLET),
+            State::Refining => Edge::Sweep(LLM),
             State::Done | State::Note => Edge::Fixed(GREEN, 1.),
             State::Saved | State::Flash => Edge::Fixed(AMBER, 1.),
             State::Failed => Edge::Fixed(RED, 1.),
-            State::Ask => Edge::Fixed(CYAN, 1.),
+            State::Ask => Edge::Fixed(ACCENT, 1.),
         }
     }
 
@@ -539,7 +539,7 @@ impl Hud {
         } else if self.state == State::Quiet {
             AMBER << 8 | 0xff
         } else if self.command && live {
-            CYAN << 8 | 0xff
+            ACCENT << 8 | 0xff
         } else {
             0xffffffff
         };
@@ -615,11 +615,6 @@ fn level(rms: f64) -> f32 {
 }
 
 const WHITE: u32 = 0xffffff;
-const AMBER: u32 = 0xffc65a;
-const CYAN: u32 = 0x7fd8ff;
-const GREEN: u32 = 0x7ee08a;
-const RED: u32 = 0xff7a70;
-const VIOLET: u32 = 0xb59cff;
 
 /// A light segment `w` wide starting at `x`, fading out toward both ends, with a soft glow from its middle.
 fn light(x: f32, w: f32, rgb: [f32; 4], alpha: f32) -> Div {

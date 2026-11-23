@@ -1,35 +1,35 @@
 //! The settings window's controls, drawn with GPUI primitives in the dark "edge light" style: near-black
-//! surfaces, hairline borders, pill controls and the HUD's cyan as the accent. Fonts are Space Grotesk and
+//! surfaces, hairline borders, pill controls and the HUD's lime as the accent. Fonts are Space Grotesk and
 //! JetBrains Mono (bundled, see `ui::init`); CJK falls back to the system fonts.
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-pub const BG: u32 = 0x0c0d10;
-pub const WELL: u32 = 0x0f1014;
-pub const RAISED: u32 = 0x1a1c22;
+pub const BG: u32 = 0x0c0d0c;
+pub const WELL: u32 = 0x0f100f;
+pub const RAISED: u32 = 0x1a1b1b;
 /// Cards and wells over the settings window's see-through ground, `0xRRGGBBAA`: dark fills with some of the
 /// blurred desktop showing through. Drawn menus keep the opaque RAISED2 so they still occlude.
-pub const GLASS: u32 = 0x161920b8;
-pub const GLASS_WELL: u32 = 0x0d0e12c0;
-pub const RAISED2: u32 = 0x1e2128;
-pub const HOVER: u32 = 0x262a32;
-pub const TEXT: u32 = 0xecedef;
-pub const TEXT2: u32 = 0xa0a4ac;
-pub const TEXT3: u32 = 0x7d818a;
-pub const CYAN: u32 = 0x7fd8ff;
-pub const VIOLET: u32 = 0xb59cff;
-pub const GREEN: u32 = 0x7ee08a;
+pub const GLASS: u32 = 0x171818b8;
+pub const GLASS_WELL: u32 = 0x0e0f0ec0;
+pub const RAISED2: u32 = 0x1f2020;
+pub const HOVER: u32 = 0x28292a;
+pub const TEXT: u32 = 0xeceeec;
+pub const TEXT2: u32 = 0xa3a6a4;
+pub const TEXT3: u32 = 0x7e817f;
+pub const ACCENT: u32 = 0xc2ea6c;
+pub const LLM: u32 = 0xff8f73;
+pub const GREEN: u32 = 0x4fcfa6;
 pub const AMBER: u32 = 0xffc65a;
-pub const RED: u32 = 0xff7a70;
+pub const RED: u32 = 0xff5f6d;
 /// Hairlines, `0xRRGGBBAA` (use with `hexa`).
 pub const LINE: u32 = 0xffffff0f;
 pub const LINE2: u32 = 0xffffff1a;
 pub const LINE3: u32 = 0xffffff24;
 /// Selected-text background.
-pub const SELECTION: u32 = 0x7fd8ff4d;
+pub const SELECTION: u32 = 0xc2ea6c3d;
 
 pub const HINT: u32 = TEXT2;
-pub const LINK: u32 = CYAN;
+pub const LINK: u32 = ACCENT;
 pub const TITLEBAR_H: f32 = 38.;
 
 /// `div().id(..)` for anything clickable. Snapshot builds also record the element's bounds under its id, so offscreen
@@ -218,7 +218,7 @@ pub fn light(kind: Light, active: bool) -> Stateful<Div> {
         .size(px(12.))
         .flex_none()
         .rounded_full()
-        .bg(hex(0x3a3d45))
+        .bg(hex(0x3b3d3c))
         .when(active, |d| d.group_hover("lights", |s| s.bg(hex(color))));
     if !active {
         return d;
@@ -474,7 +474,7 @@ fn plain(b: Stateful<Div>) -> Stateful<Div> {
         .border_1()
         .border_color(hexa(LINE2))
         .hover(|s| s.bg(hex(HOVER)))
-        .active(|s| s.bg(hex(0x2c3039)))
+        .active(|s| s.bg(hex(0x2e302f)))
 }
 
 /// Pill button on the raised fill.
@@ -498,18 +498,18 @@ pub fn small_button(
         .on_click(on_click)
 }
 
-/// The primary action: solid cyan with dark text.
+/// The primary action: solid lime with dark text.
 pub fn default_button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
     button_frame(id, false)
-        .bg(hex(CYAN))
+        .bg(hex(ACCENT))
         .text_color(hex(BG))
         .font_weight(medium())
-        .shadow(vec![glow(CYAN, 14., 0x40)])
-        .hover(|s| s.bg(hex(0x9be2ff)))
+        .shadow(vec![glow(ACCENT, 14., 0x40)])
+        .hover(|s| s.bg(hex(0xd3f28c)))
         .child(label.into())
         .on_click(on_click)
 }
@@ -556,7 +556,7 @@ pub struct MenuEntry {
 /// Height of one `menu` row; callers that line the checked row up with the button use it.
 pub const MENU_ROW: f32 = 28.;
 
-/// The open menu of a pop-up: raised dark panel, cyan wash under the pointer.
+/// The open menu of a pop-up: raised dark panel, lime wash under the pointer.
 pub fn menu(
     id: impl Into<SharedString>,
     width: f32,
@@ -584,9 +584,9 @@ pub fn menu(
                 .pl(px(6.))
                 .pr(px(16.))
                 .rounded(px(6.))
-                .hover(|s| s.bg(tint(CYAN, 0x26)))
+                .hover(|s| s.bg(tint(ACCENT, 0x26)))
                 .child(div().w(px(18.)).flex_none().when(it.checked, |d| {
-                    d.child(icon("plaid/check.svg", 11., hex(CYAN)))
+                    d.child(icon("plaid/check.svg", 11., hex(ACCENT)))
                 }))
                 .child(div().whitespace_nowrap().child(it.label))
                 .on_click(move |_, w, cx| pick(i, w, cx));
@@ -599,7 +599,7 @@ pub fn menu(
 
 // --- Switches, radios, segmented -------------------------------------------------------------------------------
 
-/// The bare switch: cyan with a glow when on.
+/// The bare switch: lime with a glow when on.
 pub fn switch(on: bool) -> Div {
     let track = div()
         .flex()
@@ -613,8 +613,8 @@ pub fn switch(on: bool) -> Div {
     if on {
         track
             .justify_end()
-            .bg(hex(CYAN))
-            .shadow(vec![glow(CYAN, 10., 0x55)])
+            .bg(hex(ACCENT))
+            .shadow(vec![glow(ACCENT, 10., 0x55)])
             .child(knob.bg(hex(BG)))
     } else {
         track
@@ -658,9 +658,9 @@ pub fn radio(
         .rounded_full()
         .border_1();
     let dot = if on {
-        dot.border_color(hex(CYAN))
-            .shadow(vec![glow(CYAN, 8., 0x44)])
-            .child(div().size(px(8.)).rounded_full().bg(hex(CYAN)))
+        dot.border_color(hex(ACCENT))
+            .shadow(vec![glow(ACCENT, 8., 0x44)])
+            .child(div().size(px(8.)).rounded_full().bg(hex(ACCENT)))
     } else {
         dot.border_color(hexa(LINE3)).bg(hexa(GLASS_WELL))
     };
@@ -741,7 +741,7 @@ pub fn disclosure(
 
 // --- Text fields -----------------------------------------------------------------------------------------------
 
-/// Well around an editor; the editor itself draws no frame. Focus adds a cyan ring.
+/// Well around an editor; the editor itself draws no frame. Focus adds a lime ring.
 pub fn field_frame(focused: bool) -> Div {
     div()
         .flex()
@@ -752,8 +752,8 @@ pub fn field_frame(focused: bool) -> Div {
         .border_1()
         .map(|d| {
             if focused {
-                d.border_color(tint(CYAN, 0x99))
-                    .shadow(vec![shadow(0., 0., 0., 3., 0x7fd8ff26, false)])
+                d.border_color(tint(ACCENT, 0x99))
+                    .shadow(vec![shadow(0., 0., 0., 3., 0xc2ea6c26, false)])
             } else {
                 d.border_color(hexa(LINE2))
             }
@@ -858,13 +858,13 @@ pub fn keycap(text: impl Into<SharedString>) -> Div {
         .border_color(hexa(LINE2))
         .font(mono())
         .text_size(px(11.))
-        .shadow(vec![shadow(0., 2., 0., 0., 0x08090bff, false)])
+        .shadow(vec![shadow(0., 2., 0., 0., 0x090a09ff, false)])
         .child(text.into())
 }
 
 // --- Tables ----------------------------------------------------------------------------------------------------
 
-/// One table row: hairline between rows, cyan wash when selected.
+/// One table row: hairline between rows, lime wash when selected.
 pub fn table_row(id: impl Into<ElementId>, index: usize, selected: bool) -> Stateful<Div> {
     let r = hit(id)
         .flex()
@@ -872,7 +872,7 @@ pub fn table_row(id: impl Into<ElementId>, index: usize, selected: bool) -> Stat
         .min_h(px(30.))
         .when(index > 0, |d| d.border_t_1().border_color(hexa(LINE)));
     if selected {
-        r.bg(tint(CYAN, 0x1f))
+        r.bg(tint(ACCENT, 0x1f))
     } else {
         r.hover(|s| s.bg(hexa(0xffffff08)))
     }

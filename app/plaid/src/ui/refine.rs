@@ -604,7 +604,7 @@ impl Refine {
                     .gap(px(8.))
                     .px(px(8.))
                     .rounded(px(6.))
-                    .hover(|s| s.bg(tint(CYAN, 0x26)))
+                    .hover(|s| s.bg(tint(ACCENT, 0x26)))
                     .child(glyph)
                     .child(div().flex_1().min_w_0().truncate().child(label))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -930,8 +930,8 @@ impl Refine {
             )
             .text_color(hex(RED));
             return frame()
-                .bg(tint(VIOLET, 0x10))
-                .border_color(tint(VIOLET, 0x55))
+                .bg(tint(LLM, 0x10))
+                .border_color(tint(LLM, 0x55))
                 .child(hit(id("name")).child(wide_field(&e.name, window, cx)))
                 .child(hit(id("prompt")).child(editor(&e.prompt, false, window, cx)))
                 .child(
@@ -1026,7 +1026,7 @@ impl Refine {
         frame()
             .map(|d| {
                 if on {
-                    d.bg(tint(VIOLET, 0x0c)).border_color(tint(VIOLET, 0x40))
+                    d.bg(tint(LLM, 0x0c)).border_color(tint(LLM, 0x40))
                 } else {
                     d.bg(hexa(GLASS)).border_color(hexa(LINE))
                 }
@@ -1544,7 +1544,7 @@ fn styles_summary(list: &[llm::Style], used: &[String]) -> Div {
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_color(hex(if live { VIOLET } else { TEXT3 }))
+                        .text_color(hex(if live { LLM } else { TEXT3 }))
                         .child(names.join(" + ")),
                 )
                 .when(!live, |d| d.child(hint("该应用不调用 LLM")))
@@ -1574,7 +1574,7 @@ fn history() -> usize {
 }
 
 /// The rules preview: the sample as recognized (removed characters struck through) and as it would paste
-/// (inserted characters in cyan).
+/// (inserted characters in lime).
 fn preview() -> Div {
     let rules = Rules::load(config::value);
     let out = rules.apply(RULE_SAMPLE);
@@ -1588,8 +1588,8 @@ fn preview() -> Div {
         ..Default::default()
     };
     let added = HighlightStyle {
-        color: Some(hex(CYAN)),
-        background_color: Some(tint(CYAN, 0x30)),
+        color: Some(hex(ACCENT)),
+        background_color: Some(tint(ACCENT, 0x30)),
         ..Default::default()
     };
     let changed: usize = deleted
@@ -1617,7 +1617,7 @@ fn preview() -> Div {
                     .rounded(px(4.))
                     .map(|d| {
                         if lit {
-                            d.bg(hex(CYAN))
+                            d.bg(hex(ACCENT))
                                 .text_color(hex(BG))
                                 .font_weight(FontWeight::SEMIBOLD)
                         } else {
@@ -1656,13 +1656,13 @@ fn preview() -> Div {
                     div()
                         .flex_1()
                         .h_full()
-                        .bg(hgrada(CYAN << 8, (CYAN << 8) | 0x80)),
+                        .bg(hgrada(ACCENT << 8, (ACCENT << 8) | 0x80)),
                 )
                 .child(
                     div()
                         .flex_1()
                         .h_full()
-                        .bg(hgrada((VIOLET << 8) | 0x80, VIOLET << 8)),
+                        .bg(hgrada((LLM << 8) | 0x80, LLM << 8)),
                 ),
         )
         .child(label(
@@ -1687,7 +1687,7 @@ fn preview() -> Div {
 }
 
 /// One rule as a tile: title, a dot that lights when on, the example underneath. The tile toggles the rule.
-/// One global level: violet bar and wash when picked.
+/// One global level: coral bar and wash when picked.
 fn level_card(
     l: llm::Level,
     sub: &'static str,
@@ -1708,7 +1708,7 @@ fn level_card(
         .overflow_hidden()
         .map(|d| {
             if picked {
-                d.bg(tint(VIOLET, 0x1a)).border_color(tint(VIOLET, 0x55))
+                d.bg(tint(LLM, 0x1a)).border_color(tint(LLM, 0x55))
             } else {
                 d.border_color(hexa(LINE)).hover(|s| s.bg(hex(HOVER)))
             }
@@ -1721,8 +1721,8 @@ fn level_card(
                     .top_0()
                     .bottom_0()
                     .w(px(3.))
-                    .bg(hex(VIOLET))
-                    .shadow(vec![glow(VIOLET, 8., 0x99)]),
+                    .bg(hex(LLM))
+                    .shadow(vec![glow(LLM, 8., 0x99)]),
             )
         })
         .child(
@@ -1759,7 +1759,7 @@ fn level_menu_label(l: llm::Level) -> &'static str {
     }
 }
 
-/// The per-app level as a small tag: violet when it calls the LLM.
+/// The per-app level as a small tag: coral when it calls the LLM.
 fn level_tag(id: String, l: llm::Level) -> Stateful<Div> {
     let llm = l >= llm::Level::Light;
     hit(SharedString::from(id))
@@ -1774,7 +1774,7 @@ fn level_tag(id: String, l: llm::Level) -> Stateful<Div> {
         .text_size(px(12.))
         .map(|d| {
             if llm {
-                d.bg(tint(VIOLET, 0x22)).text_color(hex(VIOLET))
+                d.bg(tint(LLM, 0x22)).text_color(hex(LLM))
             } else {
                 d.bg(hex(RAISED2)).text_color(hex(TEXT2))
             }
@@ -1784,7 +1784,7 @@ fn level_tag(id: String, l: llm::Level) -> Stateful<Div> {
         .child(icon(
             "plaid/chev-down.svg",
             9.,
-            hex(if llm { VIOLET } else { TEXT3 }),
+            hex(if llm { LLM } else { TEXT3 }),
         ))
 }
 
@@ -1829,9 +1829,9 @@ fn rule_tile(i: usize, model: &Entity<Model>) -> Stateful<Div> {
         .border_1()
         .map(|d| {
             if on {
-                d.bg(tint(CYAN, 0x14))
-                    .border_color(tint(CYAN, 0x66))
-                    .shadow(vec![glow(CYAN, 18., 0x1a)])
+                d.bg(tint(ACCENT, 0x14))
+                    .border_color(tint(ACCENT, 0x66))
+                    .shadow(vec![glow(ACCENT, 18., 0x1a)])
             } else {
                 d.bg(hexa(GLASS))
                     .border_color(hexa(LINE))
@@ -1852,9 +1852,9 @@ fn rule_tile(i: usize, model: &Entity<Model>) -> Stateful<Div> {
                 )
                 .child(div().size(px(10.)).flex_none().rounded_full().map(|d| {
                     if on {
-                        d.bg(hex(CYAN)).shadow(vec![glow(CYAN, 10., 0xcc)])
+                        d.bg(hex(ACCENT)).shadow(vec![glow(ACCENT, 10., 0xcc)])
                     } else {
-                        d.border(px(1.5)).border_color(hex(0x3a3d45))
+                        d.border(px(1.5)).border_color(hex(0x3b3d3c))
                     }
                 })),
         )
@@ -1909,8 +1909,8 @@ impl Render for Refine {
                         div()
                             .size(px(8.))
                             .rounded_full()
-                            .bg(hex(if enabled { VIOLET } else { TEXT3 }))
-                            .when(enabled, |d| d.shadow(vec![glow(VIOLET, 10., 0xcc)])),
+                            .bg(hex(if enabled { LLM } else { TEXT3 }))
+                            .when(enabled, |d| d.shadow(vec![glow(LLM, 10., 0xcc)])),
                     )
                     .child(
                         div()
