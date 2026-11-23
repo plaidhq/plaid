@@ -1936,11 +1936,27 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
             && llm::active_styles(config::raw, None).len() == 1,
         &config::raw("llmStyles"),
     )?;
+    // Terminal is 原文 in the fixture: its chip and summary line go dim.
+    ui.scroll("style-0-add", -250.)?;
+    ui.click("style-2-add")?;
+    ui.click("style-2-add-menu-2")?;
+    expect(
+        "style 2 on a raw app",
+        llm::styles(config::raw)[2].apps.len() == 1,
+        &config::raw("llmStyles"),
+    )?;
     ui.shot("refine-styles-on")?;
+    ui.click("style-2-app-0-remove")?;
     ui.click("style-1-all-remove")?;
     expect(
         "all removed",
         !llm::styles(config::raw)[1].all,
+        &config::raw("llmStyles"),
+    )?;
+    ui.click("style-0-app-0-remove")?;
+    expect(
+        "app removed",
+        llm::styles(config::raw)[0].apps.is_empty(),
         &config::raw("llmStyles"),
     )?;
     ui.click("style-new")?;
@@ -1963,12 +1979,6 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     expect(
         "style deleted",
         llm::styles(config::raw).len() == 4,
-        &config::raw("llmStyles"),
-    )?;
-    ui.click("style-0-app-0-remove")?;
-    expect(
-        "app removed",
-        llm::styles(config::raw)[0].apps.is_empty(),
         &config::raw("llmStyles"),
     )?;
 
