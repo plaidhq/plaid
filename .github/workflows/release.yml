@@ -1,4 +1,4 @@
-# Pushing a tag vX.Y.Z builds the macOS app (Apple silicon, ad-hoc signed) and the Windows exe, and publishes
+# Pushing a tag vX.Y.Z builds the macOS app (Apple silicon) and the Windows exe, and publishes
 # both as a GitHub release. The tag must match the workspace version in app/Cargo.toml.
 name: release
 
@@ -22,7 +22,26 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app
-      - run: SIGN_ID=- BUILD=${{ github.run_number }} ./bundle.sh release
+      # A fixed self-signed identity (not trusted, not notarized): the designated requirement names its certificate,
+      # so Microphone/Accessibility grants survive updates, which ad-hoc signatures (cdhash) don't.
+      - name: Signing keychain
+        env:
+          P12: ${{ secrets.MACOS_SIGN_P12 }}
+          PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/sign.keychain-db"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/sign.p12"
+          security create-keychain -p ci "$KC"
+          security set-keychain-settings "$KC"
+          security unlock-keychain -p ci "$KC"
+          security import "$RUNNER_TEMP/sign.p12" -k "$KC" -P "$PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k ci "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/sign.p12"
+          echo "SIGN_ID=324281721B815B412C285862A93F74AD7D6518C2" >> "$GITHUB_ENV"
+      - run: BUILD=${{ github.run_number }} ./bundle.sh release
+      - name: Signed with the release identity
+        run: codesign -d -r- target/Plaid.app 2>&1 | grep 'certificate leaf = H"324281721b815b412c285862a93f74ad7d6518c2"'
       - run: ditto -c -k --keepParent target/Plaid.app "Plaid-$GITHUB_REF_NAME-macos-arm64.zip"
       - uses: actions/upload-artifact@v4
         with:

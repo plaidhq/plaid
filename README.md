@@ -12,12 +12,12 @@ punctuation before pasting. The UI is in Simplified Chinese.
 
 ## Install
 
-Download the zip for your platform from [Releases](https://github.com/plaidhq/plaid/releases). The builds are unsigned.
+Download the zip for your platform from [Releases](https://github.com/plaidhq/plaid/releases). The builds are not notarized (macOS) or code-signed for SmartScreen (Windows).
 
 - **macOS**: unzip, move `Plaid.app` to Applications and open it once. When macOS blocks it, go to System Settings ›
   Privacy & Security and choose Open Anyway. Grant Microphone and Accessibility when asked; Accessibility is used
-  for the global hotkey and for pasting. Each update has a new ad-hoc signature, so macOS asks for Accessibility
-  again.
+  for the global hotkey and for pasting. Releases are signed with the same self-signed certificate, so the grants
+  carry over to updates.
 - **Windows**: unzip and run `plaid.exe`. On the SmartScreen prompt choose More info › Run anyway.
 
 Plaid checks GitHub for new releases every 6 hours and can update itself (设置 › 关于).
