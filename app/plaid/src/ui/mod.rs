@@ -633,19 +633,11 @@ impl Settings {
                 drag_area()
                     .flex()
                     .items_center()
-                    .gap(px(6.))
                     .h_full()
                     .text_size(px(19.))
                     .line_height(px(24.))
                     .font_weight(bold())
-                    .child("plaid")
-                    .child(
-                        div()
-                            .size(px(6.))
-                            .rounded_full()
-                            .bg(hex(CYAN))
-                            .shadow(vec![glow(CYAN, 10., 0xff)]),
-                    ),
+                    .child("plaid"),
             )
             .child(nav)
             .child(drag_area().flex_1().h_full())
