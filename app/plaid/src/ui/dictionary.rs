@@ -291,6 +291,9 @@ pub struct Dictionary {
     fallback_key: bool,
     /// Focused while the confirm sheet is up, so the overlay gets Esc.
     overlay_focus: FocusHandle,
+    /// The two learning thresholds (learnEditHits, learnRewriteHits).
+    edit_hits: Entity<InputState>,
+    rewrite_hits: Entity<InputState>,
 }
 
 impl Dictionary {
@@ -342,8 +345,29 @@ impl Dictionary {
                     .ok()
                     .flatten()
                     .is_some_and(|k| !k.is_empty()));
+        let threshold =
+            |key: &'static str, v: usize, window: &mut Window, cx: &mut Context<Self>| {
+                let input = cx.new(|cx| InputState::new(window, cx));
+                input.update(cx, |i, cx| i.set_value(v.to_string(), window, cx));
+                cx.subscribe_in(
+                    &input,
+                    window,
+                    move |this, _, e: &InputEvent, window, cx| {
+                        if matches!(e, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                            this.set_threshold(key, None, window, cx);
+                        }
+                    },
+                )
+                .detach();
+                input
+            };
+        let l = learn();
+        let edit_hits = threshold("learnEditHits", l.edits, window, cx);
+        let rewrite_hits = threshold("learnRewriteHits", l.rewrites, window, cx);
         let text = read(path());
         Dictionary {
+            edit_hits,
+            rewrite_hits,
             model,
             nav,
             saved: text.clone(),
@@ -1371,7 +1395,7 @@ impl Dictionary {
             })
     }
 
-    fn learning(&self, cx: &mut Context<Self>) -> Div {
+    fn learning(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let switch = |key: &'static str, label: &'static str, note: AnyElement| {
             let model = self.model.clone();
             div()
@@ -1411,7 +1435,6 @@ impl Dictionary {
             hint("独立于润色开关：润色关闭时，仍将每句文本发送到配置的 LLM 校对，只用来发现规则，不改粘贴结果")
                 .into_any_element()
         };
-        let l = learn();
         group("学习").child(
             group_body()
                 .gap(px(10.))
@@ -1422,62 +1445,89 @@ impl Dictionary {
                         .into_any_element(),
                 ))
                 .child(switch("autoLearn", "后台校对", note))
-                .child(self.threshold("手动改过几次后自动生效", "learnEditHits", &Learn::EDITS, l.edits, cx))
-                .child(self.threshold(
-                    "润色改过几次后自动生效",
-                    "learnRewriteHits",
-                    &Learn::REWRITES,
-                    l.rewrites,
-                    cx,
-                ))
+                .child(self.threshold("手动改过几次后自动生效", "learnEditHits", window, cx))
+                .child(self.threshold("润色改过几次后自动生效", "learnRewriteHits", window, cx))
                 .child(hint(
                     "达到次数，且多数时候都被改掉，规则才自动生效；润色的次数需分布在两天以上。没达到的列在「最近学会」里等你采纳。",
                 )),
         )
     }
 
-    /// One "applies after n" choice; 不自动 (0) leaves such rules as suggestions.
+    /// One "applies after n" field with a stepper; 0 leaves such rules as suggestions.
     fn threshold(
         &self,
         label: &'static str,
         key: &'static str,
-        options: &[usize],
-        value: usize,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let this = cx.entity().downgrade();
-        let items: Vec<String> = options
-            .iter()
-            .map(|&n| {
-                if n == 0 {
-                    "不自动".into()
-                } else {
-                    format!("{n} 次")
-                }
-            })
-            .collect();
-        let items: Vec<&str> = items.iter().map(String::as_str).collect();
-        let selected = options.iter().position(|&n| n == value).unwrap_or(1);
-        let options = options.to_vec();
+        let input = self.threshold_input(key);
         div()
             .flex()
             .flex_col()
             .items_start()
             .gap(px(6.))
             .child(div().text_color(hex(TEXT2)).child(label))
-            .child(segmented(key, &items, selected, move |i, _, cx| {
-                let n = options[i];
-                let _ = this.update(cx, |this, cx| {
-                    this.model.update(cx, |m, cx| m.set(key, n.to_string(), cx));
-                    this.model
-                        .read(cx)
-                        .store
-                        .write_auto_rules(&config::terms(false), &learn());
-                    this.derived = None;
-                    let _ = this.nav.update(cx, |s, cx| s.count_pending(cx));
-                    cx.notify();
-                });
-            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(
+                        hit(SharedString::from(format!("{key}-field")))
+                            .child(field(input, 60., window, cx)),
+                    )
+                    .child(stepper(key, move |dir, w, cx| {
+                        let _ =
+                            this.update(cx, |this, cx| this.set_threshold(key, Some(dir), w, cx));
+                    }))
+                    .child("次")
+                    .child(hint("0 为不自动").ml(px(6.))),
+            )
+    }
+
+    fn threshold_input(&self, key: &str) -> &Entity<InputState> {
+        if key == "learnEditHits" {
+            &self.edit_hits
+        } else {
+            &self.rewrite_hits
+        }
+    }
+
+    /// Stores the typed threshold (or the current one moved by `step`), 0..=99, and regenerates the learned rules.
+    fn set_threshold(
+        &mut self,
+        key: &'static str,
+        step: Option<i64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let l = learn();
+        let current = if key == "learnEditHits" {
+            l.edits
+        } else {
+            l.rewrites
+        } as i64;
+        let input = self.threshold_input(key).clone();
+        let typed = input.read(cx).value().trim().parse::<i64>().ok();
+        let v = match step {
+            Some(s) => current + s,
+            None => typed.unwrap_or(current),
+        }
+        .clamp(0, 99);
+        input.update(cx, |i, cx| i.set_value(v.to_string(), window, cx));
+        if v == current {
+            return;
+        }
+        self.model.update(cx, |m, cx| m.set(key, v.to_string(), cx));
+        self.model
+            .read(cx)
+            .store
+            .write_auto_rules(&config::terms(false), &learn());
+        self.derived = None;
+        let _ = self.nav.update(cx, |s, cx| s.count_pending(cx));
+        cx.notify();
     }
 
     fn sheet_view(&self, sheet: &Sheet, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -1715,7 +1765,7 @@ impl Render for Dictionary {
                             .flex_col()
                             .gap(px(12.))
                             .children(self.suggestions(&d, cx))
-                            .child(self.learning(cx)),
+                            .child(self.learning(window, cx)),
                     ),
             )
             .when_some(overlay, |el, sheet| {
@@ -1835,8 +1885,13 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     // Thresholds: 不自动 on both leaves every learned rule a suggestion; back to the defaults re-applies it.
     let rules_in_file = || read(config::data_dir().join(AUTO_RULES)).contains(" -> ");
     expect("learned rule applied by default", rules_in_file(), &None)?;
-    ui.click("learnEditHits-3")?;
-    ui.click("learnRewriteHits-3")?;
+    // The thresholds sit below the fold of the side column.
+    ui.scroll("autoLearn", -800.)?;
+    for (key, n) in [("learnEditHits", 2), ("learnRewriteHits", 3)] {
+        for _ in 0..n {
+            ui.click(&format!("{key}--1"))?;
+        }
+    }
     ui.shot("dictionary-thresholds")?;
     expect(
         "不自动 applies nothing, rows wait for 采纳",
@@ -1845,12 +1900,31 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
             && ui.has("auto-dismiss-0"),
         &None,
     )?;
-    ui.click("learnEditHits-1")?;
-    ui.click("learnRewriteHits-1")?;
+    for (key, n) in [("learnEditHits", 2), ("learnRewriteHits", 3)] {
+        for _ in 0..n {
+            ui.click(&format!("{key}-1"))?;
+        }
+    }
+    expect(
+        "stepper back to the defaults",
+        config::raw("learnRewriteHits").as_deref() == Some("3"),
+        &config::raw("learnRewriteHits"),
+    )?;
     expect("defaults re-apply", rules_in_file(), &None)?;
+    // Any count can be typed; Enter stores it.
+    ui.click("learnRewriteHits-field")?;
+    ui.key("cmd-a")?;
+    ui.type_text("6")?;
+    ui.key("enter")?;
+    expect(
+        "typed threshold stored",
+        config::raw("learnRewriteHits").as_deref() == Some("6"),
+        &config::raw("learnRewriteHits"),
+    )?;
     for k in ["learnEditHits", "learnRewriteHits"] {
         let _ = config::set(k, serde_json::Value::Null);
     }
+    ui.scroll("autoLearn", 800.)?;
 
     // Batch menu → 全部忽略 asks first; cancel leaves dismissedFixes alone.
     ui.click("fix-batch")?;

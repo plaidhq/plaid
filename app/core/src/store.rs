@@ -182,9 +182,6 @@ impl Default for Learn {
 }
 
 impl Learn {
-    pub const EDITS: [usize; 4] = [1, 2, 3, 0];
-    pub const REWRITES: [usize; 4] = [2, 3, 5, 0];
-
     pub fn from_settings(mut get: impl FnMut(&str) -> Option<String>) -> Self {
         let d = Learn::default();
         let n =
