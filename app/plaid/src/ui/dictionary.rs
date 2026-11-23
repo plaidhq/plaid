@@ -9,7 +9,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use plaid_core::hotwords::{self, Snapshot};
 use plaid_core::llm;
-use plaid_core::store::{AUTO_RULES, AutoRule, Fix, Store, write_atomic};
+use plaid_core::store::{AUTO_RULES, AutoRule, Fix, Learn, Store, write_atomic};
 use plaid_core::text::trim_ws;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -51,7 +51,7 @@ pub(super) fn add_word(word: &str, store: &Store) -> std::io::Result<bool> {
     text.push_str(word);
     text.push('\n');
     write_atomic(&path(), text.as_bytes())?;
-    store.write_auto_rules(&config::terms(false), &dismissed());
+    store.write_auto_rules(&config::terms(false), &learn());
     Ok(true)
 }
 
@@ -61,11 +61,22 @@ fn modified() -> Option<SystemTime> {
 
 /// "from -> to" lines the user ignored (suggestions and learned rules alike).
 fn dismissed() -> HashSet<String> {
-    config::raw("dismissedFixes")
-        .unwrap_or_default()
-        .split('\n')
-        .map(str::to_owned)
-        .collect()
+    learn().dismissed
+}
+
+/// The learning settings: ignored lines and the thresholds that apply a rule.
+pub(crate) fn learn() -> Learn {
+    Learn::from_settings(config::raw)
+}
+
+/// When a learned rule applies by itself, in the user's thresholds.
+fn applies_note(l: &Learn) -> String {
+    match (l.edits, l.rewrites) {
+        (0, 0) => "只建议，不自动生效".into(),
+        (0, r) => format!("润色跨两天改过 {r} 次，才自动生效"),
+        (e, 0) => format!("手动改过 {e} 次，才自动生效"),
+        (e, r) => format!("手动改过 {e} 次，或润色跨两天改过 {r} 次，才自动生效"),
+    }
 }
 
 fn rule(from: &str, to: &str) -> String {
@@ -98,9 +109,9 @@ fn pending_fixes(store: &Store, own: &str, autos: &[AutoRule]) -> Vec<Fix> {
 
 /// Number of pending suggestions and learned rules waiting to be confirmed, for the sidebar badge.
 pub(super) fn pending(model: &Model) -> usize {
-    let autos = model.store.auto_rules(&config::terms(false), &dismissed());
+    let autos = model.store.auto_rules(&config::terms(false), &learn());
     pending_fixes(&model.store, &read(path()), &autos).len()
-        + autos.iter().filter(|a| !a.active()).count()
+        + autos.iter().filter(|a| !a.active).count()
 }
 
 /// What one dictionary line does, as its row shows it.
@@ -367,7 +378,7 @@ impl Dictionary {
                 self.model
                     .read(cx)
                     .store
-                    .write_auto_rules(&config::terms(false), &dismissed());
+                    .write_auto_rules(&config::terms(false), &learn());
                 let _ = self.nav.update(cx, |s, cx| s.count_pending(cx));
             }
             Err(e) => self.error = Some(e.to_string()),
@@ -441,7 +452,7 @@ impl Dictionary {
             return d.clone();
         }
         let store = &self.model.read(cx).store;
-        let autos = store.auto_rules(&config::terms(false), &dismissed());
+        let autos = store.auto_rules(&config::terms(false), &learn());
         let fixes = pending_fixes(store, &self.text, &autos);
         let since = chrono::Utc::now() - chrono::Duration::days(30);
         let texts: Vec<String> = store
@@ -458,7 +469,7 @@ impl Dictionary {
                 Shape::Word { target, .. } => Some(target),
                 _ => None,
             })
-            .chain(autos.iter().filter(|a| a.active()).map(|a| a.to.clone()));
+            .chain(autos.iter().filter(|a| a.active).map(|a| a.to.clone()));
         for w in words {
             let w = w.to_lowercase();
             if !w.is_empty() && !uses.contains_key(&w) {
@@ -544,7 +555,7 @@ impl Dictionary {
         self.model
             .read(cx)
             .store
-            .write_auto_rules(&config::terms(false), &dismissed());
+            .write_auto_rules(&config::terms(false), &learn());
         cx.notify();
     }
 
@@ -775,7 +786,7 @@ impl Dictionary {
         let shapes = self.shapes();
         // A word is tinted when something rewrites into it: its own aliases, a replacement or a learned rule.
         let rewritten = |w: &str| {
-            d.autos.iter().any(|a| a.active() && a.to == w)
+            d.autos.iter().any(|a| a.active && a.to == w)
                 || shapes
                     .iter()
                     .any(|(_, s)| matches!(s, Shape::Replace { to, .. } if to == w))
@@ -1267,7 +1278,7 @@ impl Dictionary {
         let this = cx.entity().downgrade();
         let rows = d.autos.iter().enumerate().map(|(i, a)| {
             let (keep, undo) = (this.clone(), this.clone());
-            let (from, to, active) = (&a.from, &a.to, a.active());
+            let (from, to, active) = (&a.from, &a.to, a.active);
             let key = rule(from, to);
             let evidence = match (active, a.kept) {
                 (true, 0) => format!("改过 {} 次", a.hits),
@@ -1339,23 +1350,20 @@ impl Dictionary {
         group_body()
             .gap(px(4.))
             .child(
-                card_head(
-                    "最近学会",
-                    "手动改过 2 次，或润色跨两天改过 3 次，才自动生效",
-                )
-                .pb(px(6.))
-                .child(
-                    div()
-                        .flex_none()
-                        .font(mono())
-                        .text_size(px(11.))
-                        .text_color(hex(if on { TEXT2 } else { AMBER }))
-                        .child(if on {
-                            "自动学习 开"
-                        } else {
-                            "自动学习 关"
-                        }),
-                ),
+                card_head("最近学会", applies_note(&learn()))
+                    .pb(px(6.))
+                    .child(
+                        div()
+                            .flex_none()
+                            .font(mono())
+                            .text_size(px(11.))
+                            .text_color(hex(if on { TEXT2 } else { AMBER }))
+                            .child(if on {
+                                "自动学习 开"
+                            } else {
+                                "自动学习 关"
+                            }),
+                    ),
             )
             .children(rows)
             .when(d.autos.is_empty(), |el| {
@@ -1403,7 +1411,7 @@ impl Dictionary {
             hint("独立于润色开关：润色关闭时，仍将每句文本发送到配置的 LLM 校对，只用来发现规则，不改粘贴结果")
                 .into_any_element()
         };
-        let _ = cx;
+        let l = learn();
         group("学习").child(
             group_body()
                 .gap(px(10.))
@@ -1413,8 +1421,63 @@ impl Dictionary {
                     hint("通过辅助功能读取你改过的输入框，和粘贴内容对比得出建议")
                         .into_any_element(),
                 ))
-                .child(switch("autoLearn", "后台校对", note)),
+                .child(switch("autoLearn", "后台校对", note))
+                .child(self.threshold("手动改过几次后自动生效", "learnEditHits", &Learn::EDITS, l.edits, cx))
+                .child(self.threshold(
+                    "润色改过几次后自动生效",
+                    "learnRewriteHits",
+                    &Learn::REWRITES,
+                    l.rewrites,
+                    cx,
+                ))
+                .child(hint(
+                    "达到次数，且多数时候都被改掉，规则才自动生效；润色的次数需分布在两天以上。没达到的列在「最近学会」里等你采纳。",
+                )),
         )
+    }
+
+    /// One "applies after n" choice; 不自动 (0) leaves such rules as suggestions.
+    fn threshold(
+        &self,
+        label: &'static str,
+        key: &'static str,
+        options: &[usize],
+        value: usize,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let this = cx.entity().downgrade();
+        let items: Vec<String> = options
+            .iter()
+            .map(|&n| {
+                if n == 0 {
+                    "不自动".into()
+                } else {
+                    format!("{n} 次")
+                }
+            })
+            .collect();
+        let items: Vec<&str> = items.iter().map(String::as_str).collect();
+        let selected = options.iter().position(|&n| n == value).unwrap_or(1);
+        let options = options.to_vec();
+        div()
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(6.))
+            .child(div().text_color(hex(TEXT2)).child(label))
+            .child(segmented(key, &items, selected, move |i, _, cx| {
+                let n = options[i];
+                let _ = this.update(cx, |this, cx| {
+                    this.model.update(cx, |m, cx| m.set(key, n.to_string(), cx));
+                    this.model
+                        .read(cx)
+                        .store
+                        .write_auto_rules(&config::terms(false), &learn());
+                    this.derived = None;
+                    let _ = this.nav.update(cx, |s, cx| s.count_pending(cx));
+                    cx.notify();
+                });
+            }))
     }
 
     fn sheet_view(&self, sheet: &Sheet, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -1768,6 +1831,26 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &None,
     )?;
     expect("no-LLM hint with 打开文字", ui.has("open-refine"), &None)?;
+
+    // Thresholds: 不自动 on both leaves every learned rule a suggestion; back to the defaults re-applies it.
+    let rules_in_file = || read(config::data_dir().join(AUTO_RULES)).contains(" -> ");
+    expect("learned rule applied by default", rules_in_file(), &None)?;
+    ui.click("learnEditHits-3")?;
+    ui.click("learnRewriteHits-3")?;
+    ui.shot("dictionary-thresholds")?;
+    expect(
+        "不自动 applies nothing, rows wait for 采纳",
+        !rules_in_file()
+            && config::raw("learnEditHits").as_deref() == Some("0")
+            && ui.has("auto-dismiss-0"),
+        &None,
+    )?;
+    ui.click("learnEditHits-1")?;
+    ui.click("learnRewriteHits-1")?;
+    expect("defaults re-apply", rules_in_file(), &None)?;
+    for k in ["learnEditHits", "learnRewriteHits"] {
+        let _ = config::set(k, serde_json::Value::Null);
+    }
 
     // Batch menu → 全部忽略 asks first; cancel leaves dismissedFixes alone.
     ui.click("fix-batch")?;

@@ -156,14 +156,56 @@ pub struct AutoRule {
     pub edits: usize,
     /// Local days with a hit.
     pub days: usize,
+    /// Applied to every result (hotwords.auto.txt) under the user's thresholds; otherwise only suggested.
+    pub active: bool,
 }
 
-impl AutoRule {
-    /// Applied to every result: replaced at least 3 times in 4, and either by hand twice or on two days at least
-    /// three times. A weaker candidate is only suggested; one kept more often than replaced isn't shown.
-    pub fn active(&self) -> bool {
-        self.hits * 4 >= (self.hits + self.kept) * 3
-            && (self.edits >= 2 || (self.hits >= 3 && self.days >= 2))
+/// The user's learning settings: ignored lines and when a rule applies by itself.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Learn {
+    /// "from -> to" lines the user ignored (`dismissedFixes`).
+    pub dismissed: HashSet<String>,
+    /// Manual edits that apply a rule (`learnEditHits`); 0 never.
+    pub edits: usize,
+    /// Refine or background-check rewrites, on at least two days, that apply a rule (`learnRewriteHits`); 0 never.
+    pub rewrites: usize,
+}
+
+impl Default for Learn {
+    fn default() -> Self {
+        Learn {
+            dismissed: HashSet::new(),
+            edits: 2,
+            rewrites: 3,
+        }
+    }
+}
+
+impl Learn {
+    pub const EDITS: [usize; 4] = [1, 2, 3, 0];
+    pub const REWRITES: [usize; 4] = [2, 3, 5, 0];
+
+    pub fn from_settings(mut get: impl FnMut(&str) -> Option<String>) -> Self {
+        let d = Learn::default();
+        let n =
+            |v: Option<String>, def: usize| v.and_then(|v| v.trim().parse().ok()).unwrap_or(def);
+        Learn {
+            dismissed: get("dismissedFixes")
+                .unwrap_or_default()
+                .split('\n')
+                .filter(|l| !l.is_empty())
+                .map(str::to_owned)
+                .collect(),
+            edits: n(get("learnEditHits"), d.edits),
+            rewrites: n(get("learnRewriteHits"), d.rewrites),
+        }
+    }
+
+    /// Replaced at least 3 times in 4, and by hand `edits` times or `rewrites` times over two days.
+    fn applies(&self, a: &AutoRule) -> bool {
+        a.hits * 4 >= (a.hits + a.kept) * 3
+            && ((self.edits > 0 && a.edits >= self.edits)
+                || (self.rewrites > 0 && a.hits >= self.rewrites && a.days >= 2))
     }
 }
 
@@ -457,18 +499,18 @@ impl Store {
     /// time, so a rule disappears with its evidence. `terms`: the user's own terms (no learned rules, so a deleted
     /// term can't keep teaching itself); `dismissed`: "from -> to" lines the user ignored; a manual edit reverting
     /// the term vetoes it. Records hold text after the active rules, so an active rule gathers no new hits or keeps.
-    pub fn auto_rules(&self, terms: &[String], dismissed: &HashSet<String>) -> Vec<AutoRule> {
+    pub fn auto_rules(&self, terms: &[String], learn: &Learn) -> Vec<AutoRule> {
         let mut v: Vec<AutoRule> = self
-            .auto_candidates(terms, dismissed)
+            .auto_candidates(terms, learn)
             .into_iter()
-            .filter(|a| a.hits >= 2 && a.hits >= a.kept)
+            .filter(|a| a.active || (a.hits >= 2 && a.hits >= a.kept))
             .collect();
-        v.sort_by(|a, b| (b.active(), b.hits, &b.from).cmp(&(a.active(), a.hits, &a.from)));
+        v.sort_by(|a, b| (b.active, b.hits, &b.from).cmp(&(a.active, a.hits, &a.from)));
         v
     }
 
     /// Every scored candidate, before the shown filter (`plaid --learn-report`).
-    pub fn auto_candidates(&self, terms: &[String], dismissed: &HashSet<String>) -> Vec<AutoRule> {
+    pub fn auto_candidates(&self, terms: &[String], learn: &Learn) -> Vec<AutoRule> {
         let rules = crate::records::rules;
         let pairs = review_pairs;
         let (mut found, mut vetoed) = (HashSet::<(String, String)>::new(), HashSet::new());
@@ -484,7 +526,7 @@ impl Store {
             .into_iter()
             .filter(|(f, t)| {
                 !vetoed.contains(&(f.clone(), t.clone()))
-                    && !dismissed.contains(&format!("{f} -> {t}"))
+                    && !learn.dismissed.contains(&format!("{f} -> {t}"))
             })
             .map(|(from, to)| {
                 let mut a = AutoRule {
@@ -494,6 +536,7 @@ impl Store {
                     kept: 0,
                     edits: 0,
                     days: 0,
+                    active: false,
                 };
                 let mut days = HashSet::new();
                 for r in self.delivered() {
@@ -519,6 +562,7 @@ impl Store {
                     }
                 }
                 a.days = days.len();
+                a.active = learn.applies(&a);
                 a
             })
             .collect();
@@ -527,11 +571,11 @@ impl Store {
     }
 
     /// Regenerates hotwords.auto.txt from the active rules; the hotword snapshot reads it with the user's own file.
-    pub fn write_auto_rules(&self, terms: &[String], dismissed: &HashSet<String>) {
+    pub fn write_auto_rules(&self, terms: &[String], learn: &Learn) {
         let lines: String = self
-            .auto_rules(terms, dismissed)
+            .auto_rules(terms, learn)
             .into_iter()
-            .filter(AutoRule::active)
+            .filter(|a| a.active)
             .map(|a| format!("{} -> {}\n", a.from, a.to))
             .collect();
         let body = format!(
@@ -608,7 +652,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("plaid-rules-{}", uuid::Uuid::new_v4()));
         let mut s = Store::load(&dir);
         let terms = vec!["Claude".to_string(), "冗余".to_string()];
-        let none = HashSet::new();
+        let none = Learn::default();
         let at = Utc::now() - chrono::Duration::days(3);
         // Record `i` on day `day`, raw text `raw`, background check `checked`.
         let rec = |day: i64, i: i64, raw: &str, checked: Option<&str>| Record {
@@ -626,7 +670,7 @@ mod tests {
         let got = |s: &Store| -> Vec<(String, bool)> {
             s.auto_rules(&terms, &none)
                 .into_iter()
-                .map(|a| (format!("{} -> {}", a.from, a.to), a.active()))
+                .map(|a| (format!("{} -> {}", a.from, a.to), a.active))
                 .collect()
         };
         let rule = |active| vec![("克劳德 -> Claude".to_string(), active)];
@@ -657,7 +701,10 @@ mod tests {
         s.add(rec(2, 5, "克劳德又来了", None));
         assert_eq!(got(&s), rule(false));
         // Ignored, or vetoed by an edit back to the heard text: gone.
-        let dismissed: HashSet<String> = ["克劳德 -> Claude".to_string()].into();
+        let dismissed = Learn {
+            dismissed: ["克劳德 -> Claude".to_string()].into(),
+            ..Learn::default()
+        };
         assert!(s.auto_rules(&terms, &dismissed).is_empty());
         s.add(rec(2, 6, "我用Claude写代码", None));
         s.set_edited(
@@ -679,6 +726,33 @@ mod tests {
             );
         }
         assert_eq!(got(&s), rule(true));
+        // The user's thresholds: 3 edits, or edits never, leave it a suggestion; 1 edit applies one alone.
+        let with = |edits, rewrites| Learn {
+            edits,
+            rewrites,
+            ..Learn::default()
+        };
+        assert!(!s.auto_rules(&terms, &with(3, 3))[0].active);
+        assert!(!s.auto_rules(&terms, &with(0, 3))[0].active);
+        let mut one = Store::load(&dir.join("one"));
+        one.add(rec(0, 0, "问一下克劳德吧", None));
+        one.set_edited(
+            one.all.last().unwrap().at,
+            "问一下克劳德吧".into(),
+            "问一下 Claude 吧".into(),
+        );
+        assert!(
+            one.auto_rules(&terms, &none).is_empty(),
+            "one edit, default"
+        );
+        assert!(one.auto_rules(&terms, &with(1, 3))[0].active);
+        // Settings parse, unset keeps the defaults.
+        let l = Learn::from_settings(|k| match k {
+            "learnEditHits" => Some("0".into()),
+            "dismissedFixes" => Some("a -> b\n".into()),
+            _ => None,
+        });
+        assert_eq!((l.edits, l.rewrites, l.dismissed.len()), (0, 3, 1));
         // Rewriting a whole passage pairs unrelated spans (荣誉 -> 冗余): no evidence.
         let mut s = Store::load(&dir.join("b"));
         let pasted = "关于资源的预留，目前比较悲观，整体可以供应的卡非常紧张，荣誉的部分先不谈。";

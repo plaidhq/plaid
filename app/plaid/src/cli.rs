@@ -146,27 +146,25 @@ pub fn learn_report() -> Result<(), String> {
     use plaid_core::store::AUTO_RULES;
     let dir = config::data_dir();
     let store = Store::load(&dir);
-    let dismissed: std::collections::HashSet<String> = config::raw("dismissedFixes")
-        .unwrap_or_default()
-        .split('\n')
-        .map(str::to_owned)
-        .collect();
-    let all = store.auto_candidates(&config::terms(false), &dismissed);
-    let shown = store.auto_rules(&config::terms(false), &dismissed);
+    let learn = plaid_core::store::Learn::from_settings(config::raw);
+    let all = store.auto_candidates(&config::terms(false), &learn);
+    let shown = store.auto_rules(&config::terms(false), &learn);
     let file = std::fs::read_to_string(dir.join(AUTO_RULES)).unwrap_or_default();
     let old: Vec<&str> = file
         .lines()
         .filter(|l| l.contains(" -> ") && !l.starts_with('#'))
         .collect();
     println!(
-        "{} records, {} candidates, data {}",
+        "{} records, {} candidates, data {}; applies after {} edits / {} rewrites over 2 days (0 = never)",
         store.all.len(),
         all.len(),
-        dir.display()
+        dir.display(),
+        learn.edits,
+        learn.rewrites
     );
     for a in &all {
         let line = format!("{} -> {}", a.from, a.to);
-        let status = if a.active() {
+        let status = if a.active {
             "active"
         } else if shown.contains(a) {
             "suggest"
@@ -188,7 +186,7 @@ pub fn learn_report() -> Result<(), String> {
     }
     for l in old.iter().filter(|l| {
         !all.iter()
-            .any(|a| a.active() && format!("{} -> {}", a.from, a.to) == **l)
+            .any(|a| a.active && format!("{} -> {}", a.from, a.to) == **l)
     }) {
         println!("dropped  {l}");
     }

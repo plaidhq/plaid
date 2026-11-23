@@ -8,7 +8,7 @@ use crate::session::{Event, Session};
 use crate::store::{Record, Store};
 use crate::{gesture, text};
 use chrono::{DateTime, Utc};
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -1415,13 +1415,8 @@ impl Controller {
     /// Regenerates hotwords.auto.txt.
     fn relearn(&mut self, p: &mut impl Platform) {
         let terms = p.terms(false);
-        let dismissed: HashSet<String> = p
-            .setting("dismissedFixes")
-            .unwrap_or_default()
-            .split('\n')
-            .map(str::to_owned)
-            .collect();
-        self.store.write_auto_rules(&terms, &dismissed)
+        let learn = crate::store::Learn::from_settings(|k| p.setting(k));
+        self.store.write_auto_rules(&terms, &learn)
     }
 }
 
@@ -2112,7 +2107,7 @@ mod tests {
         // Two background checks on one day: a suggestion in 词典, not applied.
         let rules = t.c.store.auto_rules(&t.p.terms, &Default::default());
         assert_eq!(rules.len(), 1);
-        assert!(!rules[0].active());
+        assert!(!rules[0].active);
         let auto = std::fs::read_to_string(t.dir.join(crate::store::AUTO_RULES)).unwrap();
         assert!(!auto.contains("克劳德"), "{auto}");
     }
