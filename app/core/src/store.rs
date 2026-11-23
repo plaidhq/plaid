@@ -143,6 +143,55 @@ pub struct Fix {
 
 pub const AUTO_RULES: &str = "hotwords.auto.txt";
 
+/// A learned `from -> to` candidate and its evidence, counted in records.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AutoRule {
+    pub from: String,
+    pub to: String,
+    /// Reviews that replaced `from` with `to`.
+    pub hits: usize,
+    /// Reviews that left `from` in place.
+    pub kept: usize,
+    /// Hits that were manual edits.
+    pub edits: usize,
+    /// Local days with a hit.
+    pub days: usize,
+}
+
+impl AutoRule {
+    /// Applied to every result: replaced at least 3 times in 4, and either by hand twice or on two days at least
+    /// three times. A weaker candidate is only suggested; one kept more often than replaced isn't shown.
+    pub fn active(&self) -> bool {
+        self.hits * 4 >= (self.hits + self.kept) * 3
+            && (self.edits >= 2 || (self.hits >= 3 && self.days >= 2))
+    }
+}
+
+/// A record's reviews as (before, after, manual edit): the refine or background check of the raw text, and a small
+/// manual edit of the pasted text.
+fn review_pairs(r: &Record) -> Vec<(&str, &str, bool)> {
+    let mut v = vec![];
+    if r.llm == "ok" {
+        v.push((r.raw.as_str(), r.text.as_str(), false));
+    } else if let Some(c) = &r.checked {
+        v.push((r.raw.as_str(), c.as_str(), false));
+    }
+    if let Some(e) = &r.edited {
+        let pasted = r.pasted.as_deref().unwrap_or(&r.text);
+        if small_edit(pasted, e) {
+            v.push((pasted, e.as_str(), true));
+        }
+    }
+    v
+}
+
+/// An edit that fixes a few words rather than rewriting the text: rewrites pair unrelated spans.
+fn small_edit(pasted: &str, edited: &str) -> bool {
+    let n = crate::text::count(edited);
+    let changed = n as f64 * (1. - crate::diff::overlap(edited, pasted));
+    changed <= 12f64.max(n as f64 * 0.3)
+}
+
 pub struct Store {
     dir: PathBuf,
     pub all: Vec<Record>,
@@ -401,68 +450,97 @@ impl Store {
         v
     }
 
-    /// `heard -> wanted` rules learned without the user typing them: a refine (or background learning) rewrite or a
-    /// manual edit that turned some span into a known term, seen at least twice. Derived from records each time, so a
-    /// rule disappears with its evidence. `terms`: the user's own terms (no learned rules, so a deleted term can't keep
-    /// teaching itself); `dismissed`: "from -> to" lines the user ignored; a manual edit reverting the term vetoes it.
-    pub fn auto_rules(
-        &self,
-        terms: &[String],
-        dismissed: &HashSet<String>,
-    ) -> Vec<(String, String, usize)> {
-        let rules = crate::records::rules;
-        let key = |(f, t): &(String, String)| format!("{f} -> {t}");
-        let (mut count, mut vetoed) = (HashMap::<String, usize>::new(), HashSet::new());
-        for r in self.delivered() {
-            let mut found = vec![];
-            if r.llm == "ok" {
-                found.extend(rules(&r.raw, &r.text, terms));
-            } else if let Some(c) = &r.checked {
-                found.extend(rules(&r.raw, c, terms));
-            }
-            if let Some(e) = &r.edited {
-                let pasted = r.pasted.as_deref().unwrap_or(&r.text);
-                found.extend(rules(pasted, e, terms));
-                vetoed.extend(rules(e, pasted, terms).iter().map(key));
-            }
-            for k in found.iter().map(key).collect::<HashSet<_>>() {
-                *count.entry(k).or_default() += 1;
-            }
-        }
-        let mut v: Vec<(String, String, usize)> = count
+    /// `heard -> wanted` candidates learned without the user typing them, with their evidence. A candidate comes from
+    /// a refine (or background learning) rewrite or a small manual edit that turned some span into a known term. It
+    /// is then scored over every reviewed record (refined, checked or edited) whose text before review contains the
+    /// heard span: a hit when the review removed it and added the term, otherwise kept. Derived from records each
+    /// time, so a rule disappears with its evidence. `terms`: the user's own terms (no learned rules, so a deleted
+    /// term can't keep teaching itself); `dismissed`: "from -> to" lines the user ignored; a manual edit reverting
+    /// the term vetoes it. Records hold text after the active rules, so an active rule gathers no new hits or keeps.
+    pub fn auto_rules(&self, terms: &[String], dismissed: &HashSet<String>) -> Vec<AutoRule> {
+        let mut v: Vec<AutoRule> = self
+            .auto_candidates(terms, dismissed)
             .into_iter()
-            .filter(|(k, n)| *n >= 2 && !vetoed.contains(k) && !dismissed.contains(k))
-            .filter_map(|(k, n)| {
-                k.split_once(" -> ")
-                    .map(|(f, t)| (f.to_owned(), t.to_owned(), n))
-            })
+            .filter(|a| a.hits >= 2 && a.hits >= a.kept)
             .collect();
-        v.sort_by(|a, b| (b.2, &b.0).cmp(&(a.2, &a.0)));
+        v.sort_by(|a, b| (b.active(), b.hits, &b.from).cmp(&(a.active(), a.hits, &a.from)));
         v
     }
 
-    /// Regenerates hotwords.auto.txt, which the hotword snapshot reads with the user's own file. Returns the rules that
-    /// weren't in the file before, so the caller can announce them once.
-    pub fn write_auto_rules(&self, terms: &[String], dismissed: &HashSet<String>) -> Vec<String> {
-        let lines: Vec<String> = self
+    /// Every scored candidate, before the shown filter (`plaid --learn-report`).
+    pub fn auto_candidates(&self, terms: &[String], dismissed: &HashSet<String>) -> Vec<AutoRule> {
+        let rules = crate::records::rules;
+        let pairs = review_pairs;
+        let (mut found, mut vetoed) = (HashSet::<(String, String)>::new(), HashSet::new());
+        for r in self.delivered() {
+            for (before, after, _) in pairs(r) {
+                found.extend(rules(before, after, terms));
+            }
+            if let Some(e) = &r.edited {
+                vetoed.extend(rules(e, r.pasted.as_deref().unwrap_or(&r.text), terms));
+            }
+        }
+        let mut out: Vec<AutoRule> = found
+            .into_iter()
+            .filter(|(f, t)| {
+                !vetoed.contains(&(f.clone(), t.clone()))
+                    && !dismissed.contains(&format!("{f} -> {t}"))
+            })
+            .map(|(from, to)| {
+                let mut a = AutoRule {
+                    from,
+                    to,
+                    hits: 0,
+                    kept: 0,
+                    edits: 0,
+                    days: 0,
+                };
+                let mut days = HashSet::new();
+                for r in self.delivered() {
+                    let (mut hit, mut seen) = (false, false);
+                    for (before, after, edit) in pairs(r) {
+                        let n = |s: &str, w: &str| s.matches(w).count();
+                        if n(before, &a.from) == 0 {
+                            continue;
+                        }
+                        seen = true;
+                        if n(after, &a.from) < n(before, &a.from)
+                            && n(after, &a.to) > n(before, &a.to)
+                        {
+                            hit = true;
+                            a.edits += edit as usize;
+                        }
+                    }
+                    if hit {
+                        a.hits += 1;
+                        days.insert(r.at.with_timezone(&Local).date_naive());
+                    } else if seen {
+                        a.kept += 1;
+                    }
+                }
+                a.days = days.len();
+                a
+            })
+            .collect();
+        out.sort_by(|a, b| (b.hits, &b.from).cmp(&(a.hits, &a.from)));
+        out
+    }
+
+    /// Regenerates hotwords.auto.txt from the active rules; the hotword snapshot reads it with the user's own file.
+    pub fn write_auto_rules(&self, terms: &[String], dismissed: &HashSet<String>) {
+        let lines: String = self
             .auto_rules(terms, dismissed)
             .into_iter()
-            .map(|(f, t, _)| format!("{f} -> {t}"))
+            .filter(AutoRule::active)
+            .map(|a| format!("{} -> {}\n", a.from, a.to))
             .collect();
         let body = format!(
-            "# Learned by Plaid from refine rewrites and manual edits; regenerated, do not edit. Remove a rule via 忽略.\n{}",
-            lines.iter().map(|l| format!("{l}\n")).collect::<String>()
+            "# Learned by Plaid from refine rewrites and manual edits; regenerated, do not edit. Remove a rule via 忽略.\n{lines}"
         );
         let path = self.dir.join(AUTO_RULES);
-        let old = std::fs::read_to_string(&path).unwrap_or_default();
-        if old != body {
+        if std::fs::read_to_string(&path).unwrap_or_default() != body {
             let _ = write_atomic(&path, body.as_bytes());
         }
-        let before: HashSet<&str> = old.split('\n').collect();
-        lines
-            .into_iter()
-            .filter(|l| !before.contains(l.as_str()))
-            .collect()
     }
 
     /// Pasted outputs from the last 10 minutes, oldest first.
@@ -529,52 +607,97 @@ mod tests {
     fn learns_rules_from_rewrites_and_edits() {
         let dir = std::env::temp_dir().join(format!("plaid-rules-{}", uuid::Uuid::new_v4()));
         let mut s = Store::load(&dir);
-        let terms = vec!["Claude".to_string()];
+        let terms = vec!["Claude".to_string(), "冗余".to_string()];
         let none = HashSet::new();
-        let at = Utc::now();
-        let rec = |i: i64, checked: Option<&str>| Record {
-            at: at + chrono::Duration::seconds(i),
-            raw: "我用克劳德写代码".into(),
-            text: "我用克劳德写代码".into(),
+        let at = Utc::now() - chrono::Duration::days(3);
+        // Record `i` on day `day`, raw text `raw`, background check `checked`.
+        let rec = |day: i64, i: i64, raw: &str, checked: Option<&str>| Record {
+            at: at + chrono::Duration::days(day) + chrono::Duration::seconds(i),
+            raw: raw.into(),
+            text: raw.into(),
             llm: "off".into(),
             checked: checked.map(String::from),
             ..Default::default()
         };
-        s.add(rec(0, Some("我用Claude写代码")));
-        assert!(s.write_auto_rules(&terms, &none).is_empty(), "seen once");
-        s.add(rec(1, None));
-        s.set_checked(at + chrono::Duration::seconds(1), "我用Claude写代码".into());
-        assert_eq!(
-            s.write_auto_rules(&terms, &none),
-            vec!["克劳德 -> Claude".to_string()]
-        );
-        assert!(
-            s.write_auto_rules(&terms, &none).is_empty(),
-            "announced once"
-        );
-        assert!(
-            std::fs::read_to_string(dir.join(AUTO_RULES))
-                .unwrap()
-                .contains("克劳德 -> Claude\n")
-        );
+        let file = |s: &Store| {
+            s.write_auto_rules(&terms, &none);
+            std::fs::read_to_string(dir.join(AUTO_RULES)).unwrap()
+        };
+        let got = |s: &Store| -> Vec<(String, bool)> {
+            s.auto_rules(&terms, &none)
+                .into_iter()
+                .map(|a| (format!("{} -> {}", a.from, a.to), a.active()))
+                .collect()
+        };
+        let rule = |active| vec![("克劳德 -> Claude".to_string(), active)];
+
+        // Background checks: once is nothing, twice on one day is a suggestion, a third on another day applies.
+        s.add(rec(0, 0, "我用克劳德写代码", Some("我用Claude写代码")));
+        assert!(got(&s).is_empty(), "seen once");
+        // A rewrite of the neighbours still counts as a hit when the heard span is gone and the term appeared.
+        s.add(rec(
+            0,
+            1,
+            "对标的克劳德模型上",
+            Some("对标的是哪个 Claude 模型"),
+        ));
+        assert_eq!(got(&s), rule(false));
+        assert!(!file(&s).contains("克劳德"), "suggestions aren't applied");
+        s.add(rec(1, 2, "问问克劳德吧", Some("问问 Claude 吧")));
+        assert_eq!(got(&s), rule(true));
+        assert!(file(&s).contains("克劳德 -> Claude\n"));
+        // Reviews that keep the heard span count against it: 3 of 4 still applies, 3 of 5 doesn't.
+        s.add(rec(1, 3, "克劳德是个人名", Some("克劳德是个人名")));
+        assert_eq!(got(&s), rule(true));
+        s.add(rec(2, 4, "克劳德来了", None));
+        s.set_checked(s.all.last().unwrap().at, "克劳德来了".into());
+        assert_eq!(got(&s), rule(false));
+        assert!(!file(&s).contains("克劳德"));
+        // An unreviewed record (no refine, no check, no edit) is no evidence either way.
+        s.add(rec(2, 5, "克劳德又来了", None));
+        assert_eq!(got(&s), rule(false));
+        // Ignored, or vetoed by an edit back to the heard text: gone.
         let dismissed: HashSet<String> = ["克劳德 -> Claude".to_string()].into();
         assert!(s.auto_rules(&terms, &dismissed).is_empty());
-        // A saved (not pasted) record doesn't count; an edit back to the heard text vetoes.
-        s.add(Record {
-            outcome: Some("saved".into()),
-            ..rec(2, Some("我用Claude写代码"))
-        });
-        s.add(rec(3, None));
+        s.add(rec(2, 6, "我用Claude写代码", None));
         s.set_edited(
-            at + chrono::Duration::seconds(3),
+            s.all.last().unwrap().at,
             "我用Claude写代码".into(),
             "我用克劳德写代码".into(),
         );
-        assert!(s.auto_rules(&terms, &none).is_empty());
+        assert!(got(&s).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // Manual edits: two small ones apply at once; a saved (not pasted) record doesn't count.
+        let mut s = Store::load(&dir);
+        for i in 0..2 {
+            s.add(rec(0, i, "问一下克劳德吧", None));
+            s.set_edited(
+                s.all.last().unwrap().at,
+                "问一下克劳德吧".into(),
+                "问一下 Claude 吧".into(),
+            );
+        }
+        assert_eq!(got(&s), rule(true));
+        // Rewriting a whole passage pairs unrelated spans (荣誉 -> 冗余): no evidence.
+        let mut s = Store::load(&dir.join("b"));
+        let pasted = "关于资源的预留，目前比较悲观，整体可以供应的卡非常紧张，荣誉的部分先不谈。";
+        let edited = "资源预留目前偏悲观：可供应的卡很紧张，多卡算法会更尴尬，冗余也要重新算。";
+        for i in 0..3 {
+            s.add(rec(i, 0, pasted, None));
+            s.set_edited(s.all.last().unwrap().at, pasted.into(), edited.into());
+        }
+        assert!(got(&s).is_empty());
+        // A particle the review dropped next to the term isn't part of the heard span.
+        assert_eq!(
+            crate::records::rules("还有，克劳德的点完设置", "还有，Claude 点完设置", &terms),
+            vec![("克劳德".to_string(), "Claude".to_string())]
+        );
         // Manual edits become fixes.
-        s.add(rec(4, None));
+        let mut s = Store::load(&dir.join("c"));
+        s.add(rec(0, 0, "我用克劳德写代码", None));
         s.set_edited(
-            at + chrono::Duration::seconds(4),
+            s.all.last().unwrap().at,
             "我用克劳德写代码".into(),
             "我用克劳德写程序".into(),
         );

@@ -184,7 +184,10 @@ pub fn cli() -> Result<(), String> {
         return Ok(());
     }
     let app = bundle().ok_or("not a replaceable app bundle")?;
-    let asset = r.asset.as_ref().ok_or("release has no asset with a digest for this platform")?;
+    let asset = r
+        .asset
+        .as_ref()
+        .ok_or("release has no asset with a digest for this platform")?;
     let dir = std::env::temp_dir().join("plaid-update-cli");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let zip = dir.join("update.zip");

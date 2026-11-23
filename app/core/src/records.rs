@@ -19,6 +19,9 @@ pub fn chars(s: &str) -> usize {
     n
 }
 
+/// Function characters a heard span may not start or end with.
+const PARTICLES: &str = "的地得了着过是在和与跟就也都把被给吗呢吧啊呀嘛嗯哦";
+
 /// For each hotword term that occurs more often in `after` than in `before`, the span of `before` that sits between
 /// the same neighbouring characters: `heard -> term`. The heard side must be 2-12 characters, free of punctuation,
 /// not already the term in another case, and contain CJK. All-ASCII heards are skipped because rewrites are literal
@@ -51,6 +54,8 @@ pub fn rules(before: &str, after: &str, terms: &[String]) -> Vec<(String, String
                 })
                 .min_by_key(|h| text::count(h));
             let Some(heard) = heard else { continue };
+            // A review that also dropped a particle next to the term widens the span ("Play 的" -> "Plaid").
+            let heard = trim_ws(heard.trim_matches(|c| PARTICLES.contains(c) || text::is_ws_nl(c)));
             let ok = (2..=12).contains(&text::count(heard))
                 && !heard
                     .chars()

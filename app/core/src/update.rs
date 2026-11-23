@@ -47,7 +47,10 @@ pub fn parse(json: &str, suffix: &str) -> Result<Release, String> {
             let name = a["name"].as_str()?;
             let sha256 = a["digest"].as_str()?.strip_prefix("sha256:")?;
             name.ends_with(suffix).then(|| Asset {
-                url: a["browser_download_url"].as_str().unwrap_or_default().to_owned(),
+                url: a["browser_download_url"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
                 sha256: sha256.to_ascii_lowercase(),
                 size: a["size"].as_u64().unwrap_or(0),
             })
@@ -105,11 +108,7 @@ pub fn download(asset: &Asset, to: &Path, proxy: Option<&SystemProxy>) -> Result
         if status != 200 {
             return Err(format!("HTTP {status}"));
         }
-        let mut reader = resp
-            .body_mut()
-            .with_config()
-            .limit(512 << 20)
-            .reader();
+        let mut reader = resp.body_mut().with_config().limit(512 << 20).reader();
         let mut file = std::fs::File::create(to).map_err(|e| e.to_string())?;
         let mut hash = Sha256::new();
         let mut buf = vec![0; 64 << 10];

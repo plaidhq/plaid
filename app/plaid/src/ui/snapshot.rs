@@ -764,6 +764,18 @@ pub(super) fn fixture(dir: &Path) -> std::io::Result<()> {
                 r.edited = Some(format!("把 {to} 的配置也一起更新。"));
             }
         }
+        // Two refine rewrites on one day: 拉斯特 -> Rust is suggested (待确认), not applied. Clear of the records the
+        // saved-outcome and Perf fixtures below pick.
+        for j in 0..2 {
+            let i = records.len() - 30 - j;
+            let r = &mut records[i];
+            r.raw = "这段用拉斯特重写一下".into();
+            r.text = "这段用 Rust 重写一下".into();
+            r.asr = None;
+            r.llm = "ok".into();
+            r.outcome = None;
+            r.error = None;
+        }
         if let Some(r) = records.last_mut() {
             r.speech_rms = Some(820);
             r.noise_rms = Some(64);

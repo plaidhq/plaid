@@ -4,6 +4,7 @@
 //   plaid --file a.wav    one utterance through the controller with the WAV as the mic; prints partials and the paste
 //   plaid --recover [at]  recognize a record's saved audio again (default: newest with audio), save in place
 //   plaid --store-key     read the API key from stdin into this app's credential store
+//   plaid --learn-report  learned-rule evidence from the records: active, suggested, dropped (read-only)
 //   plaid --update        install the latest release into this app bundle now (no relaunch)
 //   plaid --snapshot <dir> [page]  (feature `snapshot`) render settings pages offscreen to PNGs with fixture data
 //   plaid --ui-check <dir>         (feature `snapshot`) click through settings pages offscreen, assert on writes
@@ -47,6 +48,7 @@ fn main() {
         Some("--recover") => Some(cli::recover(args.get(2).map(String::as_str))),
         Some("--store-key") => Some(cli::store_key()),
         Some("--update") => Some(update::cli()),
+        Some("--learn-report") => Some(cli::learn_report()),
         #[cfg(all(feature = "snapshot", any(target_os = "macos", target_os = "linux")))]
         Some("--snapshot") => Some(ui::snapshot::run(&args[2..])),
         #[cfg(all(feature = "snapshot", any(target_os = "macos", target_os = "linux")))]

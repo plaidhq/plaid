@@ -9,7 +9,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use plaid_core::hotwords::{self, Snapshot};
 use plaid_core::llm;
-use plaid_core::store::{AUTO_RULES, Fix, Store, write_atomic};
+use plaid_core::store::{AUTO_RULES, AutoRule, Fix, Store, write_atomic};
 use plaid_core::text::trim_ws;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -74,7 +74,7 @@ fn rule(from: &str, to: &str) -> String {
 
 /// Suggestions from manual edits that no line, learned rule or ignore already covers. `own` is hotwords.txt (the
 /// draft on the page); `autos` the learned rules when the caller has them (hotwords.auto.txt covers them otherwise).
-fn pending_fixes(store: &Store, own: &str, autos: &[(String, String, usize)]) -> Vec<Fix> {
+fn pending_fixes(store: &Store, own: &str, autos: &[AutoRule]) -> Vec<Fix> {
     let dir = config::data_dir();
     let extra = config::value("hotwordsExtra").map(read).unwrap_or_default();
     let lines = hotwords::lines(&[own.to_owned(), read(dir.join(AUTO_RULES)), extra].join("\n"));
@@ -88,7 +88,7 @@ fn pending_fixes(store: &Store, own: &str, autos: &[(String, String, usize)]) ->
             let key = rule(&f.from, &f.to);
             !dismissed.contains(&key)
                 && !have.contains(key.as_str())
-                && !autos.iter().any(|(a, b, _)| *a == f.from && *b == f.to)
+                && !autos.iter().any(|a| a.from == f.from && a.to == f.to)
                 && !entries
                     .iter()
                     .any(|e| e.target == f.to && e.aliases.contains(&f.from))
@@ -96,10 +96,11 @@ fn pending_fixes(store: &Store, own: &str, autos: &[(String, String, usize)]) ->
         .collect()
 }
 
-/// Number of pending suggestions, for the sidebar badge.
+/// Number of pending suggestions and learned rules waiting to be confirmed, for the sidebar badge.
 pub(super) fn pending(model: &Model) -> usize {
     let autos = model.store.auto_rules(&config::terms(false), &dismissed());
     pending_fixes(&model.store, &read(path()), &autos).len()
+        + autos.iter().filter(|a| !a.active()).count()
 }
 
 /// What one dictionary line does, as its row shows it.
@@ -251,7 +252,8 @@ impl Sheet {
 /// Derived from the history and the files; dropped whenever either may have changed.
 struct Derived {
     fixes: Vec<Fix>,
-    autos: Vec<(String, String, usize)>,
+    /// Active rules first, then the ones waiting to be confirmed.
+    autos: Vec<AutoRule>,
     /// Records of the last 30 days whose pasted text contains the word, keyed by the lowercased word.
     uses: HashMap<String, usize>,
 }
@@ -456,7 +458,7 @@ impl Dictionary {
                 Shape::Word { target, .. } => Some(target),
                 _ => None,
             })
-            .chain(autos.iter().map(|(_, to, _)| to.clone()));
+            .chain(autos.iter().filter(|a| a.active()).map(|a| a.to.clone()));
         for w in words {
             let w = w.to_lowercase();
             if !w.is_empty() && !uses.contains_key(&w) {
@@ -773,7 +775,7 @@ impl Dictionary {
         let shapes = self.shapes();
         // A word is tinted when something rewrites into it: its own aliases, a replacement or a learned rule.
         let rewritten = |w: &str| {
-            d.autos.iter().any(|(_, to, _)| to == w)
+            d.autos.iter().any(|a| a.active() && a.to == w)
                 || shapes
                     .iter()
                     .any(|(_, s)| matches!(s, Shape::Replace { to, .. } if to == w))
@@ -1259,12 +1261,20 @@ impl Dictionary {
         )
     }
 
-    /// Rules learned from repeated manual edits (hotwords.auto.txt): keep one as a user line, or undo it.
+    /// Learned rules: active ones (hotwords.auto.txt) can be kept as a user line or undone; weaker ones wait to be
+    /// confirmed (采纳 writes the line) or ignored.
     fn learned_card(&self, d: &Derived, cx: &mut Context<Self>) -> Div {
         let this = cx.entity().downgrade();
-        let rows = d.autos.iter().enumerate().map(|(i, (from, to, n))| {
+        let rows = d.autos.iter().enumerate().map(|(i, a)| {
             let (keep, undo) = (this.clone(), this.clone());
+            let (from, to, active) = (&a.from, &a.to, a.active());
             let key = rule(from, to);
+            let evidence = match (active, a.kept) {
+                (true, 0) => format!("改过 {} 次", a.hits),
+                (true, k) => format!("改过 {} 次，保留 {k} 次", a.hits),
+                (false, 0) => format!("待确认 · 改过 {} 次", a.hits),
+                (false, k) => format!("待确认 · 改过 {} 次，保留 {k} 次", a.hits),
+            };
             let line = key.clone();
             div()
                 .flex()
@@ -1279,7 +1289,7 @@ impl Dictionary {
                         .flex_none()
                         .overflow_hidden()
                         .whitespace_nowrap()
-                        .line_through()
+                        .when(active, |d| d.line_through())
                         .text_color(hex(TEXT2))
                         .child(from.clone()),
                 )
@@ -1289,7 +1299,7 @@ impl Dictionary {
                         .w(px(130.))
                         .flex_none()
                         .truncate()
-                        .text_color(hex(CYAN))
+                        .text_color(hex(if active { CYAN } else { TEXT }))
                         .child(to.clone()),
                 )
                 .child(
@@ -1299,11 +1309,11 @@ impl Dictionary {
                         .truncate()
                         .text_size(px(11.))
                         .text_color(hex(TEXT2))
-                        .child(format!("改过 {n} 次")),
+                        .child(evidence),
                 )
                 .child(small_button(
                     SharedString::from(format!("auto-keep-{i}")),
-                    "保留",
+                    if active { "保留" } else { "采纳" },
                     move |_, _, cx| {
                         let _ = keep.update(cx, |this, cx| this.keep_auto(&line, cx));
                     },
@@ -1318,7 +1328,7 @@ impl Dictionary {
                         .text_size(px(12.))
                         .text_color(hex(TEXT2))
                         .hover(|s| s.bg(hex(HOVER)).text_color(hex(TEXT)))
-                        .child("撤销")
+                        .child(if active { "撤销" } else { "忽略" })
                         .on_click(move |_, _, cx| {
                             let _ = undo.update(cx, |this, cx| this.dismiss_auto(key.clone(), cx));
                         }),
@@ -1329,20 +1339,23 @@ impl Dictionary {
         group_body()
             .gap(px(4.))
             .child(
-                card_head("最近学会", "粘贴后手动改过的词，出现两次就自动生效")
-                    .pb(px(6.))
-                    .child(
-                        div()
-                            .flex_none()
-                            .font(mono())
-                            .text_size(px(11.))
-                            .text_color(hex(if on { TEXT2 } else { AMBER }))
-                            .child(if on {
-                                "自动学习 开"
-                            } else {
-                                "自动学习 关"
-                            }),
-                    ),
+                card_head(
+                    "最近学会",
+                    "手动改过 2 次，或润色跨两天改过 3 次，才自动生效",
+                )
+                .pb(px(6.))
+                .child(
+                    div()
+                        .flex_none()
+                        .font(mono())
+                        .text_size(px(11.))
+                        .text_color(hex(if on { TEXT2 } else { AMBER }))
+                        .child(if on {
+                            "自动学习 开"
+                        } else {
+                            "自动学习 关"
+                        }),
+                ),
             )
             .children(rows)
             .when(d.autos.is_empty(), |el| {
@@ -1749,6 +1762,11 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &None,
     )?;
     expect("learned rule listed", ui.has("auto-dismiss-0"), &None)?;
+    expect(
+        "weaker rule waits to be confirmed, not applied",
+        ui.has("auto-dismiss-1") && !read(config::data_dir().join(AUTO_RULES)).contains("拉斯特"),
+        &None,
+    )?;
     expect("no-LLM hint with 打开文字", ui.has("open-refine"), &None)?;
 
     // Batch menu → 全部忽略 asks first; cancel leaves dismissedFixes alone.
@@ -1827,7 +1845,18 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
             && !read(&auto).contains("杰森 -> JSON"),
         &Some(read(&auto)),
     )?;
-    expect("learned row gone", !ui.has("auto-keep-0"), &None)?;
+    expect(
+        "learned row gone",
+        ui.has("auto-keep-0") && !ui.has("auto-keep-1"),
+        &None,
+    )?;
+    // 采纳 on the suggestion writes it into hotwords.txt, so it applies from now on.
+    ui.click("auto-keep-0")?;
+    expect(
+        "采纳 writes the suggested rule",
+        has_line("拉斯特 -> Rust") && !ui.has("auto-keep-0"),
+        &Some(hotwords_file()),
+    )?;
 
     // Learning switches.
     for key in ["learnEdits", "autoLearn"] {

@@ -19,8 +19,6 @@ const CONTEXT_WAIT: Duration = Duration::from_millis(250);
 /// Learning must not build an unbounded backlog during rapid dictation or with a slow endpoint.
 const LEARN_QUEUE: usize = 8;
 const LEARN_TIMEOUT: Duration = Duration::from_secs(20);
-/// "学会" waits so it doesn't cover the Done HUD.
-const ANNOUNCE_AFTER: Duration = Duration::from_millis(1500);
 /// A command waiting for ⏎ is dropped after this.
 const CONFIRM_WAIT: Duration = Duration::from_secs(8);
 /// Default for `llmMinChars`: shorter results paste as recognized; the LLM rarely changes them, and it adds 0.7-3.6 s.
@@ -68,8 +66,6 @@ pub enum Timer {
     Tail,
     /// Low-input warning after a paste.
     LowInput,
-    /// Announce newly learned rules.
-    Learned,
     /// Drop a command still waiting for ⏎.
     Confirm,
 }
@@ -350,8 +346,6 @@ struct Learner {
     queue: VecDeque<(DateTime<Utc>, String, Endpoint)>,
     running: Option<(u64, DateTime<Utc>, String)>,
     done: Vec<(DateTime<Utc>, String)>,
-    /// New rules waiting for `Timer::Learned`.
-    announce: Vec<String>,
 }
 
 pub struct Controller {
@@ -401,10 +395,10 @@ impl Controller {
         }
     }
 
-    /// Learning work is queued, in flight or waiting to be announced.
+    /// Learning work is queued or in flight.
     pub fn learning(&self) -> bool {
         let l = &self.learn;
-        l.running.is_some() || !l.queue.is_empty() || !l.done.is_empty() || !l.announce.is_empty()
+        l.running.is_some() || !l.queue.is_empty() || !l.done.is_empty()
     }
 
     /// Record being recognized again, if any.
@@ -537,15 +531,6 @@ impl Controller {
                         p.hud(Hud::Flash(n));
                     }
                 }
-                Timer::Learned => {
-                    let learned = std::mem::take(&mut self.learn.announce);
-                    if self.idle() && !learned.is_empty() {
-                        p.hud(Hud::Flash(format!(
-                            "学会：{}",
-                            learned.join("，").replace(" -> ", " → ")
-                        )));
-                    }
-                }
                 Timer::Confirm => self.confirm = None,
             },
             Msg::Session { generation, event } if current(generation) && self.session.is_some() => {
@@ -642,7 +627,6 @@ impl Controller {
             }
             Phase::Idle => {}
         }
-        self.learn.announce.clear();
         self.confirm = None;
         self.generation += 1;
         let g = self.generation;
@@ -1406,19 +1390,9 @@ impl Controller {
                 changed = true;
             }
         }
+        // New rules take effect quietly; 词典 lists them (and the weaker ones waiting to be confirmed).
         if changed {
-            let new = self.relearn(p);
-            if !new.is_empty() {
-                p.log(&format!("learned {}", new.len()));
-                self.learn.announce = new;
-                p.timer(
-                    ANNOUNCE_AFTER,
-                    Msg::Timer {
-                        generation: self.generation,
-                        timer: Timer::Learned,
-                    },
-                );
-            }
+            self.relearn(p);
         }
         while self.learn.running.is_none() {
             let Some((id, raw, ep)) = self.learn.queue.pop_front() else {
@@ -1438,8 +1412,8 @@ impl Controller {
         }
     }
 
-    /// Regenerates hotwords.auto.txt; returns rules it didn't have before.
-    fn relearn(&mut self, p: &mut impl Platform) -> Vec<String> {
+    /// Regenerates hotwords.auto.txt.
+    fn relearn(&mut self, p: &mut impl Platform) {
         let terms = p.terms(false);
         let dismissed: HashSet<String> = p
             .setting("dismissedFixes")
@@ -2112,11 +2086,10 @@ mod tests {
     }
 
     #[test]
-    fn learner_checks_pasted_text_and_announces_rules() {
+    fn learner_checks_pasted_text_quietly() {
         let mut t = T::new();
         t.p.llm_key = true;
         t.p.terms = vec!["Claude".into()];
-        let mut seq = 0;
         for g in 1..=2 {
             let out = t.key(StartHold);
             assert!(has(&out, "check"), "{out:?}");
@@ -2124,28 +2097,24 @@ mod tests {
             let out = t.flush();
             assert!(has(&out, "watch") && has(&out, "llm"), "{out:?}");
             assert!(t.c.learning());
-            seq += 1;
             // The DeepSeek fallback is used: no refine endpoint configured.
-            let out = llm(&mut t, seq, Ok("问一下 Claude 吧"));
-            if g == 1 {
-                assert!(!has(&out, "timer"), "{out:?}");
-                assert!(!t.c.learning());
-            } else {
-                assert!(has(&out, "Learned"), "{out:?}");
-            }
+            let out = llm(&mut t, g, Ok("问一下 Claude 吧"));
+            assert!(
+                !has(&out, "timer") && !has(&out, "hud"),
+                "no announcement: {out:?}"
+            );
+            assert!(!t.c.learning());
         }
         assert_eq!(
             t.c.store.all.last().unwrap().checked.as_deref(),
             Some("问一下 Claude 吧")
         );
+        // Two background checks on one day: a suggestion in 词典, not applied.
+        let rules = t.c.store.auto_rules(&t.p.terms, &Default::default());
+        assert_eq!(rules.len(), 1);
+        assert!(!rules[0].active());
         let auto = std::fs::read_to_string(t.dir.join(crate::store::AUTO_RULES)).unwrap();
-        assert!(auto.contains("克劳德 -> Claude"), "{auto}");
-        let out = t.send(Msg::Timer {
-            generation: 2,
-            timer: Timer::Learned,
-        });
-        assert_eq!(out, vec!["hud Flash(\"学会：克劳德 → Claude\")"]);
-        assert!(!t.c.learning());
+        assert!(!auto.contains("克劳德"), "{auto}");
     }
 
     #[test]
@@ -2198,12 +2167,11 @@ mod tests {
                 "no learning endpoint: {out:?}"
             );
             let id = t.c.store.all.last().unwrap().at;
-            let out = t.send(Msg::Edited {
+            t.send(Msg::Edited {
                 id,
                 pasted: "问一下克劳德吧".into(),
                 edited: "问一下 Claude 吧".into(),
             });
-            assert!(!has(&out, "Learned"), "edits are not announced: {out:?}");
         }
         assert_eq!(
             t.c.store.all.last().unwrap().edited.as_deref(),
