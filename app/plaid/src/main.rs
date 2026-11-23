@@ -68,13 +68,18 @@ fn main() {
     // Headless is macOS's Accessory activation policy (no Dock icon). On Windows it means no GPU and no windows.
     #[cfg(target_os = "macos")]
     let app = app.with_windowing(WindowingRequest::Headless);
+    // Launched again while running (Raycast, Spotlight, Finder): bring the window back, or open 概览.
+    app.on_reopen(ui::reopen);
     app.run(move |cx| {
         gpui_kit::init(cx);
         ui::init(cx);
         ui::bind_keys(cx);
+        #[cfg(target_os = "macos")]
+        mac::reopen_always();
         let hud = hud::open(cx).expect("hud window");
         if let Err(e) = tray::install(cx, |c, cx| match c {
             tray::Command::Quit => cx.quit(),
+            tray::Command::Overview => ui::open(ui::Page::Overview, cx),
             tray::Command::History => ui::open(ui::Page::History, cx),
             tray::Command::Settings => ui::open(ui::Page::General, cx),
         }) {

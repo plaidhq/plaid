@@ -838,6 +838,19 @@ struct Open(AnyWindowHandle, Entity<Settings>);
 impl Global for Open {}
 
 /// Opens the settings window on `page`, or brings the open one forward.
+/// The app was launched again while running: front the open window as it is, else open 概览.
+pub fn reopen(cx: &mut App) {
+    if let Some(Open(handle, _)) = cx.try_global::<Open>()
+        && handle
+            .update(cx, |_, window, _| window.activate_window())
+            .is_ok()
+    {
+        os_activate(true);
+        return;
+    }
+    open(Page::Overview, cx);
+}
+
 pub fn open(page: Page, cx: &mut App) {
     if let Some(Open(handle, view)) = cx.try_global::<Open>() {
         let (handle, view) = (*handle, view.clone());
@@ -923,8 +936,7 @@ fn os_activate(regular: bool) {
                 NSApplicationActivationPolicy::Accessory
             });
             if regular {
-                #[allow(deprecated)]
-                app.activateIgnoringOtherApps(true);
+                app.activate();
             }
         }
     }

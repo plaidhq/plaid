@@ -122,7 +122,16 @@ pub fn app_icon_png(name: &str, px: f64) -> Option<Vec<u8>> {
         .find(|a| a.localizedName().is_some_and(|n| n.to_string() == name))
         .and_then(|a| a.icon())
         .or_else(|| {
-            let path = ws.fullPathForApplication(&NSString::from_str(name))?;
+            let known = INSTALLED
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|a| a.0 == name)
+                .map(|a| a.1.clone());
+            let path = match known {
+                Some(p) => NSString::from_str(&p),
+                None => ws.fullPathForApplication(&NSString::from_str(name))?,
+            };
             Some(ws.iconForFile(&path))
         })?;
     let mut rect = NSRect::new(NSPoint::new(0., 0.), NSSize::new(px, px));
@@ -134,6 +143,107 @@ pub fn app_icon_png(name: &str, px: f64) -> Option<Vec<u8>> {
         rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
     }?;
     Some(png.to_vec())
+}
+
+/// Apps in the Applications folders as (name, bundle path), sorted by name. The name is what `front` reports
+/// for the app (`localizedName`, in the user's languages: 飞书 for Lark.app, 邮件 for Mail.app), so it matches
+/// records and per-app settings. Also remembered for `app_icon_png`.
+pub fn installed_apps() -> Vec<(String, String)> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let dirs = [
+        "/Applications".to_string(),
+        "/Applications/Utilities".into(),
+        "/System/Applications".into(),
+        "/System/Applications/Utilities".into(),
+        format!("{home}/Applications"),
+    ];
+    let mut apps: Vec<(String, String)> = dirs
+        .iter()
+        .filter_map(|d| std::fs::read_dir(d).ok())
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "app"))
+        .filter_map(|p| {
+            let path = p.to_str()?.to_string();
+            Some((bundle_name(&path)?, path))
+        })
+        .collect();
+    apps.sort_by_key(|a| a.0.to_lowercase());
+    apps.dedup_by(|a, b| a.0 == b.0);
+    *INSTALLED.lock().unwrap() = apps.clone();
+    apps
+}
+
+static INSTALLED: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
+
+/// The localized display name of the app bundle at `path`: InfoPlist.loctable (system apps), else the
+/// InfoPlist.strings of the user's preferred localization, else Info.plist, else the file name.
+#[allow(deprecated)]
+fn bundle_name(path: &str) -> Option<String> {
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::{NSArray, NSBundle, NSDictionary, NSLocale, NSString};
+    type Dict = NSDictionary<NSString, AnyObject>;
+    let stem = std::path::Path::new(path)
+        .file_stem()?
+        .to_str()?
+        .to_string();
+    let Some(bundle) = NSBundle::bundleWithPath(&NSString::from_str(path)) else {
+        return Some(stem);
+    };
+    let pick = |d: &Dict| {
+        ["CFBundleDisplayName", "CFBundleName"]
+            .iter()
+            .find_map(|k| {
+                let v = d.objectForKey(&NSString::from_str(k))?;
+                let s = v.downcast::<NSString>().ok()?.to_string();
+                (!s.trim().is_empty()).then_some(s)
+            })
+    };
+    let langs = NSLocale::preferredLanguages();
+    let prefer = |have: &NSArray<NSString>| {
+        NSBundle::preferredLocalizationsFromArray_forPreferences(have, Some(&langs)).firstObject()
+    };
+    let res = |name: &str, ext: &str| {
+        bundle.pathForResource_ofType(
+            Some(&NSString::from_str(name)),
+            Some(&NSString::from_str(ext)),
+        )
+    };
+    // SAFETY (both reads): a plist file read into a dictionary of NSString keys; values are type-checked by
+    // downcast before use.
+    if let Some(p) = res("InfoPlist", "loctable")
+        && let Some(table) = unsafe { Dict::dictionaryWithContentsOfFile(&p) }
+        && let Some(lang) = prefer(&table.allKeys())
+        && let Some(entry) = table.objectForKey(&lang)
+        && let Ok(entry) = entry.downcast::<NSDictionary>()
+    {
+        // SAFETY: loctable entries map string keys to plist values.
+        let entry: Retained<Dict> = unsafe { Retained::cast_unchecked(entry) };
+        if let Some(n) = pick(&entry) {
+            return Some(n);
+        }
+    }
+    if let Some(lang) = prefer(&bundle.localizations())
+        && let Some(p) = bundle.pathForResource_ofType_inDirectory_forLocalization(
+            Some(&NSString::from_str("InfoPlist")),
+            Some(&NSString::from_str("strings")),
+            None,
+            Some(&lang),
+        )
+        && let Some(d) = unsafe { Dict::dictionaryWithContentsOfFile(&p) }
+        && let Some(n) = pick(&d)
+    {
+        return Some(n);
+    }
+    Some(
+        bundle
+            .infoDictionary()
+            .as_deref()
+            .and_then(pick)
+            .unwrap_or(stem),
+    )
 }
 
 /// Name, bundle id and pid of the frontmost app.
@@ -390,5 +500,49 @@ pub fn mic_allowed() -> Option<bool> {
         0 => None,
         3 => Some(true),
         _ => Some(false),
+    }
+}
+
+/// gpui only forwards `applicationShouldHandleReopen:hasVisibleWindows:` to `on_reopen` when no window is visible,
+/// and the HUD or a settings window behind other apps counts as visible, so launching Plaid again (Raycast, Finder,
+/// `open -a`) did nothing. Swap the delegate's method for one that always reports no visible windows.
+pub fn reopen_always() {
+    use objc2::runtime::{AnyObject, Bool, Imp, Sel};
+    use objc2::sel;
+    use std::sync::OnceLock;
+    type Reopen = unsafe extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject, Bool) -> Bool;
+    static ORIGINAL: OnceLock<Reopen> = OnceLock::new();
+    unsafe extern "C-unwind" fn reopen(
+        this: &AnyObject,
+        sel: Sel,
+        app: *mut AnyObject,
+        _: Bool,
+    ) -> Bool {
+        match ORIGINAL.get() {
+            Some(f) => unsafe { f(this, sel, app, Bool::NO) },
+            None => Bool::YES,
+        }
+    }
+    let Some(mtm) = objc2::MainThreadMarker::new() else {
+        return;
+    };
+    let Some(delegate) = objc2_app_kit::NSApplication::sharedApplication(mtm).delegate() else {
+        return;
+    };
+    let obj: &AnyObject = (*delegate).as_ref();
+    let class = obj.class();
+    let Some(method) =
+        class.instance_method(sel!(applicationShouldHandleReopen:hasVisibleWindows:))
+    else {
+        return;
+    };
+    if ORIGINAL.get().is_some() {
+        return;
+    }
+    // SAFETY: same signature as the method being replaced; the original is kept and called with the flag cleared.
+    unsafe {
+        let new: Reopen = reopen;
+        let old = method.set_implementation(std::mem::transmute::<Reopen, Imp>(new));
+        let _ = ORIGINAL.set(std::mem::transmute::<Imp, Reopen>(old));
     }
 }

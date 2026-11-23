@@ -169,6 +169,10 @@ pub struct Refine {
     editing: Option<StyleEdit>,
     /// The app the test request pretends to dictate into (its level and styles); None is the global level.
     test_app: Option<String>,
+    /// The add-app picker's search field.
+    query: Entity<InputState>,
+    /// Apps in the Applications folders (macOS), scanned when the page opens.
+    installed: Vec<String>,
 }
 
 impl Refine {
@@ -252,6 +256,20 @@ impl Refine {
                 cx,
             ),
         ];
+        let query = cx.new(|cx| InputState::new(window, cx).placeholder("搜索或输入应用名"));
+        cx.subscribe(&query, |_, _, e: &InputEvent, cx| {
+            if let InputEvent::Change = e {
+                cx.notify();
+            }
+        })
+        .detach();
+        #[cfg(target_os = "macos")]
+        let installed = crate::mac::installed_apps()
+            .into_iter()
+            .map(|a| a.0)
+            .collect();
+        #[cfg(not(target_os = "macos"))]
+        let installed = vec![];
         let sample = cx.new(|cx| TextareaState::new(window, cx).auto_grow(2, 6));
         sample.update(cx, |i, cx| i.set_value(SAMPLE, window, cx));
         Refine {
@@ -268,6 +286,8 @@ impl Refine {
             test: Test::default(),
             editing: None,
             test_app: None,
+            query,
+            installed,
         }
     }
 
@@ -467,6 +487,161 @@ impl Refine {
         }
     }
 
+    /// An add-app button and its pop-up: a search field, then 所有应用 (when `all`), 常用 (apps dictated into)
+    /// and 全部应用 (installed), minus `taken`. A typed name that matches nothing can be added as is.
+    #[allow(clippy::too_many_arguments)]
+    fn app_picker(
+        &self,
+        id: SharedString,
+        face: Stateful<Div>,
+        which: Menu,
+        all: bool,
+        taken: &[String],
+        cx: &mut Context<Self>,
+        on_pick: impl Fn(&mut Self, Option<String>, &mut Context<Self>) + 'static,
+    ) -> Div {
+        let open = self.menu == Some(which);
+        let toggle = cx.listener(move |this, _, window, cx| {
+            if this.menu == Some(which) {
+                this.menu = None;
+            } else {
+                this.query.update(cx, |q, cx| {
+                    q.set_value("", window, cx);
+                    q.focus(window, cx);
+                });
+                this.menu = Some(which);
+            }
+            cx.notify();
+        });
+        let wrap = div().flex().flex_col().child(face.on_click(toggle));
+        if !open {
+            return wrap;
+        }
+        let q = self.query.read(cx).value().trim().to_string();
+        let free = |a: &String| !taken.iter().any(|t| t.eq_ignore_ascii_case(a));
+        let hit_q = |a: &String| q.is_empty() || a.to_lowercase().contains(&q.to_lowercase());
+        let used: Vec<String> = used_apps(&self.model.read(cx).store)
+            .into_iter()
+            .filter(|a| free(a) && hit_q(a))
+            .take(if q.is_empty() { 8 } else { usize::MAX })
+            .collect();
+        let rest: Vec<String> = self
+            .installed
+            .iter()
+            .filter(|a| free(a) && hit_q(a) && !used.iter().any(|u| u.eq_ignore_ascii_case(a)))
+            .cloned()
+            .collect();
+        let exact = used.iter().chain(&rest).any(|a| a.eq_ignore_ascii_case(&q));
+        // Display order: (label, pick, typed); a header has no pick and None inside is 所有应用.
+        let mut entries: Vec<(String, Option<Option<String>>, bool)> = vec![];
+        if all && q.is_empty() {
+            entries.push(("所有应用".into(), Some(None), false));
+        }
+        for (title, list) in [("常用", used), ("全部应用", rest)] {
+            if !list.is_empty() && q.is_empty() {
+                entries.push((title.into(), None, false));
+            }
+            entries.extend(list.into_iter().map(|a| (a.clone(), Some(Some(a)), false)));
+        }
+        if !q.is_empty() && !exact {
+            entries.push((format!("添加「{q}」"), Some(Some(q.clone())), true));
+        }
+        let on_pick = std::rc::Rc::new(on_pick);
+        let mut k = 0;
+        let mut rows: Vec<AnyElement> = vec![];
+        for (label, pick, typed) in entries {
+            let Some(app) = pick else {
+                rows.push(
+                    div()
+                        .pt(px(8.))
+                        .pb(px(2.))
+                        .px(px(8.))
+                        .text_size(px(11.))
+                        .text_color(hex(TEXT3))
+                        .child(label)
+                        .into_any_element(),
+                );
+                continue;
+            };
+            let glyph = match (&app, typed) {
+                (Some(a), false) => app_icon(a, 18.).map_or_else(
+                    || app_badge(a).size(px(18.)).into_any_element(),
+                    IntoElement::into_any_element,
+                ),
+                _ => div().size(px(18.)).flex_none().into_any_element(),
+            };
+            let pick = on_pick.clone();
+            rows.push(
+                hit(SharedString::from(format!("{id}-menu-{k}")))
+                    .h(px(30.))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(8.))
+                    .px(px(8.))
+                    .rounded(px(6.))
+                    .hover(|s| s.bg(tint(CYAN, 0x26)))
+                    .child(glyph)
+                    .child(div().flex_1().min_w_0().truncate().child(label))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.menu = None;
+                        pick(this, app.clone(), cx);
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            );
+            k += 1;
+        }
+        let close = cx.listener(|this, _, _, cx| {
+            this.menu = None;
+            cx.notify();
+        });
+        let search = div()
+            .h(px(32.))
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(8.))
+            .px(px(10.))
+            .rounded(px(7.))
+            .bg(hexa(GLASS_WELL))
+            .border_1()
+            .border_color(hexa(LINE))
+            .child(icon("plaid/search.svg", 12., hex(TEXT2)))
+            .child(div().flex_1().min_w_0().child(Input::new(&self.query)));
+        wrap.child(deferred(
+            anchored().snap_to_window_with_margin(px(8.)).child(
+                hit(SharedString::from(format!("{id}-menu")))
+                    .occlude()
+                    .mt(px(4.))
+                    .w(px(250.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .p(px(6.))
+                    .rounded(px(10.))
+                    .bg(hex(RAISED2))
+                    .border_1()
+                    .border_color(hexa(LINE3))
+                    .shadow(vec![shadow(0., 12., 32., 0., 0x000000a0, false)])
+                    .on_mouse_down_out(close)
+                    .child(search)
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("{id}-list")))
+                            .max_h(px(320.))
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .children(rows)
+                            .when(k == 0, |d| {
+                                d.child(div().p(px(8.)).child(hint("没有可添加的应用")))
+                            }),
+                    ),
+            ),
+        ))
+    }
+
     fn set_apps(&self, apps: &[(String, llm::Level)], cx: &mut Context<Self>) {
         let v = llm::format_app_levels(apps);
         self.model.update(cx, |m, cx| m.set("llmApps", v, cx));
@@ -475,11 +650,6 @@ impl Refine {
     /// 按应用: apps that refine differently from the global level.
     fn apps_card(&self, cx: &mut Context<Self>) -> Div {
         let apps = llm::app_levels(&config::raw("llmApps").unwrap_or_default());
-        let candidates: Vec<String> = used_apps(&self.model.read(cx).store)
-            .into_iter()
-            .filter(|a| !apps.iter().any(|(x, _)| x.eq_ignore_ascii_case(a)))
-            .take(12)
-            .collect();
         let mut rows = vec![];
         for (i, (app, l)) in apps.iter().enumerate() {
             let open = self.menu == Some(Menu::App(i));
@@ -541,46 +711,29 @@ impl Refine {
                     .child(remove),
             );
         }
-        let open = self.menu == Some(Menu::AddApp);
-        let this = cx.entity().downgrade();
         let list = apps.clone();
-        let picks = candidates.clone();
         // A new app starts at the opposite of the global choice: 关 under an LLM level, 轻度 under 关.
         let fresh = if llm::global_level(config::value) > llm::Level::Off {
             llm::Level::Off
         } else {
             llm::Level::Light
         };
-        let face = small_button("llmApps-add", "+ 添加", |_, _, _| {});
-        let add = if candidates.is_empty() {
-            disabled(face).into_any_element()
-        } else {
-            drop_menu(
-                "llmApps-add",
-                face,
-                160.,
-                candidates
-                    .iter()
-                    .map(|a| MenuEntry {
-                        label: a.clone().into(),
-                        checked: false,
-                        rule: false,
-                    })
-                    .collect(),
-                open,
-                self.menu_toggle(Menu::AddApp, open, cx),
-                self.menu_close(cx),
-                move |k, _, cx| {
+        let taken: Vec<String> = apps.iter().map(|a| a.0.clone()).collect();
+        let add = self.app_picker(
+            "llmApps-add".into(),
+            small_button("llmApps-add", "+ 添加", |_, _, _| {}),
+            Menu::AddApp,
+            false,
+            &taken,
+            cx,
+            move |this, app, cx| {
+                if let Some(app) = app {
                     let mut list = list.clone();
-                    list.push((picks[k].clone(), fresh));
-                    let _ = this.update(cx, |this, cx| {
-                        this.menu = None;
-                        this.set_apps(&list, cx);
-                    });
-                },
-            )
-            .into_any_element()
-        };
+                    list.push((app, fresh));
+                    this.set_apps(&list, cx);
+                }
+            },
+        );
         group_body()
             .gap(px(10.))
             .child(
@@ -697,7 +850,7 @@ impl Refine {
         let cards: Vec<AnyElement> = list
             .iter()
             .enumerate()
-            .map(|(i, st)| self.style_card(i, st, &used, window, cx))
+            .map(|(i, st)| self.style_card(i, st, window, cx))
             .collect();
         div()
             .flex()
@@ -722,7 +875,6 @@ impl Refine {
         &self,
         i: usize,
         st: &llm::Style,
-        used: &[String],
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -804,19 +956,6 @@ impl Refine {
                 .into_any_element(),
             );
         }
-        // 所有应用 first, then apps dictated into that the style doesn't have yet.
-        let picks: Vec<Option<String>> = (!st.all)
-            .then_some(None)
-            .into_iter()
-            .chain(
-                used.iter()
-                    .filter(|a| !st.apps.iter().any(|x| x.eq_ignore_ascii_case(a)))
-                    .take(12)
-                    .cloned()
-                    .map(Some),
-            )
-            .collect();
-        let open = self.menu == Some(Menu::StyleApps(i));
         let face = hit(id("add"))
             .h(px(24.))
             .flex()
@@ -830,40 +969,24 @@ impl Refine {
             .text_color(hex(TEXT2))
             .hover(|s| s.bg(hex(HOVER)))
             .child("+ 应用");
-        if !picks.is_empty() {
-            let this = cx.entity().downgrade();
-            let entries = picks
-                .iter()
-                .enumerate()
-                .map(|(k, p)| MenuEntry {
-                    label: p.clone().unwrap_or_else(|| "所有应用".into()).into(),
-                    checked: false,
-                    rule: k == 0 && p.is_none() && picks.len() > 1,
-                })
-                .collect();
-            chips.push(
-                drop_menu(
-                    id("add"),
-                    face,
-                    170.,
-                    entries,
-                    open,
-                    self.menu_toggle(Menu::StyleApps(i), open, cx),
-                    self.menu_close(cx),
-                    move |k, _, cx| {
-                        let pick = picks[k].clone();
-                        let _ = this.update(cx, |this, cx| {
-                            this.menu = None;
-                            this.update_style(i, cx, |st| match pick {
-                                None => st.all = true,
-                                Some(a) => st.apps.push(a),
-                            });
-                        });
-                    },
-                )
-                .into_any_element(),
-            );
-        }
+        let taken = st.apps.clone();
+        chips.push(
+            self.app_picker(
+                id("add"),
+                face,
+                Menu::StyleApps(i),
+                !st.all,
+                &taken,
+                cx,
+                move |this, app, cx| {
+                    this.update_style(i, cx, |st| match app {
+                        None => st.all = true,
+                        Some(a) => st.apps.push(a),
+                    });
+                },
+            )
+            .into_any_element(),
+        );
         let on = st.all || !st.apps.is_empty();
         let edit = hit(id("edit"))
             .size(px(22.))
@@ -1875,6 +1998,23 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &config::raw("llmApps"),
     )?;
     ui.shot("refine-apps")?;
+    // Typing filters the list; a name with no match is offered as "添加「…」" and is the only row.
+    ui.click("llmApps-add")?;
+    ui.type_text("zzapp")?;
+    ui.shot("refine-apps-typed")?;
+    expect(
+        "typed name is the only row",
+        !ui.has("llmApps-add-menu-1") && ui.has("llmApps-add-menu-0"),
+        &None,
+    )?;
+    ui.click("llmApps-add-menu-0")?;
+    let apps = llm::app_levels(&config::raw("llmApps").unwrap_or_default());
+    expect(
+        "typed app added",
+        apps.len() == 3 && apps[2].0 == "zzapp",
+        &config::raw("llmApps"),
+    )?;
+    ui.click("llmApp-2-remove")?;
     ui.click("llmApp-0-remove")?;
     expect(
         "one app left",
