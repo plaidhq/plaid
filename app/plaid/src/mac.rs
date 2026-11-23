@@ -503,6 +503,19 @@ pub fn mic_allowed() -> Option<bool> {
     }
 }
 
+/// Ask for microphone access (shows the system prompt while the status is undetermined). The answer arrives
+/// asynchronously; callers poll `mic_allowed`.
+pub fn request_mic() {
+    let Some(cls) = objc2::runtime::AnyClass::get(c"AVCaptureDevice") else {
+        return;
+    };
+    let done = block2::RcBlock::new(|_granted: objc2::runtime::Bool| {});
+    // SAFETY: class method taking an AVMediaType and a `void (^)(BOOL)` completion handler; the block is copied.
+    let () = unsafe {
+        objc2::msg_send![cls, requestAccessForMediaType: AVMediaTypeAudio, completionHandler: &*done]
+    };
+}
+
 /// gpui only forwards `applicationShouldHandleReopen:hasVisibleWindows:` to `on_reopen` when no window is visible,
 /// and the HUD or a settings window behind other apps counts as visible, so launching Plaid again (Raycast, Finder,
 /// `open -a`) did nothing. Swap the delegate's method for one that always reports no visible windows.

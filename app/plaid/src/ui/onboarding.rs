@@ -184,8 +184,8 @@ impl Onboarding {
                     badge(Status::Warn, "已拒绝"),
                 ),
                 None => (
-                    disabled(button("mic", "允许", |_, _, _| {})),
-                    badge(Status::Off, "第一次录音时系统会询问"),
+                    button("mic", "允许", |_, _, _| request_mic()),
+                    badge(Status::Off, "尚未询问"),
                 ),
             };
             body.child(para("macOS 需要两项授权，授权后这里会自动更新。").mb(px(8.)))
@@ -505,6 +505,11 @@ fn perm(
 fn request_trust() {
     #[cfg(target_os = "macos")]
     crate::mac::request_trust();
+}
+
+fn request_mic() {
+    #[cfg(target_os = "macos")]
+    crate::mac::request_mic();
 }
 
 fn mic_allowed() -> Option<bool> {
