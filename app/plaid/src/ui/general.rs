@@ -1,5 +1,4 @@
-//! 通用 (shortcuts, microphone, HUD), 识别 (key, recognition), 数据 and 关于: one view, four pages.
-use super::key_field::KeyField;
+//! 通用 (shortcuts, microphone, HUD), 数据 and 关于: one view, three pages.
 use super::mav::*;
 use super::{
     Live, Model, Page, bool_str, data_dir_label, field, on_if_one, on_unless_zero, pick_list,
@@ -215,9 +214,8 @@ impl Number {
 
 pub struct General {
     model: Entity<Model>,
-    /// Page::General (通用), Page::Voice (识别), Page::Data (数据) or Page::About (关于).
+    /// Page::General (通用), Page::Data (数据) or Page::About (关于).
     page: Page,
-    key: Entity<KeyField>,
     menu: Option<Menu>,
     recording: Option<Shortcut>,
     advanced: bool,
@@ -233,14 +231,11 @@ impl General {
         cx: &mut Context<Self>,
     ) -> General {
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
-        let m = model.clone();
-        let key = cx.new(|cx| KeyField::new(m, || "apiKey".into(), window, cx));
         let silence = Self::number("silenceRMS", 0, 1500, SILENCE_DEFAULT as i64, window, cx);
         let tail = Self::number("tailMs", 100, 1000, 300, window, cx);
         General {
             model,
             page,
-            key,
             menu: None,
             recording: None,
             advanced: false,
@@ -845,29 +840,6 @@ impl General {
             )
     }
 
-    fn voice_page(&self) -> Stateful<Div> {
-        super::page_body("voice")
-            .child(
-                group_body()
-                    .child(card_head("火山引擎", "语音识别服务；key 只存在本机"))
-                    .child(row("API Key", self.key.clone())),
-            )
-            .child(
-                group_body()
-                    .child(card_head("识别", "火山引擎 bigmodel"))
-                    .child(self.toggle(
-                        "asrContext",
-                        "发送上下文",
-                        "前台应用和输入框里光标前的文字，帮助识别专有名词",
-                    ))
-                    .child(self.toggle(
-                        "nonstream",
-                        "二遍识别",
-                        "松键后用整段音频再识别一次，更准，约慢 300 ms",
-                    )),
-            )
-    }
-
     /// 关于: version and updates, diagnostics, links.
     fn about_page(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let log = config::data_dir().join("events.log");
@@ -1045,7 +1017,6 @@ impl Render for General {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         match self.page {
             Page::Data => self.data_page(),
-            Page::Voice => self.voice_page(),
             Page::About => self.about_page(cx),
             _ => self.general_page(window, cx),
         }

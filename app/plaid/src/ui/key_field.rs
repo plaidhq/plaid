@@ -8,6 +8,8 @@ use gpui_kit::*;
 
 pub struct KeyField {
     model: Entity<Model>,
+    /// Prefix of the buttons' ids: "{id}-save", "{id}-change", ...
+    id: &'static str,
     /// Credential store account, recomputed per render (the LLM account follows llmBaseUrl).
     account: Box<dyn Fn() -> String>,
     input: Entity<InputState>,
@@ -20,6 +22,7 @@ pub struct KeyField {
 impl KeyField {
     pub fn new(
         model: Entity<Model>,
+        id: &'static str,
         account: impl Fn() -> String + 'static,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -38,6 +41,7 @@ impl KeyField {
         .detach();
         KeyField {
             model,
+            id,
             account: Box::new(account),
             input,
             stored: None,
@@ -104,11 +108,12 @@ impl KeyField {
 impl Render for KeyField {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let stored = self.stored(cx);
+        let id = |s: &str| SharedString::from(format!("{}-{s}", self.id));
         let line = div().flex().items_center().gap(px(8.));
         let line = if stored && !self.editing {
             line.child(badge(Status::Ok, "已存入钥匙串"))
                 .child(button(
-                    "key-change",
+                    id("change"),
                     "更换…",
                     cx.listener(|this, _, w, cx| {
                         this.editing = true;
@@ -120,14 +125,14 @@ impl Render for KeyField {
                     }),
                 ))
                 .child(button(
-                    "key-delete",
+                    id("delete"),
                     "删除",
                     cx.listener(|this, _, w, cx| this.write("", w, cx)),
                 ))
         } else {
             let empty = self.input.read(cx).value().trim().is_empty();
             let save = default_button(
-                "key-save",
+                id("save"),
                 "保存",
                 cx.listener(|this, _, w, cx| this.save(w, cx)),
             );
@@ -135,7 +140,7 @@ impl Render for KeyField {
                 .child(if empty { disabled(save) } else { save })
                 .when(stored, |d| {
                     d.child(button(
-                        "key-cancel",
+                        id("cancel"),
                         "取消",
                         cx.listener(|this, _, w, cx| {
                             this.editing = false;

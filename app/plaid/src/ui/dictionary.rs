@@ -1420,14 +1420,14 @@ impl Dictionary {
                 .items_start()
                 .gap(px(6.))
                 .child(
-                    hint("没有可用的 LLM：在「设置 → 润色」里填好接口和 key")
+                    hint("没有可用的 LLM：在「设置 → 服务」里填好 LLM 接口或后台校对备用 key")
                         .text_color(hex(AMBER)),
                 )
                 .child(small_button(
-                    "open-refine",
-                    "打开润色",
+                    "open-service",
+                    "打开服务",
                     move |_, _, cx| {
-                        let _ = nav.update(cx, |s, cx| s.show(Page::Refine, cx));
+                        let _ = nav.update(cx, |s, cx| s.show(Page::Service, cx));
                     },
                 ))
                 .into_any_element()
@@ -1880,7 +1880,7 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         ui.has("auto-dismiss-1") && !read(config::data_dir().join(AUTO_RULES)).contains("拉斯特"),
         &None,
     )?;
-    expect("no-LLM hint with 打开文字", ui.has("open-refine"), &None)?;
+    expect("no-LLM hint with 打开服务", ui.has("open-service"), &None)?;
 
     // Thresholds: 不自动 on both leaves every learned rule a suggestion; back to the defaults re-applies it.
     let rules_in_file = || read(config::data_dir().join(AUTO_RULES)).contains(" -> ");
@@ -2031,7 +2031,11 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         )?;
     }
     ui.click("autoLearn")?;
-    expect("no-LLM hint hidden when off", !ui.has("open-refine"), &None)?;
+    expect(
+        "no-LLM hint hidden when off",
+        !ui.has("open-service"),
+        &None,
+    )?;
     ui.click("autoLearn")?;
 
     // The add field filters the wall and the rules.
@@ -2190,8 +2194,8 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     ui.click(&format!("word-{zed}"))?;
     ui.click("entry-delete")?;
     expect("delete pending before page switch", has_line("Zed"), &None)?;
-    ui.click("open-refine")?;
-    expect("打开文字 leaves the page", !ui.has("dict-add"), &None)?;
+    ui.click("open-service")?;
+    expect("打开服务 leaves the page", !ui.has("dict-add"), &None)?;
     executor
         .borrow()
         .as_ref()

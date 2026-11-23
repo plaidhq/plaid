@@ -38,7 +38,7 @@ impl Onboarding {
         cx: &mut Context<Self>,
     ) -> Onboarding {
         let m = model.clone();
-        let key = cx.new(|cx| KeyField::new(m, || "apiKey".into(), window, cx));
+        let key = cx.new(|cx| KeyField::new(m, "key", || "apiKey".into(), window, cx));
         let trial = cx.new(|cx| InputState::new(window, cx).placeholder("文字会出现在这里"));
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
         cx.observe_window_activation(window, |_, _, cx| cx.notify())

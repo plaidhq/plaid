@@ -222,9 +222,8 @@ pub fn check(args: &[String]) -> Result<(), String> {
 }
 
 fn check_general(ui: &mut Ui) -> Result<(), String> {
-    ui.open(Page::Voice, facts())?;
-    ui.shot("voice")?;
-    expect("mics moved off 识别", !ui.has("mic-0"), &None)?;
+    ui.open(Page::Service, facts())?;
+    expect("no mics on 服务", !ui.has("mic-0"), &None)?;
     let before = config::raw("asrContext");
     ui.click("asrContext")?;
     expect(
@@ -356,7 +355,7 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
     ui.close()?;
 
     ui.open(
-        Page::Voice,
+        Page::Service,
         Facts {
             volc_key: false,
             ..facts()
@@ -367,7 +366,7 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
         ui.has("key-save") && !ui.has("key-change"),
         &None,
     )?;
-    ui.shot("voice-nokey")?;
+    ui.shot("service-nokey")?;
     ui.close()
 }
 

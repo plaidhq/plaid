@@ -1,7 +1,10 @@
-//! 文字: local text rules with a live preview, then the LLM pass between the ASR result and the paste.
+//! 润色 (local text rules with a live preview, then the LLM pass between the ASR result and the paste) and 服务
+//! (recognition and LLM endpoints and their keys): one view, two pages.
 use super::key_field::KeyField;
 use super::mav::*;
-use super::{Model, bool_str, drop_menu, field, on_if_one, on_unless_zero, pick_list};
+use super::{
+    Model, Page, Settings, bool_str, drop_menu, field, on_if_one, on_unless_zero, pick_list,
+};
 use crate::{config, secret};
 use gpui_kit::base::input::{
     InputBaseState, InputEvent, InputModeKind, InputState, Textarea, TextareaState,
@@ -156,7 +159,15 @@ struct Test {
 
 pub struct Refine {
     model: Entity<Model>,
+    /// Page::Refine (润色) or Page::Service (服务).
+    page: Page,
+    nav: WeakEntity<Settings>,
+    /// The LLM endpoint's key (the account follows llmBaseUrl).
     key: Entity<KeyField>,
+    /// The Volcengine key.
+    asr_key: Entity<KeyField>,
+    /// The learner's DeepSeek fallback key.
+    fallback_key: Entity<KeyField>,
     menu: Option<Menu>,
     base: Entity<InputState>,
     llm_model: Entity<InputState>,
@@ -176,12 +187,31 @@ pub struct Refine {
 }
 
 impl Refine {
-    pub fn new(model: Entity<Model>, window: &mut Window, cx: &mut Context<Self>) -> Refine {
+    pub fn new(
+        model: Entity<Model>,
+        page: Page,
+        nav: WeakEntity<Settings>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Refine {
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
+        let m = model.clone();
+        let asr_key = cx.new(|cx| KeyField::new(m, "key", || "apiKey".into(), window, cx));
+        let m = model.clone();
+        let fallback_key = cx.new(|cx| {
+            KeyField::new(
+                m,
+                "fallback-key",
+                || llm::key_account(llm::LEARNER_FALLBACK.0),
+                window,
+                cx,
+            )
+        });
         let m = model.clone();
         let key = cx.new(|cx| {
             KeyField::new(
                 m,
+                "llm-key",
                 || llm::key_account(&config::value("llmBaseUrl").unwrap_or_default()),
                 window,
                 cx,
@@ -274,7 +304,11 @@ impl Refine {
         sample.update(cx, |i, cx| i.set_value(SAMPLE, window, cx));
         Refine {
             model,
+            page,
+            nav,
             key,
+            asr_key,
+            fallback_key,
             menu: None,
             base,
             llm_model,
@@ -1849,6 +1883,9 @@ fn rule_tile(i: usize, model: &Entity<Model>) -> Stateful<Div> {
 
 impl Render for Refine {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.page == Page::Service {
+            return self.service_page(window, cx);
+        }
         let enabled = on_if_one("llmEnabled");
         let tiles = |from: usize| {
             div()
@@ -1893,6 +1930,7 @@ impl Render for Refine {
                             .child("LLM 润色"),
                     ),
             )
+            .child(self.service_link())
             .child(
                 div().flex().flex_col().gap(px(6.)).children(
                     LEVELS
@@ -1953,12 +1991,86 @@ impl Render for Refine {
                     .child(llm),
             )
             .child(self.styles_block(window, cx))
-            .child(div().pt(px(8.)).child(group("LLM 服务")))
-            .child(section("服务商", self.provider_rows(window, cx)))
             .child(section("上下文", self.context_rows(window, cx)))
+            .child(hint("启用 LLM 后，识别文本及已配置的上下文会发送给「服务」里设置的接口；使用远程接口时会离开本机。「词典 → 后台校对」独立运行，关闭润色不会关闭后台校对。"))
+    }
+}
+
+impl Refine {
+    /// The 润色 page's pointer to 服务: the endpoint in use, or that none is set.
+    fn service_link(&self) -> Stateful<Div> {
+        let base = config::value("llmBaseUrl").unwrap_or_default();
+        let (text, color) = if base.is_empty() {
+            ("未设置 LLM 服务".to_string(), AMBER)
+        } else {
+            let name = PRESETS
+                .iter()
+                .find(|p| p.2 == base.trim_end_matches('/'))
+                .map(|p| p.0.to_string())
+                .unwrap_or_else(|| llm::key_account(&base).trim_start_matches("llm:").into());
+            let model = config::value("llmModel").unwrap_or_default();
+            (
+                if model.is_empty() {
+                    name
+                } else {
+                    format!("{name} · {model}")
+                },
+                TEXT2,
+            )
+        };
+        let nav = self.nav.clone();
+        hit("open-service")
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .min_w_0()
+            .text_size(px(12.))
+            .text_color(hex(color))
+            .hover(|s| s.text_color(hex(TEXT)))
+            .child(div().truncate().child(text))
+            .child("›")
+            .on_click(move |_, _, cx| {
+                let _ = nav.update(cx, |s, cx| s.show(Page::Service, cx));
+            })
+    }
+
+    /// 服务: recognition (Volcengine key and options), the LLM endpoint with its prompts and a test, and the
+    /// learner's fallback key.
+    fn service_page(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
+        let toggle = |key: &'static str, label: &'static str, sub: &'static str| {
+            let model = self.model.clone();
+            toggle_row(key, on_unless_zero(key), label, sub, move |v, _, cx| {
+                model.update(cx, |m, cx| m.set(key, bool_str(v), cx));
+            })
+        };
+        super::page_body("service")
+            .child(
+                group_body()
+                    .child(card_head("语音识别", "火山引擎 bigmodel；key 只存在本机"))
+                    .child(row("API Key", self.asr_key.clone()))
+                    .child(toggle(
+                        "asrContext",
+                        "发送上下文",
+                        "前台应用和输入框里光标前的文字，帮助识别专有名词",
+                    ))
+                    .child(toggle(
+                        "nonstream",
+                        "二遍识别",
+                        "松键后用整段音频再识别一次，更准，约慢 300 ms",
+                    )),
+            )
+            .child(div().pt(px(8.)).child(group("LLM")))
+            .child(section("服务商", self.provider_rows(window, cx)))
             .child(section("提示词", self.prompt_rows(window, cx)))
             .child(section("测试", self.test_rows(window, cx)))
-            .child(hint("启用 LLM 后，识别文本及已配置的上下文会发送给所选服务；使用远程接口时会离开本机。「词典 → 后台校对」独立运行，关闭润色不会关闭后台校对。"))
+            .child(
+                group_body()
+                    .child(card_head(
+                        "后台校对备用",
+                        "上面的接口不可用时，后台校对改用 DeepSeek（deepseek-flash）",
+                    ))
+                    .child(row("DeepSeek key", self.fallback_key.clone())),
+            )
     }
 }
 
@@ -2122,7 +2234,43 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &config::raw("llmStyles"),
     )?;
 
-    ui.scroll("style-0-add", -300.)?;
+    ui.scroll("style-0-add", -600.)?;
+    ui.shot("refine-context")?;
+    ui.click("llmHistory-1")?;
+    expect(
+        "history up",
+        config::raw("llmHistory").as_deref() == Some("4"),
+        &None,
+    )?;
+    ui.click("llmAppContext")?;
+    expect(
+        "app context off",
+        config::raw("llmAppContext").as_deref() == Some("0"),
+        &None,
+    )?;
+
+    // 润色 points at 服务, which holds recognition, the LLM endpoint, prompts, the test and the fallback key.
+    ui.scroll("llmAppContext", 3000.)?;
+    expect(
+        "service link on 润色",
+        ui.has("open-service") && !ui.has("preset"),
+        &None,
+    )?;
+    ui.click("open-service")?;
+    expect(
+        "service page: recognition and endpoint",
+        ui.has("asrContext") && ui.has("preset") && ui.has("llmModel") && ui.has("refine-run"),
+        &None,
+    )?;
+    ui.shot("service")?;
+    let before = config::raw("nonstream");
+    ui.click("nonstream")?;
+    expect(
+        "nonstream toggled",
+        config::raw("nonstream") != before,
+        &before,
+    )?;
+    ui.click("nonstream")?;
     ui.click("llmFormat")?;
     ui.click("llmFormat-menu-1")?;
     expect(
@@ -2151,6 +2299,8 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         config::raw("llmModel").as_deref() == Some("deepseek-v4"),
         &None,
     )?;
+    // The recognition card above pushes the rest of the provider rows below the fold.
+    ui.scroll("llmModel", -300.)?;
     ui.click("llmTimeoutMs")?;
     ui.key("cmd-a")?;
     ui.type_text("2500")?;
@@ -2174,21 +2324,7 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     )?;
     ui.shot("refine-typed")?;
 
-    ui.scroll("preset", -500.)?;
-    ui.click("llmHistory-1")?;
-    expect(
-        "history up",
-        config::raw("llmHistory").as_deref() == Some("4"),
-        &None,
-    )?;
-    ui.click("llmAppContext")?;
-    expect(
-        "app context off",
-        config::raw("llmAppContext").as_deref() == Some("0"),
-        &None,
-    )?;
-
-    ui.scroll("llmAppContext", -300.)?;
+    ui.scroll("llmExtraBody", -300.)?;
     ui.click("prompt-open")?;
     expect("prompt editor shown", ui.has("prompt-reset"), &None)?;
     ui.click("prompt")?;
@@ -2216,5 +2352,6 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     ui.click("refine-run")?;
     expect("test failure shown", ui.has("refine-result"), &None)?;
     ui.shot("refine-test")?;
+    expect("fallback key field", ui.has("fallback-key-save"), &None)?;
     ui.close()
 }

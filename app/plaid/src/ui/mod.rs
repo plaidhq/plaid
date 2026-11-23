@@ -100,8 +100,10 @@ pub enum Page {
     History,
     /// 设置 → 通用: talk keys, microphone and recording, the HUD.
     General,
-    /// 设置 → 识别: Volcengine key, recognition options.
-    Voice,
+    /// 设置 → 服务: which services run recognition and the LLM, and their keys (Volcengine, the LLM endpoint and
+    /// prompts, the learner's DeepSeek fallback). The place a Plaid Cloud / BYOK switch will go.
+    Service,
+    /// 设置 → 润色: how text is polished (local rules, levels, apps, styles, context); the endpoint is on 服务.
     Refine,
     Dictionary,
     Commands,
@@ -117,7 +119,7 @@ impl Page {
         Page::Overview,
         Page::History,
         Page::General,
-        Page::Voice,
+        Page::Service,
         Page::Refine,
         Page::Dictionary,
         Page::Commands,
@@ -131,7 +133,7 @@ impl Page {
     /// The 设置 sidebar, in order; a rule goes before 数据 and 关于.
     const SETTINGS: [Page; 7] = [
         Page::General,
-        Page::Voice,
+        Page::Service,
         Page::Refine,
         Page::Dictionary,
         Page::Commands,
@@ -144,7 +146,7 @@ impl Page {
             Page::Overview => "概览",
             Page::History => "历史",
             Page::General => "通用",
-            Page::Voice => "识别",
+            Page::Service => "服务",
             Page::Refine => "润色",
             Page::Dictionary => "词典",
             Page::Commands => "命令",
@@ -170,7 +172,7 @@ impl Page {
         match self {
             Page::Overview => "overview",
             Page::History => "history",
-            Page::Voice => "voice",
+            Page::Service => "service",
             Page::Refine => "refine",
             Page::Dictionary => "dictionary",
             Page::Commands => "commands",
@@ -482,7 +484,7 @@ impl Settings {
         }
         let m = self.model.clone();
         let v: AnyView = match page {
-            Page::General | Page::Voice | Page::Data | Page::About => cx
+            Page::General | Page::Data | Page::About => cx
                 .new(|cx| general::General::new(m, page, window, cx))
                 .into(),
             Page::History => {
@@ -492,7 +494,11 @@ impl Settings {
                 };
                 cx.new(|cx| history::History::new(m, go, window, cx)).into()
             }
-            Page::Refine => cx.new(|cx| refine::Refine::new(m, window, cx)).into(),
+            Page::Service | Page::Refine => {
+                let nav = cx.entity().downgrade();
+                cx.new(|cx| refine::Refine::new(m, page, nav, window, cx))
+                    .into()
+            }
             Page::Commands => cx.new(|cx| commands::Commands::new(m, window, cx)).into(),
             Page::Overview => cx.new(|cx| overview::Overview::new(m, window, cx)).into(),
             Page::Dictionary => {
