@@ -5,6 +5,7 @@ members = ["core", "plaid"]
 [workspace.package]
 version = "0.11.43"
 edition = "2024"
+license = "Apache-2.0"
 
 [profile.release]
 lto = "thin"
