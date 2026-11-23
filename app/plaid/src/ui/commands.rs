@@ -106,8 +106,8 @@ pub struct Commands {
 impl Commands {
     pub fn new(model: Entity<Model>, window: &mut Window, cx: &mut Context<Self>) -> Commands {
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
-        let wake = cx.new(|cx| InputState::new(window, cx).placeholder("Plaid"));
-        let w = config::raw("wakeWord").unwrap_or_else(|| "Plaid".into());
+        let wake = cx.new(|cx| InputState::new(window, cx).placeholder(config::WAKE_WORD));
+        let w = config::wake_word();
         wake.update(cx, |i, cx| i.set_value(w, window, cx));
         cx.subscribe_in(&wake, window, |this, input, e: &InputEvent, _, cx| {
             if let InputEvent::Change = e {

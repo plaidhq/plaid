@@ -100,7 +100,7 @@ fn hud(out: &str) -> Result<(), String> {
             ]
             .concat(),
         ),
-        ("hud-command", vec![H::Listen, text("Plaid 打开日历", true)]),
+        ("hud-command", vec![H::Listen, text("指令 打开日历", true)]),
         (
             "hud-quiet",
             vec![

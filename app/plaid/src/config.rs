@@ -131,9 +131,17 @@ pub fn actions() -> (Vec<plaid_core::actions::Action>, String) {
     let wake = if value("commandMode").as_deref() == Some("bare") {
         String::new()
     } else {
-        raw("wakeWord").unwrap_or_else(|| "Plaid".into())
+        wake_word()
     };
     (list, wake)
+}
+
+/// A common Chinese word: Volc heard the old default "Plaid" as "Preload" even with it as a hotword. Not "命令",
+/// which would swallow dictation that opens with "命令行".
+pub const WAKE_WORD: &str = "指令";
+
+pub fn wake_word() -> String {
+    raw("wakeWord").unwrap_or_else(|| WAKE_WORD.into())
 }
 
 /// Hold and tap key codes (macOS codes on every platform); -1 disables. Right ⌥ / right Alt (61) is the default,
