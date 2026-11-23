@@ -209,9 +209,6 @@ pub const DEFAULT_TEMPLATE: &str = "用户背景：{{context}}
 待优化文本：
 {{text}}";
 
-/// Learning works without configuring refine when a DeepSeek key is already stored.
-pub const LEARNER_FALLBACK: (&str, &str) = ("https://api.deepseek.com", "deepseek-flash");
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Endpoint {
     /// "openai" (chat completions) or "anthropic" (messages).

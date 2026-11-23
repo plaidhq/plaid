@@ -2,13 +2,12 @@
 //! manual edits, rules learned from them, and the learning switches.
 use super::mav::*;
 use super::{Model, Page, Settings, bool_str, field, on_unless_zero, pick_list};
-use crate::{config, secret};
+use crate::config;
 use chrono::Local;
 use gpui_kit::base::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use plaid_core::hotwords::{self, Snapshot};
-use plaid_core::llm;
 use plaid_core::store::{AUTO_RULES, AutoRule, Fix, Learn, Store, write_atomic};
 use plaid_core::text::trim_ws;
 use std::collections::{HashMap, HashSet};
@@ -287,8 +286,6 @@ pub struct Dictionary {
     batch_open: bool,
     confirm: bool,
     sheet: Option<Sheet>,
-    /// A DeepSeek key for background checking (env or keychain), read once.
-    fallback_key: bool,
     /// Focused while the confirm sheet is up, so the overlay gets Esc.
     overlay_focus: FocusHandle,
     /// The two learning thresholds (learnEditHits, learnRewriteHits).
@@ -339,12 +336,6 @@ impl Dictionary {
             }
         })
         .detach();
-        let fallback_key = !model.read(cx).facts.fixture
-            && (std::env::var("PLAID_LLM_KEY").is_ok_and(|k| !k.is_empty())
-                || secret::get(&llm::key_account(llm::LEARNER_FALLBACK.0))
-                    .ok()
-                    .flatten()
-                    .is_some_and(|k| !k.is_empty()));
         let threshold =
             |key: &'static str, v: usize, window: &mut Window, cx: &mut Context<Self>| {
                 let input = cx.new(|cx| InputState::new(window, cx));
@@ -382,7 +373,6 @@ impl Dictionary {
             batch_open: false,
             confirm: false,
             sheet: None,
-            fallback_key,
             overlay_focus: cx.focus_handle(),
         }
     }
@@ -729,9 +719,9 @@ impl Dictionary {
         cx.notify();
     }
 
-    /// Background checking is on but no LLM can do it: no refine endpoint and no DeepSeek key.
+    /// Background checking is on but no LLM can do it: no endpoint on 服务.
     fn no_llm(&self) -> bool {
-        on_unless_zero("autoLearn") && config::value("llmBaseUrl").is_none() && !self.fallback_key
+        on_unless_zero("autoLearn") && config::value("llmBaseUrl").is_none()
     }
 
     // --- Rendering ---------------------------------------------------------------------------------------------
@@ -1420,7 +1410,7 @@ impl Dictionary {
                 .items_start()
                 .gap(px(6.))
                 .child(
-                    hint("没有可用的 LLM：在「设置 → 服务」里填好 LLM 接口或后台校对备用 key")
+                    hint("没有可用的 LLM：在「设置 → 服务」里填好 LLM 接口和 key")
                         .text_color(hex(AMBER)),
                 )
                 .child(small_button(

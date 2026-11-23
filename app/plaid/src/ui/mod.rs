@@ -101,7 +101,7 @@ pub enum Page {
     /// 设置 → 通用: talk keys, microphone and recording, the HUD.
     General,
     /// 设置 → 服务: which services run recognition and the LLM, and their keys (Volcengine, the LLM endpoint and
-    /// prompts, the learner's DeepSeek fallback). The place a Plaid Cloud / BYOK switch will go.
+    /// prompts). The place a Plaid Cloud / BYOK switch will go.
     Service,
     /// 设置 → 润色: how text is polished (local rules, levels, apps, styles, context); the endpoint is on 服务.
     Refine,

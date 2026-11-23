@@ -1265,7 +1265,7 @@ impl Controller {
         }
         let Some(ep) = Self::configured(p) else {
             return p.hud(Hud::Flash(
-                "没有可用的 LLM：在「设置 → 服务」里填好 LLM 接口或后台校对备用 key".into(),
+                "没有可用的 LLM：在「设置 → 服务」里填好 LLM 接口和 key".into(),
             ));
         };
         let light = llm::level(|k| p.setting(k), r.app.as_deref()) == Level::Light;
@@ -1357,16 +1357,14 @@ impl Controller {
         }
     }
 
-    /// The learning endpoint: the refine settings when filled in and usable (a stored key, or a local server),
-    /// else DeepSeek when its key is stored. Neither: no learning, rather than a failing request per dictation.
+    /// The learning endpoint: the refine settings when filled in and usable (a stored key, or a local server).
+    /// Otherwise no learning, rather than a failing request per dictation.
     fn learn_submit(&mut self, id: DateTime<Utc>, raw: String, p: &mut impl Platform) {
         if p.setting("autoLearn").as_deref() == Some("0") {
             return;
         }
-        let fallback = || Endpoint::new("openai", llm::LEARNER_FALLBACK.0, llm::LEARNER_FALLBACK.1);
         let Some(ep) = Self::configured(p)
             .filter(|ep| llm::loopback(&ep.base) || p.llm_key(&ep.base).is_some())
-            .or_else(|| p.llm_key(llm::LEARNER_FALLBACK.0).map(|_| fallback()))
         else {
             return;
         };
@@ -2084,6 +2082,7 @@ mod tests {
     fn learner_checks_pasted_text_quietly() {
         let mut t = T::new();
         t.p.llm_key = true;
+        t.p.settings = vec![("llmBaseUrl", "https://api.deepseek.com")];
         t.p.terms = vec!["Claude".into()];
         for g in 1..=2 {
             let out = t.key(StartHold);
@@ -2134,6 +2133,7 @@ mod tests {
     fn learner_waits_while_dictating() {
         let mut t = T::new();
         t.p.llm_key = true;
+        t.p.settings = vec![("llmBaseUrl", "https://api.deepseek.com")];
         t.key(StartHold);
         t.done(1, Ok("第一句"));
         t.flush();
@@ -2177,7 +2177,11 @@ mod tests {
 
         let mut t = T::new();
         t.p.llm_key = true;
-        t.p.settings = vec![("learnEdits", "0"), ("autoLearn", "0")];
+        t.p.settings = vec![
+            ("llmBaseUrl", "https://api.deepseek.com"),
+            ("learnEdits", "0"),
+            ("autoLearn", "0"),
+        ];
         t.key(StartHold);
         t.done(1, Ok("问一下克劳德吧"));
         let out = t.flush();

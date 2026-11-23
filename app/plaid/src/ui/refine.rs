@@ -166,8 +166,6 @@ pub struct Refine {
     key: Entity<KeyField>,
     /// The Volcengine key.
     asr_key: Entity<KeyField>,
-    /// The learner's DeepSeek fallback key.
-    fallback_key: Entity<KeyField>,
     menu: Option<Menu>,
     base: Entity<InputState>,
     llm_model: Entity<InputState>,
@@ -197,16 +195,6 @@ impl Refine {
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
         let m = model.clone();
         let asr_key = cx.new(|cx| KeyField::new(m, "key", || "apiKey".into(), window, cx));
-        let m = model.clone();
-        let fallback_key = cx.new(|cx| {
-            KeyField::new(
-                m,
-                "fallback-key",
-                || llm::key_account(llm::LEARNER_FALLBACK.0),
-                window,
-                cx,
-            )
-        });
         let m = model.clone();
         let key = cx.new(|cx| {
             KeyField::new(
@@ -308,7 +296,6 @@ impl Refine {
             nav,
             key,
             asr_key,
-            fallback_key,
             menu: None,
             base,
             llm_model,
@@ -2034,8 +2021,7 @@ impl Refine {
             })
     }
 
-    /// 服务: recognition (Volcengine key and options), the LLM endpoint with its prompts and a test, and the
-    /// learner's fallback key.
+    /// 服务: recognition (Volcengine key and options), and the LLM endpoint with its prompts and a test.
     fn service_page(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let toggle = |key: &'static str, label: &'static str, sub: &'static str| {
             let model = self.model.clone();
@@ -2063,14 +2049,6 @@ impl Refine {
             .child(section("服务商", self.provider_rows(window, cx)))
             .child(section("提示词", self.prompt_rows(window, cx)))
             .child(section("测试", self.test_rows(window, cx)))
-            .child(
-                group_body()
-                    .child(card_head(
-                        "后台校对备用",
-                        "上面的接口不可用时，后台校对改用 DeepSeek（deepseek-flash）",
-                    ))
-                    .child(row("DeepSeek key", self.fallback_key.clone())),
-            )
     }
 }
 
@@ -2249,7 +2227,7 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &None,
     )?;
 
-    // 润色 points at 服务, which holds recognition, the LLM endpoint, prompts, the test and the fallback key.
+    // 润色 points at 服务, which holds recognition, the LLM endpoint, prompts and the test.
     ui.scroll("llmAppContext", 3000.)?;
     expect(
         "service link on 润色",
@@ -2352,6 +2330,5 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     ui.click("refine-run")?;
     expect("test failure shown", ui.has("refine-result"), &None)?;
     ui.shot("refine-test")?;
-    expect("fallback key field", ui.has("fallback-key-save"), &None)?;
     ui.close()
 }
