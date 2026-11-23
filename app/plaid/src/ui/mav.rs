@@ -14,8 +14,8 @@ pub const GLASS_WELL: u32 = 0x0d0e12c0;
 pub const RAISED2: u32 = 0x1e2128;
 pub const HOVER: u32 = 0x262a32;
 pub const TEXT: u32 = 0xecedef;
-pub const TEXT2: u32 = 0x8b8f98;
-pub const TEXT3: u32 = 0x5c6069;
+pub const TEXT2: u32 = 0xa0a4ac;
+pub const TEXT3: u32 = 0x7d818a;
 pub const CYAN: u32 = 0x7fd8ff;
 pub const VIOLET: u32 = 0xb59cff;
 pub const GREEN: u32 = 0x7ee08a;
@@ -167,7 +167,7 @@ pub fn backdrop() -> Div {
         return d.bg(hex(BG));
     }
     let bg = BG << 8;
-    d.bg(hexa(bg | 0xa8))
+    d.bg(hexa(bg | 0xc0))
         .child(
             div()
                 .absolute()
