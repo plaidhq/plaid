@@ -5,6 +5,8 @@
 set -e
 cd "$(dirname "$0")"
 export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
+# Same floor as LSMinimumSystemVersion in Info.plist, also for the C code built by dependencies.
+export MACOSX_DEPLOYMENT_TARGET=13.0
 MODE=${1:-dev}
 if [ "$MODE" = release ]; then NAME=Plaid; ID=com.neospaceindustries.plaid; else NAME="Plaid Dev"; ID=com.neospaceindustries.plaid.dev; fi
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)

@@ -6,13 +6,13 @@ punctuation before pasting. The UI is in Simplified Chinese.
 
 ## Requirements
 
-- macOS 14+ on Apple silicon, or Windows 11 x64.
+- macOS 13+ (Apple silicon or Intel), or Windows 11 x64.
 - A Volcengine API key with Doubao streaming speech recognition (bigmodel) enabled. Plaid is bring-your-own-key.
 - Optional: any OpenAI-compatible or Anthropic-compatible LLM endpoint for polishing.
 
 ## Install
 
-Download the zip for your platform from [Releases](https://github.com/plaidhq/plaid/releases). The builds are not notarized (macOS) or code-signed for SmartScreen (Windows).
+Download the zip for your platform from [Releases](https://github.com/plaidhq/plaid/releases) (`macos-arm64` for Apple silicon, `macos-x64` for Intel Macs). The builds are not notarized (macOS) or code-signed for SmartScreen (Windows).
 
 - **macOS**: unzip, move `Plaid.app` to Applications and open it once. When macOS blocks it, go to System Settings ›
   Privacy & Security and choose Open Anyway. Grant Microphone and Accessibility when asked; Accessibility is used

@@ -1,5 +1,5 @@
-# GPUI app (app/): Windows build, tests (including the mock-endpoint replay) and an unsigned exe artifact.
-# macOS is built and tested locally.
+# GPUI app (app/): Windows build, tests (including the mock-endpoint replay) and an unsigned exe artifact; the same
+# on an Intel Mac, plus ui-check renders. Apple silicon macOS is built and tested locally.
 name: app
 
 on:
@@ -53,3 +53,50 @@ jobs:
           name: plaid-windows-x64
           path: app/target/release/plaid.exe
           if-no-files-found: error
+
+  macos-intel:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+      - run: cargo test --workspace
+      - run: ./bundle.sh release
+      - name: Intel binary for macOS 13
+        run: |
+          BIN=target/Plaid.app/Contents/MacOS/plaid
+          lipo -archs "$BIN" | grep -qx x86_64
+          vtool -show-build "$BIN" | grep -q 'minos 13.0'
+      # Same as the Windows smoke test: the app must stay up, log its launch (after the GPUI windows open) and not panic.
+      - name: Launch smoke test
+        run: |
+          export PLAID_DATA_DIR="$RUNNER_TEMP/plaid-smoke"
+          target/Plaid.app/Contents/MacOS/plaid &
+          PID=$!
+          sleep 8
+          cat "$PLAID_DATA_DIR/events.log" || true
+          kill -0 $PID || { echo "plaid exited"; exit 1; }
+          kill $PID
+          grep -q 'launch ' "$PLAID_DATA_DIR/events.log"
+          ! grep -q 'panic:' "$PLAID_DATA_DIR/events.log"
+      - run: ditto -c -k --keepParent target/Plaid.app Plaid-macos-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plaid-macos-x64
+          path: app/Plaid-macos-x64.zip
+          if-no-files-found: error
+      # Offscreen renders of every settings page; the runner's GPU may not support them, so a failure here is only
+      # reported.
+      - name: ui-check
+        continue-on-error: true
+        run: |
+          cargo build -p plaid --features snapshot
+          PLAID_DATA_DIR="$RUNNER_TEMP/uicd" ./target/debug/plaid --ui-check "$RUNNER_TEMP/uic"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-check-macos-x64
+          path: ${{ runner.temp }}/uic
+          if-no-files-found: ignore

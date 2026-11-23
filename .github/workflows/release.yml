@@ -1,4 +1,4 @@
-# Pushing a tag vX.Y.Z builds the macOS app (Apple silicon) and the Windows exe, and publishes
+# Pushing a tag vX.Y.Z builds the macOS app (Apple silicon and Intel, one zip each) and the Windows exe, and publishes
 # both as a GitHub release. The tag must match the workspace version in app/Cargo.toml.
 name: release
 
@@ -13,7 +13,14 @@ defaults:
 
 jobs:
   macos:
-    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - name: Tag matches version
@@ -42,10 +49,15 @@ jobs:
       - run: BUILD=${{ github.run_number }} ./bundle.sh release
       - name: Signed with the release identity
         run: codesign -d -r- target/Plaid.app 2>&1 | grep 'certificate leaf = H"324281721b815b412c285862a93f74ad7d6518c2"'
-      - run: ditto -c -k --keepParent target/Plaid.app "Plaid-$GITHUB_REF_NAME-macos-arm64.zip"
+      - name: Architecture and macOS 13 floor
+        run: |
+          BIN=target/Plaid.app/Contents/MacOS/plaid
+          lipo -archs "$BIN" | grep -qx "${{ matrix.arch == 'x64' && 'x86_64' || 'arm64' }}"
+          vtool -show-build "$BIN" | grep -q 'minos 13.0'
+      - run: ditto -c -k --keepParent target/Plaid.app "Plaid-$GITHUB_REF_NAME-macos-${{ matrix.arch }}.zip"
       - uses: actions/upload-artifact@v4
         with:
-          name: macos
+          name: macos-${{ matrix.arch }}
           path: app/Plaid-*.zip
           if-no-files-found: error
 
@@ -81,9 +93,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" Plaid-*.zip --repo "$GITHUB_REPOSITORY" --title "Plaid $GITHUB_REF_NAME" --generate-notes --notes "$(cat <<'EOF'
-          Unsigned builds.
+          Not notarized (macOS) or signed for SmartScreen (Windows).
 
-          - macOS 14+ on Apple silicon: unzip, move Plaid.app to Applications, open it once, then allow it in System Settings › Privacy & Security › Open Anyway. Grant Accessibility and Microphone when asked. Each update is a new ad-hoc signature, so macOS asks for Accessibility (and the Keychain once) again.
+          - macOS 13+: macos-arm64 for Apple silicon, macos-x64 for Intel. Unzip, move Plaid.app to Applications, open it once, then allow it in System Settings › Privacy & Security › Open Anyway. Grant Accessibility and Microphone when asked. Releases share one self-signed certificate, so the grants carry over to updates.
           - Windows 11: unzip and run plaid.exe; on the SmartScreen prompt choose More info › Run anyway.
           EOF
           )"

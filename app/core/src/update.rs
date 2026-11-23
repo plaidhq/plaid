@@ -33,6 +33,8 @@ pub struct Asset {
 pub fn asset_suffix() -> &'static str {
     if cfg!(windows) {
         "-windows-x64.zip"
+    } else if cfg!(target_arch = "x86_64") {
+        "-macos-x64.zip"
     } else {
         "-macos-arm64.zip"
     }
