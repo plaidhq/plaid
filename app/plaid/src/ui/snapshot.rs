@@ -284,7 +284,34 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
         &None,
     )?;
     ui.shot("general-hud")?;
-    ui.scroll("hudText", 1600.)?;
+    ui.scroll("hudText", -800.)?;
+    expect("update card", ui.has("update-check"), &None)?;
+    // A staged update (never clicked here: applying would open the release page).
+    let ready = crate::update::Updater {
+        state: crate::update::State::Ready(
+            plaid_core::update::Release {
+                version: "0.99.0".into(),
+                page: String::new(),
+                notes: String::new(),
+                asset: None,
+            },
+            Default::default(),
+        ),
+        busy_note: true,
+    };
+    ui.cx.update(|cx| cx.set_global(ready));
+    ui.frame()?;
+    expect(
+        "update offered in card and footer",
+        ui.has("update-apply") && ui.has("footer-update") && !ui.has("update-check"),
+        &None,
+    )?;
+    ui.shot("general-update")?;
+    ui.cx
+        .update(|cx| cx.set_global(crate::update::Updater::default()));
+    ui.frame()?;
+    expect("no offer", !ui.has("footer-update"), &None)?;
+    ui.scroll("hudText", 2400.)?;
     ui.click("hold")?;
     ui.shot("general-menu")?;
     let want = super::general::offered()[0];

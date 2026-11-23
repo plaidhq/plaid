@@ -546,7 +546,7 @@ fn strip_think(s: &str) -> String {
 }
 
 /// Shared so consecutive requests reuse the TLS connection: refine has a budget of a few seconds.
-static AGENT: std::sync::LazyLock<ureq::Agent> = std::sync::LazyLock::new(|| {
+pub(crate) static AGENT: std::sync::LazyLock<ureq::Agent> = std::sync::LazyLock::new(|| {
     use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
     let tls = TlsConfig::builder()
         .provider(TlsProvider::NativeTls)
@@ -563,7 +563,7 @@ static AGENT: std::sync::LazyLock<ureq::Agent> = std::sync::LazyLock::new(|| {
 
 /// Timeout and proxy for one request. Loopback goes direct; otherwise a proxy from the environment wins (a
 /// terminal launch), else the system one. `send` and `warm` must route alike to share the pooled connection.
-fn route<B>(
+pub(crate) fn route<B>(
     req: ureq::RequestBuilder<B>,
     url: &str,
     system: Option<&SystemProxy>,

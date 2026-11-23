@@ -49,6 +49,11 @@ impl State {
         self.enter.store(k.enter, Relaxed);
     }
 
+    /// The controller is recording, finishing or refining, or a command confirmation is up.
+    pub fn busy(&self) -> bool {
+        self.escape.load(Relaxed)
+    }
+
     /// Re-reads the bindings from settings.
     pub fn rebind(&self) {
         let (hold, tap) = crate::config::hotkeys();

@@ -295,6 +295,21 @@ pub fn send(m: Msg, cx: &App) {
     }
 }
 
+/// Opens a URL in the default browser.
+pub fn open_url(url: &str) {
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(windows)]
+    let r = std::process::Command::new("cmd")
+        .args(["/c", "start", "", url])
+        .spawn();
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let r: std::io::Result<()> = Ok(());
+    if let Err(e) = r {
+        crate::trace::log(&format!("open {url}: {e}"));
+    }
+}
+
 /// Reveals a path in Finder / Explorer.
 pub fn reveal(path: &std::path::Path) {
     #[cfg(target_os = "macos")]
@@ -720,11 +735,22 @@ impl Settings {
             .text_color(hex(TEXT2))
             .child(badge(status, text))
             .child(format!("{words} 条记录"))
-            .child(
-                div()
-                    .ml_auto()
-                    .child(format!("Plaid {}", env!("CARGO_PKG_VERSION"))),
+            .child(div().ml_auto())
+            .when_some(
+                cx.try_global::<crate::update::Updater>()
+                    .and_then(|u| u.offer())
+                    .map(str::to_owned),
+                |d, v| {
+                    d.child(
+                        hit("footer-update")
+                            .text_color(hex(CYAN))
+                            .hover(|s| s.text_color(hex(TEXT)))
+                            .child(format!("更新到 {v}"))
+                            .on_click(|_, _, cx| crate::update::apply(cx)),
+                    )
+                },
             )
+            .child(format!("Plaid {}", env!("CARGO_PKG_VERSION")))
             .child(
                 div()
                     .absolute()

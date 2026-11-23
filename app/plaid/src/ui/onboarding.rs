@@ -3,6 +3,7 @@
 use super::general::{key_name, offered, set_shortcut};
 use super::key_field::KeyField;
 use super::mav::*;
+use super::open_url;
 use super::{Facts, Model, field, os_activate, poll_facts};
 use crate::{config, secret};
 use gpui_kit::base::input::InputState;
@@ -499,20 +500,6 @@ fn perm(
                 .child(action)
                 .child(status),
         )
-}
-
-fn open_url(url: &str) {
-    #[cfg(target_os = "macos")]
-    let r = std::process::Command::new("open").arg(url).spawn();
-    #[cfg(windows)]
-    let r = std::process::Command::new("cmd")
-        .args(["/c", "start", "", url])
-        .spawn();
-    #[cfg(not(any(target_os = "macos", windows)))]
-    let r: std::io::Result<()> = Ok(());
-    if let Err(e) = r {
-        crate::trace::log(&format!("open {url}: {e}"));
-    }
 }
 
 fn request_trust() {

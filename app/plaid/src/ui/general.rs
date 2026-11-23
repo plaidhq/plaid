@@ -668,6 +668,74 @@ fn hud_states() -> Div {
 }
 
 /// Swift's level mapping: log scale between RMS 60 and 3000.
+/// 更新: the current version, the updater's state and its one action.
+fn update_card(cx: &App) -> Div {
+    use crate::update::{self, State, Updater};
+    let u = cx.try_global::<Updater>();
+    let state = u.map(|u| u.state.clone()).unwrap_or_default();
+    let check = || {
+        small_button("update-check", "检查更新", |_, _, cx| {
+            update::check(true, cx)
+        })
+        .into_any_element()
+    };
+    let apply = |label: &'static str| {
+        default_button("update-apply", label, |_, _, cx| update::apply(cx)).into_any_element()
+    };
+    let notes = |page: String| {
+        small_button("update-notes", "更新说明", move |_, _, _| {
+            super::open_url(&page)
+        })
+        .into_any_element()
+    };
+    let (status, color, actions): (String, u32, Vec<AnyElement>) = match state {
+        State::Idle => (String::new(), TEXT2, vec![check()]),
+        State::Checking => (
+            "正在检查…".into(),
+            TEXT2,
+            vec![
+                disabled(small_button("update-check", "检查更新", |_, _, _| {})).into_any_element(),
+            ],
+        ),
+        State::Latest => ("已是最新版本".into(), TEXT2, vec![check()]),
+        State::Downloading(r) => (format!("正在下载 {}…", r.version), TEXT2, vec![]),
+        State::Ready(r, _) => (
+            format!("{} 已下载，重启后生效", r.version),
+            CYAN,
+            vec![notes(r.page), apply("重启以更新")],
+        ),
+        State::Available(r) => (
+            format!("有新版本 {}，需要下载后手动替换", r.version),
+            CYAN,
+            vec![notes(r.page.clone()), apply("下载新版本")],
+        ),
+        State::Failed(e) => (e, AMBER, vec![check()]),
+    };
+    let busy = u.is_some_and(|u| u.busy_note);
+    group_body()
+        .child(card_head("更新", "每 6 小时检查一次 GitHub 上的新版本"))
+        .child(row(
+            format!("Plaid {}", env!("CARGO_PKG_VERSION")),
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .min_w_0()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(hex(color))
+                        .child(status),
+                )
+                .children(actions),
+        ))
+        .when(busy, |d| {
+            d.child(row("", hint("正在听写，结束后再点「重启以更新」。")))
+        })
+}
+
 fn level(rms: f64) -> f64 {
     let (lo, hi) = (60f64.log10(), 3000f64.log10());
     ((rms.max(1.).log10() - lo) / (hi - lo)).clamp(0., 1.)
@@ -774,7 +842,8 @@ impl General {
                     .child(hud_states())
                     .child(div().h(px(6.)))
                     .children(self.hud_options()),
-            );
+            )
+            .child(update_card(cx));
         }
         super::page_body("voice")
             .child(

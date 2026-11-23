@@ -7,6 +7,7 @@ edition.workspace = true
 icu_segmenter = { version = "2.4", default-features = false, features = ["compiled_data"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.11"
 unicode-properties = "0.1.5"
 unicode-segmentation = "1.13"
 async-channel = "2.5"

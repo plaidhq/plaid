@@ -6012,6 +6012,7 @@ dependencies = [
  "icu_segmenter",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "unicode-properties",
  "unicode-segmentation",
  "ureq",

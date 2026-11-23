@@ -4,6 +4,7 @@
 //   plaid --file a.wav    one utterance through the controller with the WAV as the mic; prints partials and the paste
 //   plaid --recover [at]  recognize a record's saved audio again (default: newest with audio), save in place
 //   plaid --store-key     read the API key from stdin into this app's credential store
+//   plaid --update        install the latest release into this app bundle now (no relaunch)
 //   plaid --snapshot <dir> [page]  (feature `snapshot`) render settings pages offscreen to PNGs with fixture data
 //   plaid --ui-check <dir>         (feature `snapshot`) click through settings pages offscreen, assert on writes
 // Windows release builds are GUI-subsystem (no console window); redirected stdin/stdout still work.
@@ -26,6 +27,7 @@ mod secret;
 mod trace;
 mod tray;
 mod ui;
+mod update;
 #[cfg(windows)]
 mod win;
 
@@ -44,6 +46,7 @@ fn main() {
         Some("--file") => Some(cli::replay(args.get(2).map_or("", String::as_str))),
         Some("--recover") => Some(cli::recover(args.get(2).map(String::as_str))),
         Some("--store-key") => Some(cli::store_key()),
+        Some("--update") => Some(update::cli()),
         #[cfg(all(feature = "snapshot", any(target_os = "macos", target_os = "linux")))]
         Some("--snapshot") => Some(ui::snapshot::run(&args[2..])),
         #[cfg(all(feature = "snapshot", any(target_os = "macos", target_os = "linux")))]
@@ -82,6 +85,7 @@ fn main() {
             tray::Command::Overview => ui::open(ui::Page::Overview, cx),
             tray::Command::History => ui::open(ui::Page::History, cx),
             tray::Command::Settings => ui::open(ui::Page::General, cx),
+            tray::Command::Update => update::apply(cx),
         }) {
             eprintln!("tray: {e}");
         }
@@ -130,6 +134,7 @@ fn run(hud: WindowHandle<hud::Hud>, cx: &mut App) {
     if !config::actions().0.is_empty() {
         crate::run::prewarm();
     }
+    update::start(cx);
     if ui::onboarding::needed() {
         ui::onboarding::open(cx);
     }
