@@ -1,6 +1,7 @@
-//! 概览: usage over a picked range (today, 7/30/90 days, everything) from usage.json: one summary card with the
-//! totals and the chart, top apps and the hours of day, then the 性能 diagnostics for the same range, folded to a
-//! summary line until opened (Overview.swift + Perf.swift).
+//! 概览, from usage.json: 今天 on top as a reading row (characters, speaking time, time saved, polish latency) and a
+//! speed scale, no chart; below it the 回顾 cards (7 and 30 days side by side, or one 90-day / everything card) with
+//! a column per day, the apps and hours of the picked range, then the 性能 diagnostics for that range, folded to a
+//! summary line until opened.
 use super::Model;
 use super::mav::*;
 use super::perf::Perf;
@@ -8,16 +9,16 @@ use crate::config;
 use chrono::{Datelike, Duration, Local, NaiveDate, Timelike};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+use plaid_core::dictation::pct;
 use plaid_core::store::{Store, Usage};
 use std::collections::BTreeMap;
 
 /// Typing speed the "time saved" estimate assumes, characters per minute (pinyin input, mixed text).
 const TYPING_CPM: f64 = 50.;
-/// Range values stored in `overviewRange`: days back including today, 0 = everything.
-const RANGES: [i64; 5] = [1, 7, 30, 90, 0];
-const RANGE_NAMES: [&str; 5] = ["今天", "7 天", "30 天", "90 天", "全部"];
-/// Main chart plot area.
-const PLOT_H: f32 = 150.;
+/// Range values stored in `overviewRange`: days back including today, 0 = everything. 30 shows the 7- and 30-day
+/// cards; the apps, hours and 性能 below cover the stored range.
+const RANGES: [i64; 3] = [30, 90, 0];
+const RANGE_NAMES: [&str; 3] = ["7 / 30 天", "90 天", "全部"];
 
 /// Dictations, audio and characters of a stretch of time.
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
@@ -71,14 +72,6 @@ impl Bucket {
             ),
         }
     }
-
-    /// Axis label.
-    fn tick(&self) -> String {
-        match self.hour {
-            Some(h) => format!("{h}时"),
-            None => format!("{}月{}日", self.last.month(), self.last.day()),
-        }
-    }
 }
 
 /// What the page shows for the picked range; rebuilt when the model or the range changes.
@@ -86,6 +79,8 @@ impl Bucket {
 struct Data {
     range: i64,
     sum: Sum,
+    /// Days in the range, today included.
+    days: i64,
     /// Days in the range with any dictation.
     active: usize,
     apps: BTreeMap<String, i64>,
@@ -101,8 +96,17 @@ struct Data {
 pub struct Overview {
     model: Entity<Model>,
     perf: Entity<Perf>,
-    data: Data,
-    hover: Option<usize>,
+    today: Data,
+    /// Last 7 days, for the saved-time caption.
+    week: Sum,
+    /// Characters per minute over the last 30 days.
+    month_speed: Option<f64>,
+    /// Today's LLM polish: median ms and calls.
+    polish: Option<(i64, usize)>,
+    /// 回顾 cards: 7 and 30 days, or the one picked range.
+    cards: Vec<Data>,
+    /// (card, column) under the pointer.
+    hover: Option<(usize, usize)>,
     hover_hour: Option<usize>,
 }
 
@@ -117,7 +121,11 @@ impl Overview {
         let mut o = Overview {
             model,
             perf,
-            data: Data::default(),
+            today: Data::default(),
+            week: Sum::default(),
+            month_speed: None,
+            polish: None,
+            cards: vec![],
             hover: None,
             hover_hour: None,
         };
@@ -126,16 +134,36 @@ impl Overview {
     }
 
     fn reload(&mut self, cx: &App) {
-        self.data = build(&self.model.read(cx).store, range());
+        let store = &self.model.read(cx).store;
+        let range = range();
+        self.today = build(store, 1);
+        self.cards = match range {
+            30 => vec![build(store, 7), build(store, 30)],
+            r => vec![build(store, r)],
+        };
+        let today = Local::now().date_naive();
+        self.week = sum_days(store, today - Duration::days(6), today);
+        self.month_speed = sum_days(store, today - Duration::days(29), today).speed();
+        let polish: Vec<i64> = store
+            .all
+            .iter()
+            .filter(|r| r.llm == "ok" && r.at.with_timezone(&Local).date_naive() == today)
+            .filter_map(|r| r.llm_ms)
+            .collect();
+        self.polish = pct(&polish, 0.5).map(|ms| (ms, polish.len()));
     }
 }
 
+/// The stored range; the old 今天 / 7 天 values show the 7 / 30 cards.
 pub(super) fn range() -> i64 {
     config::value("overviewRange")
         .and_then(|s| s.parse::<f64>().ok())
-        .map(|v| v as i64)
+        .map(|v| match v as i64 {
+            1 | 7 => 30,
+            v => v,
+        })
         .filter(|v| RANGES.contains(v))
-        .unwrap_or(7)
+        .unwrap_or(30)
 }
 
 /// First local day of the range; None for everything.
@@ -199,6 +227,7 @@ fn build(store: &Store, range: i64) -> Data {
     let first = first_day(range).unwrap_or(earliest);
     let mut d = Data {
         range,
+        days: (today - first).num_days() + 1,
         ..Default::default()
     };
     for day in first.iter_days().take_while(|d| *d <= today) {
@@ -510,199 +539,527 @@ fn percent(now: i64, before: i64) -> Div {
     )
 }
 
+/// Characters' worth of typing time minus the time spent speaking.
+fn saved_ms(s: Sum) -> i64 {
+    0.max((s.chars as f64 / TYPING_CPM * 60000.) as i64 - s.ms)
+}
+
+/// "9:06", "1:02:05".
+fn clock(ms: i64) -> String {
+    let s = ms / 1000;
+    if s >= 3600 {
+        format!("{}:{:02}:{:02}", s / 3600, s % 3600 / 60, s % 60)
+    } else {
+        format!("{}:{:02}", s / 60, s % 60)
+    }
+}
+
+/// Saved time as a big number and its unit: seconds under a minute, minutes under an hour, else hours.
+fn saved_parts(ms: i64) -> (String, &'static str) {
+    let s = ms / 1000;
+    if s < 60 {
+        (s.to_string(), "秒")
+    } else if s < 3600 {
+        ((s / 60).to_string(), "分钟")
+    } else {
+        (format!("{:.1}", s as f64 / 3600.), "小时")
+    }
+}
+
+/// Short saved time for captions: "45 分钟", "2.6 小时".
+fn saved_text(ms: i64) -> String {
+    let (v, u) = saved_parts(ms);
+    format!("{v} {u}")
+}
+
+/// A label over a value in the reading: "字数", "1,284", "+18% 比昨天同一时段".
+fn reading(label: &str, value: Div, note: impl IntoElement, first: bool) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(10.))
+        .py(px(20.))
+        .pr(px(20.))
+        .when(!first, |c| {
+            c.pl(px(20.)).border_l_1().border_color(hexa(LINE))
+        })
+        .child(hint(label.to_string()))
+        .child(value)
+        .child(note)
+}
+
+/// Big monospace number with a small sans unit.
+fn figure(value: String, unit: Option<&str>, size: f32, color: u32) -> Div {
+    div()
+        .flex()
+        .items_baseline()
+        .whitespace_nowrap()
+        .overflow_hidden()
+        .child(
+            div()
+                .font(mono())
+                .text_size(px(size))
+                .line_height(px(size * 1.1))
+                .font_weight(medium())
+                .text_color(hex(color))
+                .child(value),
+        )
+        .children(unit.map(|u| {
+            div()
+                .ml(px(6.))
+                .text_size(px(13.))
+                .text_color(hex(TEXT2))
+                .child(u.to_string())
+        }))
+}
+
+fn note(text: impl Into<SharedString>) -> Div {
+    hint(text)
+        .text_color(hex(TEXT3))
+        .whitespace_nowrap()
+        .overflow_hidden()
+        .text_ellipsis()
+}
+
+/// "日均 1,766" in a card's footer: grey label, white value.
+fn fact(label: &str, value: String, color: u32) -> Div {
+    div()
+        .flex()
+        .gap(px(5.))
+        .whitespace_nowrap()
+        .child(hint(label.to_string()))
+        .child(div().text_size(px(12.)).text_color(hex(color)).child(value))
+}
+
+/// A column for the stretch that includes today.
+fn bar_now() -> Div {
+    div().rounded_t(px(3.)).bg(linear_gradient(
+        180.,
+        linear_color_stop(hex(VIOLET), 0.),
+        linear_color_stop(tint(VIOLET, 0x4d), 1.),
+    ))
+}
+
+/// Segment colors of the app split, most used first; the last is 其他.
+const APP_COLORS: [u32; 5] = [CYAN, VIOLET, GREEN, AMBER, TEXT3];
+
 impl Overview {
-    /// The range's totals over the chart, in one card. Hovering a column swaps the caption for that column's counts.
-    fn summary(&self, cx: &mut Context<Self>) -> Div {
-        let d = &self.data;
+    /// 今天: the reading row (characters, speaking time, time saved, polish latency) and the speed scale.
+    fn today(&self, cx: &App) -> Div {
+        let d = &self.today;
         let s = d.sum;
-        let saved = 0.max((s.chars as f64 / TYPING_CPM * 60000.) as i64 - s.ms);
-        let figure = |label: &str, value: String| {
+        let words = reading(
+            "字数",
+            figure(thousands(s.chars), None, 52., CYAN),
             div()
                 .flex()
-                .items_baseline()
                 .gap(px(6.))
                 .whitespace_nowrap()
-                .child(hint(label.to_string()).text_size(px(12.)))
-                .child(div().text_size(px(14.)).text_color(hex(TEXT)).child(value))
+                .overflow_hidden()
+                .children(d.prev.map(|p| percent(s.chars, p.chars)))
+                .child(note(match d.prev {
+                    Some(_) => format!("{} · {} 句", prev_name(1), s.n),
+                    None => format!("{} 句", s.n),
+                })),
+            true,
+        )
+        .flex_grow(1.3);
+        let speaking = reading(
+            "说话",
+            figure(clock(s.ms), None, 40., TEXT),
+            note(if s.n > 0 {
+                format!("每句平均 {} 秒", (s.ms / s.n + 500) / 1000)
+            } else {
+                "还没有听写".into()
+            }),
+            false,
+        );
+        let (v, u) = saved_parts(saved_ms(s));
+        let saved = reading(
+            "约省",
+            figure(v, Some(u), 40., GREEN),
+            note(format!("近 7 天累计 {}", saved_text(saved_ms(self.week)))),
+            false,
+        );
+        let polish = match self.polish {
+            Some((ms, n)) => reading(
+                "润色",
+                figure(ms.to_string(), Some("ms"), 40., TEXT),
+                note(format!("中位 · {n} 句调用 LLM")),
+                false,
+            ),
+            None => reading(
+                "润色",
+                figure("–".into(), None, 40., TEXT3),
+                note("今天没有调用 LLM"),
+                false,
+            ),
         };
-        let hero = div()
+        let today = Local::now().date_naive();
+        let streak = streak(&self.model.read(cx).store);
+        div()
             .flex()
             .flex_col()
-            .gap(px(6.))
-            .min_w_0()
+            .flex_none()
+            .gap(px(16.))
             .child(
                 div()
                     .flex()
                     .items_baseline()
-                    .gap(px(6.))
-                    .whitespace_nowrap()
+                    .gap(px(12.))
+                    .mt(px(6.))
+                    .child(div().text_size(px(26.)).font_weight(medium()).child("今天"))
                     .child(
                         div()
+                            .flex_1()
                             .font(mono())
-                            .text_size(px(36.))
-                            .line_height(px(40.))
-                            .font_weight(medium())
-                            .text_color(hex(TEXT))
-                            .child(thousands(s.chars)),
+                            .text_size(px(12.))
+                            .text_color(hex(TEXT2))
+                            .child(format!(
+                                "{}月{}日 {}",
+                                today.month(),
+                                today.day(),
+                                weekday(today)
+                            )),
                     )
-                    .child(div().text_size(px(14.)).text_color(hex(TEXT2)).child("字"))
+                    .when(streak > 1, |r| {
+                        r.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(5.))
+                                .text_size(px(12.))
+                                .text_color(hex(TEXT2))
+                                .child(icon("plaid/flame.svg", 12., hex(AMBER)))
+                                .child(format!("连续 {streak} 天")),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .border_t_1()
+                    .border_b_1()
+                    .border_color(hexa(LINE2))
+                    .child(words)
+                    .child(speaking)
+                    .child(saved)
+                    .child(polish),
+            )
+            .child(self.speed_scale())
+    }
+
+    /// Today's speed on a track against typing speed and the 30-day average.
+    fn speed_scale(&self) -> Div {
+        let now = self.today.sum.speed();
+        let avg = self.month_speed;
+        let top =
+            (now.unwrap_or(0.).max(avg.unwrap_or(0.)).max(TYPING_CPM) * 1.25 / 50.).ceil() * 50.;
+        let top = top.max(200.);
+        let at = |v: f64| (v / top).min(1.) as f32;
+        let mark = |v: f64, color: Hsla, tall: bool| {
+            div()
+                .absolute()
+                .left(relative(at(v)))
+                .top(px(if tall { 10. } else { 14. }))
+                .w(px(if tall { 3. } else { 2. }))
+                .h(px(if tall { 22. } else { 14. }))
+                .rounded(px(1.))
+                .bg(color)
+        };
+        let label = |v: f64, text: String, color: u32, above: bool| {
+            div()
+                .absolute()
+                .left(relative(at(v)))
+                .ml(px(-50.))
+                .w(px(100.))
+                .top(px(if above { -8. } else { 32. }))
+                .flex()
+                .justify_center()
+                .font(mono())
+                .text_size(px(11.))
+                .text_color(hex(color))
+                .whitespace_nowrap()
+                .child(text)
+        };
+        let mut right = vec![];
+        if let Some(v) = now {
+            right.push(format!("比打字快 {:.1}×", v / TYPING_CPM));
+        }
+        if let Some(a) = avg {
+            right.push(format!("30 天平均 {a:.0}"));
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .child(
+                div()
+                    .flex()
+                    .justify_between()
+                    .child(hint("语速 · 字/分"))
+                    .child(note(right.join(" · "))),
+            )
+            .child(
+                div()
+                    .relative()
+                    .h(px(50.))
+                    .mx(px(4.))
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .top(px(20.))
+                            .h(px(2.))
+                            .rounded(px(1.))
+                            .bg(hexa(LINE2)),
+                    )
+                    .children(now.map(|v| {
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top(px(20.))
+                            .h(px(2.))
+                            .w(relative(at(v)))
+                            .rounded(px(1.))
+                            .bg(hgrada((CYAN << 8) | 0x33, (CYAN << 8) | 0xff))
+                    }))
+                    .child(mark(TYPING_CPM, hex(TEXT3), false))
+                    .child(label(
+                        TYPING_CPM,
+                        format!("打字 {}", TYPING_CPM as i64),
+                        TEXT3,
+                        false,
+                    ))
+                    .children(avg.map(|a| mark(a, tint(TEXT, 0x80), false)))
+                    .children(avg.map(|a| label(a, format!("均 {a:.0}"), TEXT3, false)))
+                    .children(now.map(|v| mark(v, hex(CYAN), true)))
+                    .children(now.map(|v| label(v, format!("{v:.0}"), CYAN, true)))
+                    .when(now.is_none(), |t| {
+                        t.child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top(px(-6.))
+                                .child(note("今天还没有听写")),
+                        )
+                    }),
+            )
+    }
+
+    /// One retro card: total and change, a column per day (or per 7 days), and a footer of averages that turns
+    /// into the hovered column's counts.
+    fn card(&self, k: usize, cx: &mut Context<Self>) -> Div {
+        let d = &self.cards[k];
+        let s = d.sum;
+        let b = &d.buckets;
+        let n = b.len();
+        let weekly = b.first().is_some_and(|k| k.first != k.last);
+        let hover = self
+            .hover
+            .filter(|(c, i)| *c == k && *i < n)
+            .map(|(_, i)| i);
+        let max = b.iter().map(|k| k.sum.chars).max().unwrap_or(0).max(1) as f32;
+        let gap = if n <= 7 {
+            10.
+        } else if n <= 31 {
+            3.
+        } else {
+            2.
+        };
+        let id = d.range;
+        let columns = b.iter().enumerate().map(|(i, bk)| {
+            let h = bk.sum.chars as f32 / max;
+            let now = i == n - 1;
+            hit(SharedString::from(format!("overview-{id}-{i}")))
+                .flex_1()
+                .h_full()
+                .flex()
+                .items_end()
+                .on_hover(cx.listener(move |this, on: &bool, _, cx| {
+                    if *on {
+                        this.hover = Some((k, i));
+                    } else if this.hover == Some((k, i)) {
+                        this.hover = None;
+                    }
+                    cx.notify();
+                }))
+                .when(bk.sum.chars > 0, |c| {
+                    c.child(
+                        if now { bar_now() } else { bar() }
+                            .w_full()
+                            .h(relative(h))
+                            .min_h(px(2.))
+                            .when(hover.is_some_and(|x| x != i), |b| b.opacity(0.3)),
+                    )
+                })
+        });
+        let date = |d: NaiveDate| format!("{}/{}", d.month(), d.day());
+        let tick = |i: usize| -> Option<String> {
+            let bk = &b[i];
+            if i == n - 1 {
+                Some("今天".into())
+            } else if n <= 7 {
+                Some(weekday(bk.last).into())
+            } else if !weekly {
+                (i == 0 || i == n / 2).then(|| date(bk.last))
+            } else {
+                (n - 1 - i)
+                    .is_multiple_of(n.div_ceil(5))
+                    .then(|| date(bk.last))
+            }
+        };
+        let axis = (0..n).map(|i| {
+            div()
+                .flex_1()
+                .relative()
+                .children(tick(i).map(|t| axis_label(t, i == n - 1 && n > 7)))
+        });
+        let footer = match hover.map(|i| &b[i]) {
+            Some(bk) => div().child(hint(format!(
+                "{}  {} 字 · {} 句 · {}",
+                bk.name(),
+                thousands(bk.sum.chars),
+                bk.sum.n,
+                duration(bk.sum.ms)
+            ))),
+            None => {
+                let avg = fact("日均", thousands(s.chars / d.days.max(1)), TEXT);
+                let saved = fact("约省", saved_text(saved_ms(s)), GREEN);
+                let first = if d.range == 7 {
+                    fact(
+                        "语速",
+                        s.speed().map_or("–".into(), |v| format!("{v:.0}")),
+                        TEXT,
+                    )
+                } else {
+                    fact("活跃", format!("{} 天", d.active), TEXT)
+                };
+                div().child(first).child(avg).child(saved)
+            }
+        };
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .px(px(22.))
+            .py(px(20.))
+            .rounded(px(14.))
+            .bg(hexa(GLASS))
+            .border_1()
+            .border_color(hexa(LINE))
+            .child(
+                div()
+                    .flex()
+                    .justify_between()
+                    .items_center()
+                    .child(hint(range_label(d.range)))
                     .children(d.prev.map(|p| {
                         div()
                             .flex()
                             .items_center()
                             .gap(px(6.))
-                            .ml(px(10.))
+                            .child(note(prev_name(d.range)).text_size(px(11.)))
                             .child(percent(s.chars, p.chars))
-                            .child(hint(prev_name(d.range)).text_size(px(12.)))
                     })),
             )
+            .child(figure(thousands(s.chars), Some("字"), 30., TEXT))
+            .child(div().flex().gap(px(gap)).h(px(84.)).children(columns))
             .child(
                 div()
                     .flex()
-                    .flex_wrap()
-                    .gap_x(px(20.))
-                    .gap_y(px(4.))
-                    .child(figure("时长", duration(s.ms)))
-                    .child(figure(
-                        "语速",
-                        s.speed().map_or("–".into(), |v| format!("{v:.0} 字/分")),
-                    ))
-                    .child(figure("约省", duration(saved))),
-            );
-
-        let b = &d.buckets;
-        let n = b.len();
-        let picked = self.hover.filter(|i| *i < n).map(|i| &b[i]);
-        let caption = match picked {
-            Some(k) => format!(
-                "{}  {} 字 · {} 句 · {}",
-                k.name(),
-                thousands(k.sum.chars),
-                k.sum.n,
-                duration(k.sum.ms)
-            ),
-            None if d.range == 1 => format!("{} 句", thousands(s.n)),
-            None => format!("{} 句 · 活跃 {} 天", thousands(s.n), d.active),
-        };
-        let hourly = d.range == 1;
-        let weekly = b
-            .first()
-            .is_some_and(|k| k.hour.is_none() && k.first != k.last);
-        let title = if hourly {
-            "每小时字数"
-        } else if weekly {
-            "每 7 天字数"
-        } else {
-            "每日字数"
-        };
-        let dense = n > 40;
-        let ratio = if dense { 0.8 } else { 0.6 };
-        let gap = if dense { 0. } else { 2. };
-        // Hours every 3; days every day up to a week, else weekly from today back; 7-day buckets about 6 labels.
-        let labelled = |i: usize| {
-            if hourly {
-                i.is_multiple_of(3)
-            } else if n <= 7 {
-                true
-            } else {
-                let stride = if weekly { n.div_ceil(6) } else { 7 };
-                (n - 1 - i).is_multiple_of(stride)
-            }
-        };
-        let max = b.iter().map(|k| k.sum.chars).max().unwrap_or(0) as f64;
-        let (step, top) = ticks(max);
-        let (lines, labels) = grid(step, top, PLOT_H);
-        let hovering = picked.is_some();
-        let columns = b.iter().enumerate().map(|(i, k)| {
-            let h = (k.sum.chars as f64 / top) as f32;
-            hit(SharedString::from(format!("overview-bar-{i}")))
-                .flex_1()
-                .h_full()
-                .flex()
-                .items_end()
-                .justify_center()
-                .on_hover(cx.listener(move |this, on: &bool, _, cx| {
-                    if *on {
-                        this.hover = Some(i);
-                    } else if this.hover == Some(i) {
-                        this.hover = None;
-                    }
-                    cx.notify();
-                }))
-                .when(k.sum.chars > 0, |c| {
-                    c.child(
-                        bar()
-                            .w(relative(ratio))
-                            .max_w(px(40.))
-                            .h(relative(h))
-                            .min_h(px(2.))
-                            .when(hovering && self.hover != Some(i), |b| b.opacity(0.3)),
-                    )
-                })
-        });
-        let axis = b.iter().enumerate().map(|(i, k)| {
-            div().flex_1().relative().when(labelled(i), |c| {
-                c.child(axis_label(k.tick(), i == n - 1 && dense))
-            })
-        });
-        let (_, body) = boxed("", None);
-        body.flex_none()
-            .gap(px(0.))
-            .pt(px(16.))
-            .pb(px(8.))
-            .child(hero)
+                    .gap(px(gap))
+                    .h(px(14.))
+                    .mt(px(-10.))
+                    .children(axis),
+            )
+            .child(div().h(px(1.)).bg(hexa(LINE)))
             .child(
-                div()
+                footer
                     .flex()
-                    .items_end()
                     .justify_between()
-                    .gap(px(10.))
-                    .mt(px(18.))
-                    .mb(px(8.))
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .font_weight(medium())
-                            .text_color(hex(TEXT2))
-                            .child(title),
-                    )
-                    .child(hint(caption).text_size(px(12.)).min_w_0().truncate()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .child(div().w(px(44.)).flex_none().relative().children(labels))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .relative()
-                            .h(px(PLOT_H))
-                            .border_b_1()
-                            .border_color(hexa(LINE3))
-                            .children(lines)
-                            .child(
-                                div()
-                                    .absolute()
-                                    .inset_0()
-                                    .flex()
-                                    .gap(px(gap))
-                                    .children(columns),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .h(px(16.))
-                    .child(div().w(px(44.)).flex_none())
-                    .child(div().flex_1().flex().gap(px(gap)).children(axis)),
+                    .gap(px(12.))
+                    .h(px(17.))
+                    .overflow_hidden(),
             )
     }
 
-    /// Characters by local hour over the range; not shown for 今天, whose chart is already hourly.
-    fn hours(&self, cx: &mut Context<Self>) -> Div {
-        let d = &self.data;
+    /// Apps as one split bar with a legend, and characters by hour of day, for the picked range.
+    fn breakdown(&self, cx: &mut Context<Self>) -> Div {
+        let Some(d) = self.cards.last() else {
+            return div();
+        };
+        let mut sorted: Vec<(&String, &i64)> = d.apps.iter().filter(|(_, c)| **c > 0).collect();
+        sorted.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        let mut rows: Vec<(String, i64)> = sorted
+            .iter()
+            .take(4)
+            .map(|(k, v)| ((*k).clone(), **v))
+            .collect();
+        let rest: i64 = sorted.iter().skip(4).map(|(_, v)| **v).sum();
+        if rest > 0 {
+            rows.push(("其他".into(), rest));
+        }
+        let total = rows.iter().map(|r| r.1).sum::<i64>().max(1) as f32;
+        let colors = |i: usize, name: &str| {
+            if name == "其他" {
+                TEXT3
+            } else {
+                APP_COLORS[i.min(3)]
+            }
+        };
+        let split = div()
+            .flex()
+            .gap(px(2.))
+            .h(px(8.))
+            .rounded_full()
+            .overflow_hidden()
+            .bg(hex(RAISED2))
+            .children(rows.iter().enumerate().map(|(i, (name, c))| {
+                div()
+                    .h_full()
+                    .flex_shrink(1.)
+                    .w(relative(*c as f32 / total))
+                    .bg(hex(colors(i, name)))
+            }));
+        let legend = div()
+            .flex()
+            .flex_wrap()
+            .gap_x(px(16.))
+            .gap_y(px(6.))
+            .children(rows.iter().enumerate().map(|(i, (name, c))| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .text_size(px(12.))
+                    .text_color(hex(TEXT2))
+                    .child(div().size(px(8.)).rounded(px(2.)).bg(hex(colors(i, name))))
+                    .children(app_icon(name, 14.))
+                    .child(name.clone())
+                    .child(
+                        div()
+                            .font(mono())
+                            .text_color(hex(TEXT3))
+                            .child(format!("{}%", (*c as f32 / total * 100.).round() as i64)),
+                    )
+            }));
+        let label = range_label(d.range);
+        let apps = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(hint(format!("{label}常用应用")))
+            .when(rows.is_empty(), |c| c.child(note("这段时间没有听写")))
+            .when(!rows.is_empty(), |c| c.child(split).child(legend));
+
         let h = &d.hours;
         let max = h.iter().map(|c| c.0).max().unwrap_or(0);
         let caption = match self.hover_hour {
@@ -712,7 +1069,7 @@ impl Overview {
             },
             None if max > 0 => {
                 let peak = (0..24).max_by_key(|i| h[*i].0).unwrap_or(0);
-                let mut c = format!("说得最多的是 {peak}:00–{}:00", peak + 1);
+                let mut c = format!("{label}时段 · 最多 {peak}:00–{}:00", peak + 1);
                 if let Some(f) = d.week_from {
                     c += &format!("，从 {}月{}日 起按小时统计", f.month(), f.day());
                 }
@@ -727,7 +1084,6 @@ impl Overview {
                 .h_full()
                 .flex()
                 .items_end()
-                .justify_center()
                 .on_hover(cx.listener(move |this, on: &bool, _, cx| {
                     if *on {
                         this.hover_hour = Some(i);
@@ -736,15 +1092,17 @@ impl Overview {
                     }
                     cx.notify();
                 }))
-                .when(*c > 0, |col| {
-                    col.child(
-                        bar()
-                            .w(relative(0.7))
-                            .h(relative(*c as f32 / max.max(1) as f32))
-                            .min_h(px(2.))
-                            .when(hovering && self.hover_hour != Some(i), |b| b.opacity(0.3)),
-                    )
-                })
+                .child(
+                    if *c > 0 { bar() } else { div().bg(hexa(LINE2)) }
+                        .w_full()
+                        .h(if *c > 0 {
+                            relative(*c as f32 / max.max(1) as f32)
+                        } else {
+                            relative(0.)
+                        })
+                        .min_h(px(2.))
+                        .when(hovering && self.hover_hour != Some(i), |b| b.opacity(0.3)),
+                )
         });
         let axis = (0..24).map(|i| {
             div()
@@ -752,168 +1110,41 @@ impl Overview {
                 .relative()
                 .when(i % 6 == 0, |c| c.child(axis_label(format!("{i}时"), false)))
         });
-        let (head, body) = boxed("时段", None);
-        div()
+        let hours = div()
             .flex_1()
             .min_w_0()
             .flex()
             .flex_col()
-            .child(head)
+            .gap(px(10.))
+            .child(hint(caption).truncate())
+            .child(div().flex().gap(px(3.)).h(px(36.)).children(columns))
             .child(
-                body.flex_1()
-                    .gap(px(0.))
-                    .child(hint(caption).text_size(px(12.)).mb(px(10.)).truncate())
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(2.))
-                            .h(px(96.))
-                            .border_b_1()
-                            .border_color(hexa(LINE3))
-                            .children(columns),
-                    )
-                    .child(div().flex().gap(px(2.)).h(px(16.)).children(axis)),
-            )
-    }
-
-    fn apps(&self) -> Div {
-        let d = &self.data;
-        let mut sorted: Vec<(&String, &i64)> = d.apps.iter().filter(|(_, c)| **c > 0).collect();
-        sorted.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
-        let mut rows: Vec<(String, i64)> = sorted
-            .iter()
-            .take(5)
-            .map(|(k, v)| ((*k).clone(), **v))
-            .collect();
-        let rest: i64 = sorted.iter().skip(5).map(|(_, v)| **v).sum();
-        if rest > 0 {
-            rows.push(("其他".into(), rest));
-        }
-        let sum = d.sum.chars.max(1) as f64;
-        let (head, body) = boxed("常用应用", None);
+                div()
+                    .flex()
+                    .gap(px(3.))
+                    .h(px(14.))
+                    .mt(px(-8.))
+                    .children(axis),
+            );
         div()
-            .flex_1()
-            .min_w_0()
             .flex()
-            .flex_col()
-            .child(head)
-            .child(
-                body.flex_1()
-                    .gap(px(9.))
-                    .when(rows.is_empty(), |b| {
-                        b.justify_center()
-                            .items_center()
-                            .child(hint("这段时间没有听写"))
-                    })
-                    .children(rows.into_iter().map(|(name, c)| {
-                        let share = c as f64 / sum;
-                        let mark = app_icon(&name, 16.).map_or_else(
-                            || {
-                                div()
-                                    .size(px(16.))
-                                    .flex_none()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(4.))
-                                    .bg(hex(RAISED2))
-                                    .text_size(px(9.))
-                                    .text_color(hex(TEXT2))
-                                    .child(
-                                        name.chars()
-                                            .next()
-                                            .map(|c| c.to_uppercase().collect::<String>())
-                                            .unwrap_or_default(),
-                                    )
-                                    .into_any_element()
-                            },
-                            IntoElement::into_any_element,
-                        );
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(10.))
-                            .child(
-                                div()
-                                    .w(px(130.))
-                                    .flex_none()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(7.))
-                                    .child(mark)
-                                    .child(div().min_w_0().truncate().child(name)),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .h(px(6.))
-                                    .rounded(px(3.))
-                                    .bg(hex(RAISED2))
-                                    .overflow_hidden()
-                                    .child(
-                                        div()
-                                            .h_full()
-                                            .w(relative(share as f32))
-                                            .min_w(px(6.))
-                                            .rounded(px(3.))
-                                            .bg(hgrada((CYAN << 8) | 0x80, (CYAN << 8) | 0xff)),
-                                    ),
-                            )
-                            .child(
-                                hint(format!("{}%", (share * 100.).round() as i64))
-                                    .font(mono())
-                                    .w(px(40.))
-                                    .flex_none()
-                                    .flex()
-                                    .justify_end(),
-                            )
-                    })),
-            )
+            .flex_none()
+            .gap(px(28.))
+            .px(px(22.))
+            .py(px(16.))
+            .rounded(px(14.))
+            .bg(hexa(GLASS))
+            .border_1()
+            .border_color(hexa(LINE))
+            .child(apps)
+            .child(hours)
     }
 }
 
 impl Render for Overview {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let d = &self.data;
-        let range = d.range;
-        let today = Local::now().date_naive();
-        let span = match (range, d.buckets.first()) {
-            (1, _) => format!("{}月{}日 {}", today.month(), today.day(), weekday(today)),
-            (_, Some(b)) => format!("{}月{}日 – 今天", b.first.month(), b.first.day()),
-            _ => String::new(),
-        };
-        let m = self.model.clone();
-        let seg = segmented(
-            "overview-range",
-            &RANGE_NAMES,
-            RANGES.iter().position(|r| *r == range).unwrap_or(1),
-            move |i, _, cx| m.update(cx, |m, cx| m.set("overviewRange", RANGES[i], cx)),
-        );
-        let store = &self.model.read(cx).store;
-        let ever = !store.usage.is_empty();
-        let streak = streak(store);
-        let page = super::page_body("overview").child(
-            div()
-                .flex()
-                .flex_none()
-                .items_center()
-                .gap(px(12.))
-                .child(seg)
-                .child(hint(span).text_size(px(12.)).flex_1().truncate())
-                .when(streak > 1, |d| {
-                    d.child(
-                        div()
-                            .flex()
-                            .flex_none()
-                            .items_center()
-                            .gap(px(5.))
-                            .text_size(px(12.))
-                            .text_color(hex(TEXT2))
-                            .child(icon("plaid/flame.svg", 12., hex(AMBER)))
-                            .child(format!("连续 {streak} 天")),
-                    )
-                }),
-        );
+        let page = super::page_body("overview");
+        let ever = !self.model.read(cx).store.usage.is_empty();
         if !ever {
             let (_, body) = boxed("", None);
             return page
@@ -929,17 +1160,30 @@ impl Render for Overview {
                 )
                 .child(self.perf.clone());
         }
-        page.child(self.summary(cx))
+        let m = self.model.clone();
+        let seg = segmented(
+            "overview-range",
+            &RANGE_NAMES,
+            RANGES.iter().position(|r| *r == range()).unwrap_or(0),
+            move |i, _, cx| m.update(cx, |m, cx| m.set("overviewRange", RANGES[i], cx)),
+        );
+        let cards: Vec<Div> = (0..self.cards.len()).map(|k| self.card(k, cx)).collect();
+        page.gap(px(18.))
+            .child(self.today(cx))
             .child(
                 div()
                     .flex()
                     .flex_none()
-                    .gap(px(12.))
-                    .child(self.apps())
-                    .when(range != 1, |r| r.child(self.hours(cx))),
+                    .items_center()
+                    .justify_between()
+                    .mt(px(8.))
+                    .child(div().text_size(px(15.)).font_weight(medium()).child("回顾"))
+                    .child(seg),
             )
+            .child(div().flex().flex_none().gap(px(14.)).mt(px(-6.)).children(cards))
+            .child(self.breakdown(cx))
             .child(hint(format!(
-                "约省按打字 {} 字/分钟估算，减去说话时长。字数：汉字每字计 1，英文和数字每词计 1。清空历史不影响用量统计。",
+                "约省按打字 {} 字/分钟估算，减去说话时长。字数：汉字每字计 1，英文和数字每词计 1。润色为今天调用 LLM 的耗时中位数。清空历史不影响用量统计。",
                 TYPING_CPM as i64
             )))
             .child(self.perf.clone())
@@ -974,9 +1218,11 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     )?;
     ui.open(super::Page::Overview, fixture_facts())?;
     expect(
-        "default range: 7 daily bars, the hours card, 性能 folded",
-        ui.has("overview-bar-6")
-            && !ui.has("overview-bar-7")
+        "default: 7- and 30-day cards, the hours strip, 性能 folded",
+        ui.has("overview-7-6")
+            && !ui.has("overview-7-7")
+            && ui.has("overview-30-29")
+            && !ui.has("overview-30-30")
             && ui.has("overview-hour-23")
             && ui.has("perf-toggle")
             && !ui.has("perf-hist-0")
@@ -984,53 +1230,39 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &None,
     )?;
     ui.shot("overview")?;
-    ui.scroll("overview-bar-6", 0.)?;
+    ui.scroll("overview-7-5", 0.)?;
     ui.shot("overview-7-hover")?;
-    ui.click("overview-range-0")?;
+    ui.scroll("overview-30-20", 0.)?;
+    ui.shot("overview-30-hover")?;
+    super::perf::bring(ui, "overview-range-1")?;
+    ui.click("overview-range-1")?;
     expect(
-        "today: 24 hourly bars, no hours card",
-        config::value("overviewRange").as_deref() == Some("1")
-            && ui.has("overview-bar-23")
-            && !ui.has("overview-bar-24")
-            && !ui.has("overview-hour-0"),
-        &None,
-    )?;
-    ui.shot("overview-today")?;
-    ui.click("overview-range-2")?;
-    expect(
-        "range 30: daily bars",
-        config::value("overviewRange").as_deref() == Some("30")
-            && ui.has("overview-bar-29")
-            && !ui.has("overview-bar-30"),
-        &None,
-    )?;
-    ui.shot("overview-30")?;
-    ui.click("overview-range-3")?;
-    expect(
-        "range 90: 13 seven-day bars",
+        "range 90: one card of 13 seven-day bars",
         config::value("overviewRange").as_deref() == Some("90")
-            && ui.has("overview-bar-12")
-            && !ui.has("overview-bar-13"),
+            && ui.has("overview-90-12")
+            && !ui.has("overview-90-13")
+            && !ui.has("overview-7-0"),
         &None,
     )?;
-    ui.scroll("overview-bar-12", 0.)?;
+    ui.scroll("overview-90-12", 0.)?;
     ui.shot("overview-90-hover")?;
+    super::perf::bring(ui, "overview-hour-17")?;
     ui.scroll("overview-hour-17", 0.)?;
     ui.shot("overview-hours-hover")?;
-    ui.click("overview-range-4")?;
+    ui.click("overview-range-2")?;
     expect(
         "全部: 7-day bars",
-        config::value("overviewRange").as_deref() == Some("0") && ui.has("overview-bar-0"),
+        config::value("overviewRange").as_deref() == Some("0") && ui.has("overview-0-0"),
         &None,
     )?;
     ui.shot("overview-all")?;
     super::perf::bring(ui, "perf-toggle")?;
     ui.shot("overview-perf-folded")?;
-    super::perf::bring(ui, "overview-range-1")?;
-    ui.click("overview-range-1")?;
+    super::perf::bring(ui, "overview-range-0")?;
+    ui.click("overview-range-0")?;
     expect(
-        "back to 7",
-        config::value("overviewRange").as_deref() == Some("7"),
+        "back to 7 / 30",
+        config::value("overviewRange").as_deref() == Some("30"),
         &None,
     )?;
     let sum = Sum {
@@ -1044,6 +1276,15 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         duration(59_000) == "59 秒"
             && duration(61_000) == "1 分钟"
             && duration(3_725_000) == "1 小时 2 分",
+        &None,
+    )?;
+    expect(
+        "clock and saved format",
+        clock(546_000) == "9:06"
+            && clock(3_725_000) == "1:02:05"
+            && saved_text(30_000) == "30 秒"
+            && saved_text(960_000) == "16 分钟"
+            && saved_text(9_360_000) == "2.6 小时",
         &None,
     )?;
     expect(
