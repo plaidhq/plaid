@@ -98,20 +98,22 @@ pub enum Page {
     /// 概览: usage over a picked range, then the 性能 diagnostics for the same range.
     Overview,
     History,
-    /// 设置 → 通用: talk keys and the HUD.
+    /// 设置 → 通用: talk keys, microphone and recording, the HUD.
     General,
-    /// 设置 → 识别: Volcengine key, microphone, recognition options.
+    /// 设置 → 识别: Volcengine key, recognition options.
     Voice,
     Refine,
     Dictionary,
     Commands,
     /// 设置 → 数据: data folder, kept recordings, privacy note.
     Data,
+    /// 设置 → 关于: version and updates, diagnostics, links.
+    About,
 }
 
 impl Page {
     #[cfg_attr(not(feature = "snapshot"), allow(dead_code))]
-    pub const ALL: [Page; 8] = [
+    pub const ALL: [Page; 9] = [
         Page::Overview,
         Page::History,
         Page::General,
@@ -120,19 +122,21 @@ impl Page {
         Page::Dictionary,
         Page::Commands,
         Page::Data,
+        Page::About,
     ];
 
     /// The header tabs; 设置 stands for the settings pages.
     const TOP: [Page; 3] = [Page::Overview, Page::History, Page::General];
 
-    /// The 设置 sidebar, in order; a rule goes before 数据.
-    const SETTINGS: [Page; 6] = [
+    /// The 设置 sidebar, in order; a rule goes before 数据 and 关于.
+    const SETTINGS: [Page; 7] = [
         Page::General,
         Page::Voice,
         Page::Refine,
         Page::Dictionary,
         Page::Commands,
         Page::Data,
+        Page::About,
     ];
 
     pub fn title(self) -> &'static str {
@@ -145,6 +149,7 @@ impl Page {
             Page::Dictionary => "词典",
             Page::Commands => "命令",
             Page::Data => "数据",
+            Page::About => "关于",
         }
     }
 
@@ -171,6 +176,7 @@ impl Page {
             Page::Commands => "commands",
             Page::General => "general",
             Page::Data => "data",
+            Page::About => "about",
         }
     }
 }
@@ -476,7 +482,7 @@ impl Settings {
         }
         let m = self.model.clone();
         let v: AnyView = match page {
-            Page::General | Page::Voice | Page::Data => cx
+            Page::General | Page::Voice | Page::Data | Page::About => cx
                 .new(|cx| general::General::new(m, page, window, cx))
                 .into(),
             Page::History => {
@@ -646,7 +652,12 @@ impl Settings {
         const RULE: f32 = 17.;
         let y = |p: Page| {
             let i = Page::SETTINGS.iter().position(|&s| s == p).unwrap_or(0);
-            i as f32 * (ROW + GAP) + if p == Page::Data { RULE } else { 0. }
+            i as f32 * (ROW + GAP)
+                + if p as usize >= Page::Data as usize {
+                    RULE
+                } else {
+                    0.
+                }
         };
         let slide = cx
             .try_global::<Live>()
@@ -750,7 +761,12 @@ impl Settings {
                     )
                 },
             )
-            .child(format!("Plaid {}", env!("CARGO_PKG_VERSION")))
+            .child(
+                hit("footer-version")
+                    .hover(|s| s.text_color(hex(TEXT)))
+                    .child(format!("Plaid {}", env!("CARGO_PKG_VERSION")))
+                    .on_click(cx.listener(|this, _, _, cx| this.show(Page::About, cx))),
+            )
             .child(
                 div()
                     .absolute()

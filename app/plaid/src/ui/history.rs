@@ -2082,7 +2082,7 @@ fn size_label(b: u64) -> String {
 // --- Export ----------------------------------------------------------------------------------------------------
 
 /// Non-secret facts for a feedback bundle, as the Swift app writes them (unset settings as "default").
-fn export_info(facts: &super::Facts) -> serde_json::Map<String, serde_json::Value> {
+pub(super) fn export_info(facts: &super::Facts) -> serde_json::Map<String, serde_json::Value> {
     let mut info = serde_json::Map::new();
     info.insert("version".into(), env!("CARGO_PKG_VERSION").into());
     info.insert("os".into(), os_version().into());

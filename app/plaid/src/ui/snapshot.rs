@@ -224,15 +224,7 @@ pub fn check(args: &[String]) -> Result<(), String> {
 fn check_general(ui: &mut Ui) -> Result<(), String> {
     ui.open(Page::Voice, facts())?;
     ui.shot("voice")?;
-    ui.click("mic-2")?;
-    let mic = config::value("micDevice");
-    expect("mic picked from list", mic.is_some(), &None)?;
-    ui.click("mic-0")?;
-    expect(
-        "mic follows system",
-        config::value("micDevice").is_none(),
-        &mic,
-    )?;
+    expect("mics moved off 识别", !ui.has("mic-0"), &None)?;
     let before = config::raw("asrContext");
     ui.click("asrContext")?;
     expect(
@@ -247,16 +239,28 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
         &None,
     )?;
 
+    ui.click("general")?;
+    expect("sidebar opens 通用", ui.has("hold"), &None)?;
+    ui.shot("general")?;
+    ui.click("mic-2")?;
+    let mic = config::value("micDevice");
+    expect("mic picked from list", mic.is_some(), &None)?;
+    ui.click("mic-0")?;
+    expect(
+        "mic follows system",
+        config::value("micDevice").is_none(),
+        &mic,
+    )?;
     ui.click("advanced")?;
     let y = ui.bounds("advanced").map(|b| b.origin.y);
-    ui.scroll("asrContext", -400.)?;
+    ui.scroll("hold", -200.)?;
     let y2 = ui.bounds("advanced").map(|b| b.origin.y);
     expect(
         "page scrolls",
         matches!((y, y2), (Some(a), Some(b)) if b < a),
         &None,
     )?;
-    ui.shot("voice-advanced")?;
+    ui.shot("general-advanced")?;
     let silence = config::value("silenceRMS");
     ui.click("silenceRMS-1")?;
     let up = config::value("silenceRMS");
@@ -268,11 +272,8 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
         config::value("silenceRMS").as_deref() == Some("490"),
         &up,
     )?;
-
-    ui.click("general")?;
-    expect("sidebar opens 通用", ui.has("hold"), &None)?;
-    ui.shot("general")?;
-    ui.scroll("hold", -600.)?;
+    ui.click("advanced")?;
+    ui.scroll("hudText", -600.)?;
     ui.click("hudText")?;
     ui.click("hudReveal-2")?;
     ui.click("hudLinger-2")?;
@@ -284,33 +285,7 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
         &None,
     )?;
     ui.shot("general-hud")?;
-    ui.scroll("hudText", -800.)?;
-    expect("update card", ui.has("update-check"), &None)?;
-    // A staged update (never clicked here: applying would open the release page).
-    let ready = crate::update::Updater {
-        state: crate::update::State::Ready(
-            plaid_core::update::Release {
-                version: "0.99.0".into(),
-                page: String::new(),
-                notes: String::new(),
-                asset: None,
-            },
-            Default::default(),
-        ),
-        busy_note: true,
-    };
-    ui.cx.update(|cx| cx.set_global(ready));
-    ui.frame()?;
-    expect(
-        "update offered in card and footer",
-        ui.has("update-apply") && ui.has("footer-update") && !ui.has("update-check"),
-        &None,
-    )?;
-    ui.shot("general-update")?;
-    ui.cx
-        .update(|cx| cx.set_global(crate::update::Updater::default()));
-    ui.frame()?;
-    expect("no offer", !ui.has("footer-update"), &None)?;
+    expect("update card moved off 通用", !ui.has("update-check"), &None)?;
     ui.scroll("hudText", 2400.)?;
     ui.click("hold")?;
     ui.shot("general-menu")?;
@@ -335,6 +310,49 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
     ui.click("keepAudio")?;
     expect("reveal button present", ui.has("reveal"), &None)?;
     ui.shot("data")?;
+    ui.click("footer-version")?;
+    expect(
+        "footer version opens 关于",
+        ui.has("update-check") && ui.has("about-copy") && ui.has("about-github"),
+        &None,
+    )?;
+    ui.shot("about")?;
+    ui.click("about-copy")?;
+    let copied = ui
+        .cx
+        .update(|cx| cx.read_from_clipboard())
+        .and_then(|c| c.text())
+        .unwrap_or_default();
+    expect(
+        "diagnostics copied",
+        copied.contains(env!("CARGO_PKG_VERSION")) && copied.contains("\"arch\""),
+        &None,
+    )?;
+    // A staged update (never clicked here: applying would open the release page).
+    let ready = crate::update::Updater {
+        state: crate::update::State::Ready(
+            plaid_core::update::Release {
+                version: "0.99.0".into(),
+                page: String::new(),
+                notes: String::new(),
+                asset: None,
+            },
+            Default::default(),
+        ),
+        busy_note: true,
+    };
+    ui.cx.update(|cx| cx.set_global(ready));
+    ui.frame()?;
+    expect(
+        "update offered in card and footer",
+        ui.has("update-apply") && ui.has("footer-update") && !ui.has("update-check"),
+        &None,
+    )?;
+    ui.shot("about-update")?;
+    ui.cx
+        .update(|cx| cx.set_global(crate::update::Updater::default()));
+    ui.frame()?;
+    expect("no offer", !ui.has("footer-update"), &None)?;
     ui.close()?;
 
     ui.open(

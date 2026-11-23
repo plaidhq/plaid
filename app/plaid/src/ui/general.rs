@@ -1,4 +1,4 @@
-//! 声音 (shortcuts, microphone, recognition) and 设置 (API key, data): one view, two pages.
+//! 通用 (shortcuts, microphone, HUD), 识别 (key, recognition), 数据 and 关于: one view, four pages.
 use super::key_field::KeyField;
 use super::mav::*;
 use super::{
@@ -215,7 +215,7 @@ impl Number {
 
 pub struct General {
     model: Entity<Model>,
-    /// Page::General (通用), Page::Voice (识别) or Page::Data (数据).
+    /// Page::General (通用), Page::Voice (识别), Page::Data (数据) or Page::About (关于).
     page: Page,
     key: Entity<KeyField>,
     menu: Option<Menu>,
@@ -667,7 +667,6 @@ fn hud_states() -> Div {
         }))
 }
 
-/// Swift's level mapping: log scale between RMS 60 and 3000.
 /// 更新: the current version, the updater's state and its one action.
 fn update_card(cx: &App) -> Div {
     use crate::update::{self, State, Updater};
@@ -736,13 +735,14 @@ fn update_card(cx: &App) -> Div {
         })
 }
 
+/// Swift's level mapping: log scale between RMS 60 and 3000.
 fn level(rms: f64) -> f64 {
     let (lo, hi) = (60f64.log10(), 3000f64.log10());
     ((rms.max(1.).log10() - lo) / (hi - lo)).clamp(0., 1.)
 }
 
 impl General {
-    fn voice_page(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn general_page(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let (status, meter) = self.level(cx);
         let hold = Shortcut::Hold.code();
         let cap = if hold < 0 {
@@ -750,18 +750,18 @@ impl General {
         } else {
             key_name(hold)
         };
-        let mut asr = vec![
-            card_head("识别", "火山引擎 bigmodel").into_any_element(),
-            self.toggle(
-                "asrContext",
-                "发送上下文",
-                "前台应用和输入框里光标前的文字，帮助识别专有名词",
-            ),
-            self.toggle(
-                "nonstream",
-                "二遍识别",
-                "松键后用整段音频再识别一次，更准，约慢 300 ms",
-            ),
+        let mut mic = vec![
+            card_head("麦克风与录音", "仅影响 Plaid，不更改系统输入设备")
+                .child(
+                    div()
+                        .font(mono())
+                        .text_size(px(11.))
+                        .text_color(hex(TEXT2))
+                        .child(status),
+                )
+                .into_any_element(),
+            self.mic_list(cx).into_any_element(),
+            div().pt(px(6.)).child(meter).into_any_element(),
             div()
                 .pt(px(4.))
                 .flex()
@@ -780,9 +780,9 @@ impl General {
                 .into_any_element(),
         ];
         if self.advanced {
-            asr.push(self.number_row("静音阈值", &self.silence, "RMS", window, cx));
-            asr.push(self.number_row("最长收尾", &self.tail, "ms", window, cx));
-            asr.push(
+            mic.push(self.number_row("静音阈值", &self.silence, "RMS", window, cx));
+            mic.push(self.number_row("最长收尾", &self.tail, "ms", window, cx));
+            mic.push(
                 row(
                     "",
                     hint("松键后短暂保留录音，等到静音或时限再结束，避免吞掉最后一个字。太高会丢字，太低会变慢。"),
@@ -790,8 +790,7 @@ impl General {
                 .into_any_element(),
             );
         }
-        if self.page == Page::General {
-            return super::page_body("general")
+        super::page_body("general")
             .child(
                 group_body()
                     .child(card_head("说话键", "仅单独按下时触发；两者可以是同一个键"))
@@ -836,6 +835,7 @@ impl General {
                             ),
                     ),
             )
+            .child(group_body().children(mic))
             .child(
                 group_body()
                     .child(card_head("屏幕底部光带", "说话时出现在当前屏幕底部"))
@@ -843,8 +843,9 @@ impl General {
                     .child(div().h(px(6.)))
                     .children(self.hud_options()),
             )
-            .child(update_card(cx));
-        }
+    }
+
+    fn voice_page(&self) -> Stateful<Div> {
         super::page_body("voice")
             .child(
                 group_body()
@@ -853,19 +854,80 @@ impl General {
             )
             .child(
                 group_body()
-                    .child(
-                        card_head("麦克风", "仅影响 Plaid，不更改系统输入设备").child(
-                            div()
-                                .font(mono())
-                                .text_size(px(11.))
-                                .text_color(hex(TEXT2))
-                                .child(status),
-                        ),
-                    )
-                    .child(self.mic_list(cx))
-                    .child(div().pt(px(6.)).child(meter)),
+                    .child(card_head("识别", "火山引擎 bigmodel"))
+                    .child(self.toggle(
+                        "asrContext",
+                        "发送上下文",
+                        "前台应用和输入框里光标前的文字，帮助识别专有名词",
+                    ))
+                    .child(self.toggle(
+                        "nonstream",
+                        "二遍识别",
+                        "松键后用整段音频再识别一次，更准，约慢 300 ms",
+                    )),
             )
-            .child(group_body().children(asr))
+    }
+
+    /// 关于: version and updates, diagnostics, links.
+    fn about_page(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let log = config::data_dir().join("events.log");
+        let reveal_label = if cfg!(windows) {
+            "在资源管理器中显示"
+        } else {
+            "在 Finder 中显示"
+        };
+        let model = self.model.clone();
+        let link = |id: &'static str, label: &'static str, url: &'static str| {
+            small_button(id, label, move |_, _, _| super::open_url(url))
+        };
+        super::page_body("about")
+            .child(update_card(cx))
+            .child(
+                group_body()
+                    .child(card_head(
+                        "诊断",
+                        "事件日志只记时间、设备名和字数，不含听写内容",
+                    ))
+                    .child(row(
+                        "事件日志",
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.))
+                            .child(small_button("about-log", reveal_label, move |_, _, _| {
+                                reveal(&log)
+                            }))
+                            .child(small_button(
+                                "about-copy",
+                                "复制诊断信息",
+                                move |_, _, cx| {
+                                    let text = diagnostics(&model.read(cx).facts);
+                                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                                },
+                            )),
+                    ))
+                    .child(row(
+                        "",
+                        hint("诊断信息包括版本、系统、麦克风、识别设置和最近 200 行事件日志，反馈问题时附上。"),
+                    )),
+            )
+            .child(
+                group_body()
+                    .child(card_head("链接", "源码与许可"))
+                    .child(row(
+                        "",
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.))
+                            .child(link("about-github", "GitHub", REPO))
+                            .child(link(
+                                "about-license",
+                                "Apache-2.0 许可",
+                                "https://github.com/plaidhq/plaid/blob/main/LICENSE",
+                            )),
+                    )),
+            )
     }
 
     fn hud_options(&self) -> Vec<AnyElement> {
@@ -981,10 +1043,26 @@ impl General {
 
 impl Render for General {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.page == Page::Data {
-            self.data_page()
-        } else {
-            self.voice_page(window, cx)
+        match self.page {
+            Page::Data => self.data_page(),
+            Page::Voice => self.voice_page(),
+            Page::About => self.about_page(cx),
+            _ => self.general_page(window, cx),
         }
     }
+}
+
+const REPO: &str = "https://github.com/plaidhq/plaid";
+
+/// Version, system, mic and recognition settings, then the last 200 events.log lines (no dictated text).
+fn diagnostics(facts: &super::Facts) -> String {
+    let mut info = super::history::export_info(facts);
+    info.insert("arch".into(), std::env::consts::ARCH.into());
+    let log = std::fs::read_to_string(config::data_dir().join("events.log")).unwrap_or_default();
+    let lines: Vec<&str> = log.lines().collect();
+    let tail = lines[lines.len().saturating_sub(200)..].join("\n");
+    format!(
+        "{}\n\n{tail}\n",
+        serde_json::to_string_pretty(&info).unwrap_or_default()
+    )
 }
