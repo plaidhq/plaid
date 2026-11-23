@@ -16,6 +16,8 @@ pub struct KeyField {
     /// (account, stored) from the last lookup; looked up again when the account changes.
     stored: Option<(String, bool)>,
     editing: bool,
+    /// The Volc key is being tried against the service before it is stored.
+    checking: bool,
     error: Option<String>,
 }
 
@@ -46,6 +48,7 @@ impl KeyField {
             input,
             stored: None,
             editing: false,
+            checking: false,
             error: None,
         }
     }
@@ -69,10 +72,41 @@ impl KeyField {
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let v = self.input.read(cx).value().trim().to_string();
-        if v.is_empty() {
+        if v.is_empty() || self.checking {
             return;
         }
-        self.write(&v, window, cx);
+        if (self.account)() != "apiKey" || self.model.read(cx).facts.fixture {
+            self.write(&v, window, cx);
+            return;
+        }
+        // The Volc key goes through a one-second silent request first: a rejected key is not stored, other
+        // failures (resource not enabled, offline) store it and say what went wrong.
+        self.checking = true;
+        self.error = None;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let r = {
+                let v = v.clone();
+                cx.background_executor()
+                    .spawn(async move { crate::driver::check_key(&v) })
+                    .await
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.checking = false;
+                match r {
+                    Ok(()) => this.write(&v, window, cx),
+                    Err(crate::driver::KeyProblem::Invalid) => {
+                        this.error = Some("火山引擎不认这个 Key，检查是否复制完整".into());
+                        cx.notify();
+                    }
+                    Err(crate::driver::KeyProblem::Other(e)) => {
+                        this.write(&v, window, cx);
+                        this.error = Some(e);
+                    }
+                }
+            });
+        })
+        .detach();
     }
 
     fn write(&mut self, v: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -130,10 +164,14 @@ impl Render for KeyField {
                     cx.listener(|this, _, w, cx| this.write("", w, cx)),
                 ))
         } else {
-            let empty = self.input.read(cx).value().trim().is_empty();
+            let empty = self.input.read(cx).value().trim().is_empty() || self.checking;
             let save = default_button(
                 id("save"),
-                "保存",
+                if self.checking {
+                    "验证中…"
+                } else {
+                    "保存"
+                },
                 cx.listener(|this, _, w, cx| this.save(w, cx)),
             );
             line.child(field(&self.input, 260., window, cx))

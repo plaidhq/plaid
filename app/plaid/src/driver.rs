@@ -464,6 +464,10 @@ fn recognize(audio: &std::path::Path, timeout: Duration) -> Result<String, Strin
     }
     let mut opts = config::session_options(secret::api_key()?);
     opts.final_timeout = timeout;
+    recognize_pcm(opts, pcm)
+}
+
+fn recognize_pcm(opts: session::Options, pcm: &[u8]) -> Result<String, String> {
     let (s, events, fut) = session::start(opts, config::hotwords());
     std::thread::spawn(move || async_io::block_on(fut));
     s.begin(vec![]);
@@ -479,7 +483,47 @@ fn recognize(audio: &std::path::Path, timeout: Duration) -> Result<String, Strin
     Err("识别会话意外结束".into())
 }
 
-/// Real-time WAV feed: 100 ms buffers, then the key release, then silence until the capture is stopped.
+/// Why a Volc key check failed. Only `Invalid` is certain enough to refuse saving the key.
+#[derive(Debug, PartialEq)]
+pub enum KeyProblem {
+    Invalid,
+    Other(String),
+}
+
+/// One second of silence through a session with `key`. Blocking, a second or two. Volc checks the key and the
+/// resource in the WebSocket handshake, so anything that goes wrong after it doesn't count against the key.
+pub fn check_key(key: &str) -> Result<(), KeyProblem> {
+    let mut opts = config::session_options(key.into());
+    opts.final_timeout = Duration::from_secs(5);
+    match recognize_pcm(opts, &[0u8; 32000]) {
+        Ok(_) => Ok(()),
+        Err(e) => key_problem(&e).map_or(Ok(()), Err),
+    }
+}
+
+/// None when the error came after a successful handshake.
+fn key_problem(e: &str) -> Option<KeyProblem> {
+    let resource = config::session_options(String::new()).resource;
+    Some(if e.starts_with("HTTP 401") {
+        KeyProblem::Invalid
+    } else if e.starts_with("HTTP 403") {
+        KeyProblem::Other(format!(
+            "这个 Key 没有开通流式语音识别（资源 {resource}）：{e}"
+        ))
+    } else if e.starts_with("timed out connecting")
+        || e.starts_with("TLS error")
+        || e.starts_with("IO error")
+        || e.starts_with("URL error")
+    {
+        KeyProblem::Other(format!("连不上火山引擎，没能验证 Key：{e}"))
+    } else if e.starts_with("HTTP ") {
+        KeyProblem::Other(format!("火山引擎返回错误：{e}"))
+    } else {
+        return None;
+    })
+}
+
+/// Real-time WAV feed:/// Real-time WAV feed: 100 ms buffers, then the key release, then silence until the capture is stopped.
 fn feed(pcm: &[u8], generation: u64, stop: &AtomicBool, tx: &Sender<Msg>) {
     let t0 = Instant::now();
     let chunks = pcm
@@ -502,5 +546,44 @@ fn feed(pcm: &[u8], generation: u64, stop: &AtomicBool, tx: &Sender<Msg>) {
                 trigger_ms: None,
             },
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_problems() {
+        assert_eq!(
+            key_problem(r#"HTTP 401 (logid x) {"error":"Invalid X-Api-Key"}"#),
+            Some(KeyProblem::Invalid)
+        );
+        assert_eq!(key_problem("45000002 empty audio (logid x)"), None);
+        assert_eq!(key_problem("timed out waiting for final result"), None);
+        for (e, want) in [
+            ("HTTP 403 (logid x) not granted", "没有开通"),
+            ("timed out connecting", "连不上"),
+            (
+                "TLS error: native-tls error: connection closed via error",
+                "连不上",
+            ),
+            ("HTTP 500 (logid x) oops", "返回错误"),
+        ] {
+            let Some(KeyProblem::Other(m)) = key_problem(e) else {
+                panic!("{e}")
+            };
+            assert!(m.contains(want), "{m}");
+        }
+    }
+
+    /// Talks to Volc: a made-up key is refused with 401.
+    #[test]
+    #[ignore]
+    fn made_up_key_is_invalid() {
+        assert_eq!(
+            check_key("00000000-0000-4000-8000-000000000000"),
+            Err(KeyProblem::Invalid)
+        );
     }
 }

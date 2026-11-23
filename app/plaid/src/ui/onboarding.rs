@@ -54,7 +54,7 @@ impl Onboarding {
         }
     }
 
-    /// Whether 继续 is allowed: the key is stored, and on macOS Accessibility is granted.
+    /// Whether 继续 is allowed: the key is stored (or skipped with 稍后填写), and on macOS Accessibility is granted.
     fn can_continue(&self, cx: &App) -> bool {
         let f = &self.model.read(cx).facts;
         match self.step {
@@ -122,8 +122,21 @@ impl Onboarding {
             .gap(px(16.))
             .child(h2("火山引擎 API Key"))
             .child(para(
-                "在火山引擎控制台的语音技术里创建应用，复制 API Key 粘贴到这里。",
+                "在火山引擎控制台的豆包语音里开通流式语音识别（小时版），创建 API Key，粘贴到这里。保存时会发一秒静音试一下这个 Key。",
             ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(button("console", "打开火山引擎控制台…", |_, _, _| {
+                        open_url("https://console.volcengine.com/speech/app")
+                    }))
+                    .child(hint(format!(
+                        "资源 ID：{}",
+                        crate::config::session_options(String::new()).resource
+                    ))),
+            )
             .child(
                 div()
                     .flex()
@@ -443,6 +456,16 @@ impl Render for Onboarding {
                     .gap(px(10.))
                     .px(px(20.))
                     .child(if step == 0 { disabled(back) } else { back })
+                    .when(step == 1 && !self.can_continue(cx), |d| {
+                        d.child(button(
+                            "skip",
+                            "稍后填写",
+                            cx.listener(|this, _, _, cx| {
+                                this.step += 1;
+                                cx.notify();
+                            }),
+                        ))
+                    })
                     .child(if self.can_continue(cx) {
                         next
                     } else {
