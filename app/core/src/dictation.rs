@@ -315,6 +315,19 @@ fn tail(s: &str, n: usize) -> String {
     text::trim_ws_nl(&text::from_utf16(&u[u.len().saturating_sub(n)..])).to_owned()
 }
 
+/// ` styles=精炼,客气` for the refine log line; empty without styles.
+fn style_names(p: &mut impl Platform, app: Option<&str>) -> String {
+    let names: Vec<String> = llm::active_styles(|k| p.setting(k), app)
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    if names.is_empty() {
+        String::new()
+    } else {
+        format!(" styles={}", names.join(","))
+    }
+}
+
 fn ms(from: Instant, to: Instant) -> i64 {
     to.saturating_duration_since(from).as_millis() as i64
 }
@@ -1149,6 +1162,7 @@ impl Controller {
         ep: &Endpoint,
         text: &str,
         app: &str,
+        front: Option<&str>,
         history: &[String],
         light: bool,
         timeout: Duration,
@@ -1163,6 +1177,7 @@ impl Controller {
             hotwords: &hotwords,
             fixes: &self.store.fixes(),
             light,
+            front,
         };
         llm::refine_request(|k| p.setting(k), ep, key.as_deref(), &fill, timeout)
     }
@@ -1220,14 +1235,25 @@ impl Controller {
                 .unwrap_or(4000),
         );
         let light = level == Level::Light;
-        match self.llm_request(&ep, &raw, &app, &history, light, timeout, p) {
+        let front = u.app.clone();
+        match self.llm_request(
+            &ep,
+            &raw,
+            &app,
+            front.as_deref(),
+            &history,
+            light,
+            timeout,
+            p,
+        ) {
             Err(e) => self.deliver(&raw, &raw, &e, Some(0), asr_at, true, p),
             Ok(req) => {
                 self.llm_seq += 1;
+                let styles = style_names(p, front.as_deref());
                 p.log(&format!(
-                    "refine model={} chars={}",
+                    "refine model={} chars={}{styles}",
                     ep.model,
-                    raw.chars().count()
+                    raw.chars().count(),
                 ));
                 p.llm(self.llm_seq, req);
                 self.refine = Some(Refine {
@@ -1266,15 +1292,16 @@ impl Controller {
                 .max(15_000),
         );
         let app = r.app.clone().unwrap_or_default();
-        match self.llm_request(&ep, &r.raw, &app, &[], light, timeout, p) {
+        match self.llm_request(&ep, &r.raw, &app, r.app.as_deref(), &[], light, timeout, p) {
             Err(e) => p.hud(Hud::Flash(format!("重新润色失败：{e}"))),
             Ok(req) => {
                 self.llm_seq += 1;
                 self.rerefining = Some((self.llm_seq, id, Instant::now()));
+                let styles = style_names(p, r.app.as_deref());
                 p.log(&format!(
-                    "rerefine model={} chars={}",
+                    "rerefine model={} chars={}{styles}",
                     ep.model,
-                    r.raw.chars().count()
+                    r.raw.chars().count(),
                 ));
                 p.llm(self.llm_seq, req);
             }
@@ -1400,7 +1427,7 @@ impl Controller {
             if !self.store.all.iter().any(|r| r.at == id) {
                 continue;
             }
-            match self.llm_request(&ep, &raw, "", &[], false, LEARN_TIMEOUT, p) {
+            match self.llm_request(&ep, &raw, "", None, &[], false, LEARN_TIMEOUT, p) {
                 Ok(req) => {
                     self.llm_seq += 1;
                     self.learn.running = Some((self.llm_seq, id, raw));

@@ -116,6 +116,17 @@ enum Menu {
     /// The level tag of one 按应用 row.
     App(usize),
     AddApp,
+    /// The 添加应用 menu of one style card.
+    StyleApps(usize),
+    /// The 测试 section's app.
+    TestApp,
+}
+
+/// The style card being edited, with its two fields.
+struct StyleEdit {
+    i: usize,
+    name: Entity<InputState>,
+    prompt: Entity<TextareaState>,
 }
 
 /// The global levels with their subtitles (原文 is per-app only).
@@ -155,6 +166,9 @@ pub struct Refine {
     prompts: [Prompt; 3],
     sample: Entity<TextareaState>,
     test: Test,
+    editing: Option<StyleEdit>,
+    /// The app the test request pretends to dictate into (its level and styles); None is the global level.
+    test_app: Option<String>,
 }
 
 impl Refine {
@@ -252,6 +266,8 @@ impl Refine {
             prompts,
             sample,
             test: Test::default(),
+            editing: None,
+            test_app: None,
         }
     }
 
@@ -390,13 +406,15 @@ impl Refine {
         let key = (!fixture && !ep.base.is_empty())
             .then(|| secret::llm_key(&ep.base))
             .flatten();
+        let front = self.test_app.as_deref();
         let fill = llm::Fill {
             text,
-            app: "Plaid 设置",
+            app: front.unwrap_or("Plaid 设置"),
             history: &[],
             hotwords: &config::terms(true).join(", "),
             fixes: &self.model.read(cx).store.fixes(),
-            light: llm::global_level(config::value) == llm::Level::Light,
+            light: test_level(front) == llm::Level::Light,
+            front,
         };
         llm::refine_request(
             config::value,
@@ -457,20 +475,8 @@ impl Refine {
     /// 按应用: apps that refine differently from the global level.
     fn apps_card(&self, cx: &mut Context<Self>) -> Div {
         let apps = llm::app_levels(&config::raw("llmApps").unwrap_or_default());
-        // Candidates: apps dictated into, most used first.
-        let mut seen: Vec<(String, usize)> = vec![];
-        for r in &self.model.read(cx).store.all {
-            if let Some(a) = &r.app {
-                match seen.iter_mut().find(|(s, _)| s == a) {
-                    Some(e) => e.1 += 1,
-                    None => seen.push((a.clone(), 1)),
-                }
-            }
-        }
-        seen.sort_by_key(|e| std::cmp::Reverse(e.1));
-        let candidates: Vec<String> = seen
+        let candidates: Vec<String> = used_apps(&self.model.read(cx).store)
             .into_iter()
-            .map(|(a, _)| a)
             .filter(|a| !apps.iter().any(|(x, _)| x.eq_ignore_ascii_case(a)))
             .take(12)
             .collect();
@@ -606,6 +612,320 @@ impl Refine {
             .when(!rows.is_empty(), |d| {
                 d.child(div().flex().flex_col().children(rows))
             })
+    }
+
+    fn set_styles(&self, v: &[llm::Style], cx: &mut Context<Self>) {
+        let v = llm::format_styles(v);
+        self.model.update(cx, |m, cx| m.set("llmStyles", v, cx));
+    }
+
+    /// Opens style `i` for editing; each keystroke rewrites the whole list.
+    fn edit_style(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(st) = llm::styles(config::raw).get(i).cloned() else {
+            return;
+        };
+        let name = cx.new(|cx| InputState::new(window, cx).placeholder("名称"));
+        name.update(cx, |t, cx| t.set_value(st.name, window, cx));
+        let prompt = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(3, 10)
+                .placeholder("例如：回复保持在三句以内，结论放在第一句。")
+        });
+        prompt.update(cx, |t, cx| t.set_value(st.prompt, window, cx));
+        cx.subscribe_in(&name, window, move |this, input, e: &InputEvent, _, cx| {
+            if let InputEvent::Change = e {
+                let v = input.read(cx).value().to_string();
+                this.update_style(i, cx, |st| st.name = v);
+            }
+        })
+        .detach();
+        cx.subscribe_in(
+            &prompt,
+            window,
+            move |this, input, e: &InputEvent, _, cx| {
+                if let InputEvent::Change = e {
+                    let v = input.read(cx).value().to_string();
+                    this.update_style(i, cx, |st| st.prompt = v);
+                }
+                cx.notify();
+            },
+        )
+        .detach();
+        name.update(cx, |t, cx| t.focus(window, cx));
+        self.editing = Some(StyleEdit { i, name, prompt });
+        self.menu = None;
+        cx.notify();
+    }
+
+    fn update_style(&self, i: usize, cx: &mut Context<Self>, f: impl FnOnce(&mut llm::Style)) {
+        let mut list = llm::styles(config::raw);
+        if let Some(st) = list.get_mut(i) {
+            f(st);
+            self.set_styles(&list, cx);
+        }
+    }
+
+    fn new_style(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut list = llm::styles(config::raw);
+        list.push(llm::Style {
+            name: "新风格".into(),
+            ..llm::Style::default()
+        });
+        self.set_styles(&list, cx);
+        self.edit_style(list.len() - 1, window, cx);
+    }
+
+    fn delete_style(&mut self, i: usize, cx: &mut Context<Self>) {
+        let mut list = llm::styles(config::raw);
+        if i < list.len() {
+            list.remove(i);
+            self.set_styles(&list, cx);
+        }
+        self.editing = None;
+        cx.notify();
+    }
+
+    /// 风格: the per-app summary, then one card per style.
+    fn styles_block(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let list = llm::styles(config::raw);
+        let used = used_apps(&self.model.read(cx).store);
+        let new = small_button(
+            "style-new",
+            "+ 新建",
+            cx.listener(|this, _, w, cx| this.new_style(w, cx)),
+        );
+        let cards: Vec<AnyElement> = list
+            .iter()
+            .enumerate()
+            .map(|(i, st)| self.style_card(i, st, &used, window, cx))
+            .collect();
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(
+                div()
+                    .flex()
+                    .items_end()
+                    .gap(px(12.))
+                    .child(div().flex_1().min_w_0().child(card_head(
+                        "风格",
+                        "叠加在轻度/通顺之上的要求，按应用组合。只在调用 LLM 时生效：应用为关或原文、句子短于字数门槛时不起作用。",
+                    )))
+                    .child(new),
+            )
+            .child(styles_summary(&list, &used))
+            .child(div().grid().grid_cols(2).gap(px(10.)).children(cards))
+    }
+
+    fn style_card(
+        &self,
+        i: usize,
+        st: &llm::Style,
+        used: &[String],
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let id = |s: &str| SharedString::from(format!("style-{i}-{s}"));
+        let frame = || {
+            div()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .px(px(14.))
+                .py(px(12.))
+                .rounded(px(12.))
+                .border_1()
+        };
+        if let Some(e) = self.editing.as_ref().filter(|e| e.i == i) {
+            let done = button(
+                id("done"),
+                "完成",
+                cx.listener(|this, _, _, cx| {
+                    this.editing = None;
+                    cx.notify();
+                }),
+            );
+            let delete = small_button(
+                id("delete"),
+                "删除",
+                cx.listener(move |this, _, _, cx| this.delete_style(i, cx)),
+            )
+            .text_color(hex(RED));
+            return frame()
+                .bg(tint(VIOLET, 0x10))
+                .border_color(tint(VIOLET, 0x55))
+                .child(hit(id("name")).child(wide_field(&e.name, window, cx)))
+                .child(hit(id("prompt")).child(editor(&e.prompt, false, window, cx)))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(delete)
+                        .child(div().flex_1())
+                        .child(done),
+                )
+                .into_any_element();
+        }
+        let mut chips: Vec<AnyElement> = vec![];
+        let remove = move |this: &mut Self, cx: &mut Context<Self>, which: Option<usize>| {
+            this.update_style(i, cx, |st| match which {
+                None => st.all = false,
+                Some(k) => {
+                    st.apps.remove(k);
+                }
+            });
+        };
+        if st.all {
+            let live = llm::global_level(config::value) >= llm::Level::Light;
+            chips.push(
+                app_chip(
+                    id("all"),
+                    "所有应用",
+                    None,
+                    live,
+                    cx.listener(move |this, _, _, cx| remove(this, cx, None)),
+                )
+                .into_any_element(),
+            );
+        }
+        for (k, app) in st.apps.iter().enumerate() {
+            let live = llm::level(config::value, Some(app)) >= llm::Level::Light;
+            chips.push(
+                app_chip(
+                    id(&format!("app-{k}")),
+                    app.clone(),
+                    Some(app),
+                    live,
+                    cx.listener(move |this, _, _, cx| remove(this, cx, Some(k))),
+                )
+                .into_any_element(),
+            );
+        }
+        // 所有应用 first, then apps dictated into that the style doesn't have yet.
+        let picks: Vec<Option<String>> = (!st.all)
+            .then_some(None)
+            .into_iter()
+            .chain(
+                used.iter()
+                    .filter(|a| !st.apps.iter().any(|x| x.eq_ignore_ascii_case(a)))
+                    .take(12)
+                    .cloned()
+                    .map(Some),
+            )
+            .collect();
+        let open = self.menu == Some(Menu::StyleApps(i));
+        let face = hit(id("add"))
+            .h(px(24.))
+            .flex()
+            .items_center()
+            .px(px(8.))
+            .rounded(px(6.))
+            .border_1()
+            .border_dashed()
+            .border_color(hexa(LINE3))
+            .text_size(px(12.))
+            .text_color(hex(TEXT2))
+            .hover(|s| s.bg(hex(HOVER)))
+            .child("+ 应用");
+        if !picks.is_empty() {
+            let this = cx.entity().downgrade();
+            let entries = picks
+                .iter()
+                .enumerate()
+                .map(|(k, p)| MenuEntry {
+                    label: p.clone().unwrap_or_else(|| "所有应用".into()).into(),
+                    checked: false,
+                    rule: k == 0 && p.is_none() && picks.len() > 1,
+                })
+                .collect();
+            chips.push(
+                drop_menu(
+                    id("add"),
+                    face,
+                    170.,
+                    entries,
+                    open,
+                    self.menu_toggle(Menu::StyleApps(i), open, cx),
+                    self.menu_close(cx),
+                    move |k, _, cx| {
+                        let pick = picks[k].clone();
+                        let _ = this.update(cx, |this, cx| {
+                            this.menu = None;
+                            this.update_style(i, cx, |st| match pick {
+                                None => st.all = true,
+                                Some(a) => st.apps.push(a),
+                            });
+                        });
+                    },
+                )
+                .into_any_element(),
+            );
+        }
+        let on = st.all || !st.apps.is_empty();
+        let edit = hit(id("edit"))
+            .size(px(22.))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.))
+            .hover(|s| s.bg(hex(HOVER)))
+            .child(icon("plaid/pencil.svg", 11., hex(TEXT2)))
+            .on_click(cx.listener(move |this, _, w, cx| this.edit_style(i, w, cx)));
+        let prompt = st.prompt.trim();
+        frame()
+            .map(|d| {
+                if on {
+                    d.bg(tint(VIOLET, 0x0c)).border_color(tint(VIOLET, 0x40))
+                } else {
+                    d.bg(hexa(GLASS)).border_color(hexa(LINE))
+                }
+            })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(14.))
+                            .font_weight(medium())
+                            .child(if st.name.trim().is_empty() {
+                                "未命名".to_string()
+                            } else {
+                                st.name.clone()
+                            }),
+                    )
+                    .child(edit),
+            )
+            .child(
+                div()
+                    .h(px(36.))
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+                    .line_clamp(2)
+                    .text_color(hex(if prompt.is_empty() { AMBER } else { TEXT2 }))
+                    .child(if prompt.is_empty() {
+                        "还没写要求，不会生效".to_string()
+                    } else {
+                        prompt.to_string()
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(6.))
+                    .children(chips),
+            )
+            .into_any_element()
     }
 
     fn provider_rows(&self, window: &Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -833,7 +1153,67 @@ impl Refine {
             },
             cx.listener(|this, _, _, cx| this.run_test(cx)),
         );
+        // Apps to test as: none (the global level), then apps dictated into.
+        let picks: Vec<Option<String>> = std::iter::once(None)
+            .chain(
+                used_apps(&self.model.read(cx).store)
+                    .into_iter()
+                    .take(12)
+                    .map(Some),
+            )
+            .collect();
+        let open = self.menu == Some(Menu::TestApp);
+        let this = cx.entity().downgrade();
+        let front = self.test_app.as_deref();
+        let app = pick_list(
+            "refine-test-app",
+            170.,
+            front.unwrap_or("不指定应用"),
+            picks
+                .iter()
+                .enumerate()
+                .map(|(k, p)| MenuEntry {
+                    label: p.clone().unwrap_or_else(|| "不指定应用".into()).into(),
+                    checked: p.as_deref() == front,
+                    rule: k == 0 && picks.len() > 1,
+                })
+                .collect(),
+            open,
+            self.menu_toggle(Menu::TestApp, open, cx),
+            self.menu_close(cx),
+            move |k, _, cx| {
+                let pick = picks[k].clone();
+                let _ = this.update(cx, |this, cx| {
+                    this.menu = None;
+                    this.test_app = pick;
+                    cx.notify();
+                });
+            },
+        );
+        let level = test_level(front);
+        let names: Vec<String> = llm::active_styles(config::raw, front)
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        let note = match level {
+            llm::Level::Raw | llm::Level::Off => format!(
+                "{}：实际听写不会润色，这里仍按通顺测试",
+                level_menu_label(level)
+            ),
+            _ if names.is_empty() => format!("{}，无风格", level_menu_label(level)),
+            _ => format!("{} + {}", level_menu_label(level), names.join(" + ")),
+        };
         let mut rows = vec![
+            row(
+                "按应用：",
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(app)
+                    .child(hint(note)),
+            )
+            .into_any_element(),
             top_row(
                 "示例文本：",
                 hit("refine-sample").child(editor(&self.sample, false, window, cx)),
@@ -873,6 +1253,155 @@ impl Refine {
         }
         rows
     }
+}
+
+/// Apps dictated into, most used first.
+fn used_apps(store: &plaid_core::store::Store) -> Vec<String> {
+    let mut seen: Vec<(String, usize)> = vec![];
+    for r in &store.all {
+        if let Some(a) = &r.app {
+            match seen.iter_mut().find(|(s, _)| s == a) {
+                Some(e) => e.1 += 1,
+                None => seen.push((a.clone(), 1)),
+            }
+        }
+    }
+    seen.sort_by_key(|e| std::cmp::Reverse(e.1));
+    seen.into_iter().map(|(a, _)| a).collect()
+}
+
+/// The level the test request runs at: the picked app's, else the global one.
+fn test_level(app: Option<&str>) -> llm::Level {
+    match app {
+        Some(a) => llm::level(config::value, Some(a)),
+        None => llm::global_level(config::value),
+    }
+}
+
+/// One app a style is on: icon, name, ×. Dim when that app doesn't call the LLM.
+fn app_chip(
+    id: SharedString,
+    label: impl Into<SharedString>,
+    app: Option<&str>,
+    live: bool,
+    on_remove: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    let x = hit(SharedString::from(format!("{id}-remove")))
+        .size(px(16.))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .hover(|s| s.bg(hex(HOVER)))
+        .child(icon("plaid/xmark.svg", 8., hex(TEXT3)))
+        .on_click(on_remove);
+    div()
+        .id(id)
+        .h(px(24.))
+        .flex()
+        .items_center()
+        .gap(px(5.))
+        .pl(px(app.map_or(8., |_| 4.)))
+        .pr(px(3.))
+        .rounded(px(6.))
+        .text_size(px(12.))
+        .map(|d| {
+            if live {
+                d.bg(hex(RAISED2)).text_color(hex(TEXT))
+            } else {
+                d.bg(hexa(GLASS)).text_color(hex(TEXT3))
+            }
+        })
+        .when_some(app, |d, a| {
+            d.child(app_icon(a, 16.).map_or_else(
+                || app_badge(a).size(px(16.)).into_any_element(),
+                |i| i.opacity(if live { 1. } else { 0.4 }).into_any_element(),
+            ))
+        })
+        .child(label.into())
+        .when(!live, |d| {
+            d.child(div().text_size(px(11.)).child("· 不润色"))
+        })
+        .child(x)
+}
+
+/// Which styles each app gets, app first: "Rex：编程术语 + 精炼".
+fn styles_summary(list: &[llm::Style], used: &[String]) -> Div {
+    let mut apps: Vec<String> = vec![];
+    for st in list {
+        for a in &st.apps {
+            if !apps.iter().any(|x| x.eq_ignore_ascii_case(a)) {
+                apps.push(a.clone());
+            }
+        }
+    }
+    // Most used first, the rest in list order.
+    apps.sort_by_key(|a| {
+        used.iter()
+            .position(|u| u.eq_ignore_ascii_case(a))
+            .unwrap_or(usize::MAX)
+    });
+    let names = |app: Option<&str>| -> Vec<String> {
+        list.iter()
+            .filter(|s| s.applies(app))
+            .map(|s| s.name.clone())
+            .collect()
+    };
+    let mut lines: Vec<(String, Vec<String>, bool)> = apps
+        .iter()
+        .map(|a| {
+            let live = llm::level(config::value, Some(a)) >= llm::Level::Light;
+            (a.clone(), names(Some(a)), live)
+        })
+        .collect();
+    let rest = names(None);
+    if !rest.is_empty() {
+        let live = llm::global_level(config::value) >= llm::Level::Light;
+        lines.push((
+            if apps.is_empty() {
+                "所有应用".into()
+            } else {
+                "其他应用".into()
+            },
+            rest,
+            live,
+        ));
+    }
+    if lines.is_empty() {
+        return div().child(hint("还没有风格分配给应用：在卡片上点「+ 应用」。"));
+    }
+    group_body()
+        .gap(px(6.))
+        .children(lines.into_iter().map(|(app, names, live)| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .h(px(24.))
+                .child(
+                    div()
+                        .w(px(150.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(app_icon(&app, 18.).map_or_else(
+                            || app_badge(&app).size(px(18.)).into_any_element(),
+                            IntoElement::into_any_element,
+                        ))
+                        .child(div().min_w_0().truncate().child(app)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(hex(if live { VIOLET } else { TEXT3 }))
+                        .child(names.join(" + ")),
+                )
+                .when(!live, |d| d.child(hint("该应用不调用 LLM")))
+        }))
 }
 
 fn timeout_ms() -> u64 {
@@ -1300,6 +1829,7 @@ impl Render for Refine {
                     )
                     .child(llm),
             )
+            .child(self.styles_block(window, cx))
             .child(div().pt(px(8.)).child(group("LLM 服务")))
             .child(section("服务商", self.provider_rows(window, cx)))
             .child(section("上下文", self.context_rows(window, cx)))
@@ -1379,7 +1909,70 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         config::raw("llmMinChars").as_deref() == Some("50"),
         &None,
     )?;
-    ui.scroll("llmMinChars-2", -420.)?;
+
+    // 风格: assign to an app and to all apps, remove, create, edit, delete.
+    ui.scroll("llmMinChars-2", -300.)?;
+    ui.shot("refine-styles")?;
+    ui.click("style-0-add")?;
+    ui.shot("refine-styles-add")?;
+    ui.click("style-0-add-menu-1")?;
+    ui.click("style-1-add")?;
+    ui.click("style-1-add-menu-0")?;
+    let list = llm::styles(config::raw);
+    expect(
+        "style 0 on one app, style 1 on all",
+        list.len() == llm::PRESET_STYLES.len()
+            && list[0].apps.len() == 1
+            && !list[0].all
+            && list[1].all,
+        &config::raw("llmStyles"),
+    )?;
+    ui.click("style-1-add")?;
+    ui.click("style-1-add-menu-0")?;
+    let app = list[0].apps[0].clone();
+    expect(
+        "both apply to the app",
+        llm::active_styles(config::raw, Some(&app)).len() == 2
+            && llm::active_styles(config::raw, None).len() == 1,
+        &config::raw("llmStyles"),
+    )?;
+    ui.shot("refine-styles-on")?;
+    ui.click("style-1-all-remove")?;
+    expect(
+        "all removed",
+        !llm::styles(config::raw)[1].all,
+        &config::raw("llmStyles"),
+    )?;
+    ui.click("style-new")?;
+    ui.key("cmd-a")?;
+    ui.type_text("短句")?;
+    ui.scroll("style-new", -300.)?;
+    ui.click("style-4-prompt")?;
+    ui.type_text("每句不超过二十字")?;
+    let list = llm::styles(config::raw);
+    expect(
+        "new style typed",
+        list.len() == 5 && list[4].name == "短句" && list[4].prompt == "每句不超过二十字",
+        &config::raw("llmStyles"),
+    )?;
+    ui.shot("refine-styles-edit")?;
+    ui.click("style-4-done")?;
+    expect("editor closed", !ui.has("style-4-done"), &None)?;
+    ui.click("style-4-edit")?;
+    ui.click("style-4-delete")?;
+    expect(
+        "style deleted",
+        llm::styles(config::raw).len() == 4,
+        &config::raw("llmStyles"),
+    )?;
+    ui.click("style-0-app-0-remove")?;
+    expect(
+        "app removed",
+        llm::styles(config::raw)[0].apps.is_empty(),
+        &config::raw("llmStyles"),
+    )?;
+
+    ui.scroll("style-0-add", -300.)?;
     ui.click("llmFormat")?;
     ui.click("llmFormat-menu-1")?;
     expect(
