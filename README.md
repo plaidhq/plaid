@@ -1,8 +1,69 @@
 # Plaid
 
-Voice dictation for macOS and Windows. Hold a key, speak, release: the text is pasted into the focused input field.
-Recognition uses Volcengine's Doubao streaming ASR (bigmodel). An optional LLM pass cleans up fillers, typos and
-punctuation before pasting. The UI is in Simplified Chinese.
+English | [简体中文](README.zh-CN.md)
+
+Voice dictation for macOS and Windows. Hold a key, speak, release: the text is pasted into whatever input field has
+focus. Recognition uses Volcengine's Doubao streaming ASR (bigmodel). An optional LLM pass removes fillers and fixes
+typos and punctuation before pasting. The UI is in Simplified Chinese; screenshots below use sample data.
+
+![Text appears in the HUD while you speak](docs/screenshots/hud-typing.png)
+
+## What it's for
+
+### Replying in chat, writing an email
+
+Put the cursor in Slack, WeChat, Mail or a terminal, hold right ⌥ and talk. The words appear in a strip at the
+bottom of the screen as you speak, so you can see whether it heard you. Release the key and the text is pasted.
+For longer passages, tap the key once to go hands-free and tap again (or press ⏎) when done; esc cancels.
+
+### Speech in, written text out
+
+Spoken sentences carry fillers like 那个 / 就是 and loose punctuation. With polishing on, an LLM cleans that up
+before pasting, while the strip shows it working. Levels are 关 / 轻度 / 通顺 and can differ per app: off in the
+terminal, 通顺 in email. Short sentences (under 20 characters by default) skip the LLM
+so they paste immediately.
+
+![Polishing before paste](docs/screenshots/hud-refining.png)
+
+On top of a level you can stack styles per app, such as 编程术语 (keep product names in their usual casing, don't
+translate Chinese into English) for the browser, or 正式 for email. Styles are plain-language instructions you can
+edit.
+
+![Per-app polish styles](docs/screenshots/refine-styles.png)
+
+### Names and jargon
+
+ASR gets names and technical terms wrong: Kubernetes, Tauri, a colleague's name. Add them to 词典 and they are sent
+to Volcengine as hotwords and to the LLM as reference. Rewrite rules map what was heard to what you meant
+(克劳德 → Claude). When you fix a pasted sentence by hand, Plaid notices the edit and suggests a rule; after the
+same fix a couple of times it applies the rule on its own and lists it under 最近学会, where you can keep or undo it.
+
+![词典: hotwords, rewrite rules, learned suggestions](docs/screenshots/dictionary.png)
+
+### Voice commands
+
+Map a spoken phrase to a shell command in 命令: "Hey, 打开终端" runs `open -a Terminal`. The rest of the sentence is
+passed as `$PLAID_ARGS`, the whole sentence as `$PLAID_TEXT`. Output can be ignored, shown in the strip, or pasted
+at the cursor. Commands can ask for confirmation first (⏎ to run, esc to cancel).
+
+![Confirm before running a command](docs/screenshots/hud-ask.png)
+
+![命令](docs/screenshots/commands.png)
+
+### Going back to an earlier dictation
+
+历史 keeps recent dictations with the app they went to, the raw recognition next to what was pasted, the recording,
+and timings. If a paste didn't land, copy it from here. If the network dropped, re-recognize the recording. You can
+re-polish, select a word to add it to 词典, or delete entries.
+
+![历史](docs/screenshots/history.png)
+
+### How much you use it
+
+概览 shows today's characters, speaking time, time saved compared with typing, LLM latency and your speaking speed,
+plus 7, 30 and 90-day views.
+
+![概览](docs/screenshots/overview.png)
 
 ## Requirements
 
@@ -34,15 +95,6 @@ Plaid checks GitHub for new releases every 6 hours and can update itself (设置
 - **Hold right ⌥ (right Alt on Windows)** to dictate; release to paste.
 - **Tap it** for hands-free dictation; tap again or press ⏎ to finish, esc to cancel.
 - Both keys can be changed or disabled in 设置 › 通用.
-
-Other features:
-
-- **词典**: hotwords sent to the ASR and the LLM, plus rewrite rules (heard → wanted). Plaid suggests rules from your
-  manual edits after a paste and from LLM corrections; thresholds for auto-applying them are settable.
-- **命令**: map a spoken phrase to a shell command. The rest of the sentence is in `$PLAID_ARGS`, the whole
-  sentence in `$PLAID_TEXT`.
-- **历史**: recent recordings with playback, re-polish, retry and export.
-- **概览**: usage and latency numbers.
 
 ## Data
 
