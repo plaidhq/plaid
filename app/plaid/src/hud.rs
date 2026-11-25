@@ -33,8 +33,7 @@ const W: f32 = PANEL_MAX_W + 40.;
 const H: f32 = PAD_TOP + PANEL_MAX_H + PAD_BOTTOM;
 /// Gap between the panel and the bottom of the visible screen area.
 const LIFT: f32 = 40.;
-/// Edge light: thickness, and its width as a fraction of the panel at silence and at full level.
-const EDGE_H: f32 = 2.;
+/// Edge light: its width as a fraction of the panel at silence and at full level.
 const EDGE_MIN: f32 = 0.08;
 const EDGE_MAX: f32 = 0.8;
 /// While processing, a segment of this fraction of the panel sweeps across once per `SWEEP_S` (there and back).
@@ -425,6 +424,7 @@ impl Hud {
             || self.morph.is_some()
             || self.fade.is_some()
             || matches!(self.edge(), Edge::Sweep(_))
+            || self.colorful()
     }
 
     /// Fades over the full text: the newest revealed characters partly, the rest fully. The text is always laid out
@@ -549,6 +549,7 @@ impl Hud {
             rgb: rgba(color << 8 | 0xff),
             a,
             text: rgba(text),
+            colorful: self.colorful() as u8 as f32,
         }
     }
 
@@ -568,6 +569,11 @@ impl Hud {
         self.lit
     }
 
+    /// Plain listening draws the light in many colors (`RAINBOW`), drifting; commands and every other state use one.
+    fn colorful(&self) -> bool {
+        self.state == State::Listen && !self.command
+    }
+
     /// Panel opacity: 1, or falling during the auto-hide fade.
     fn opacity(&self) -> f32 {
         self.fade.map_or(1., |f| {
@@ -584,6 +590,8 @@ struct Lit {
     rgb: [f32; 4],
     a: f32,
     text: [f32; 4],
+    /// How much of `RAINBOW` replaces `rgb`, 0...1.
+    colorful: f32,
 }
 
 impl Lit {
@@ -596,6 +604,7 @@ impl Lit {
             rgb: v(self.rgb, to.rgb),
             a: f(self.a, to.a),
             text: v(self.text, to.text),
+            colorful: f(self.colorful, to.colorful),
         }
     }
 }
@@ -621,42 +630,111 @@ const GREEN: u32 = 0x7ee08a;
 const RED: u32 = 0xff7a70;
 const VIOLET: u32 = 0xb59cff;
 
-/// A light segment `w` wide starting at `x`, fading out toward both ends, with a soft glow from its middle.
-fn light(x: f32, w: f32, rgb: [f32; 4], alpha: f32) -> Div {
-    let a = alpha.clamp(0., 1.);
-    let at = |a: f32| color([rgb[0], rgb[1], rgb[2], a]);
-    let half = |from: f32, to: f32| {
-        div().w(px(w / 2.)).h_full().bg(linear_gradient(
-            90.,
-            linear_color_stop(at(from), 0.),
-            linear_color_stop(at(to), 1.),
-        ))
-    };
-    div()
-        .absolute()
-        .bottom_0()
-        .left(px(x))
-        .w(px(w))
-        .h(px(EDGE_H))
-        .flex()
-        .child(half(0., a))
-        .child(half(a, 0.))
-        .child(
-            // Glow: a short core whose blurred shadow lights the panel edge around the middle.
-            div()
-                .absolute()
-                .bottom_0()
-                .left(px(w * 0.35))
-                .w(px(w * 0.3))
-                .h(px(EDGE_H))
-                .shadow(vec![BoxShadow {
-                    color: at(a * 0.6).into(),
-                    offset: point(px(0.), px(0.)),
-                    blur_radius: px(10.),
-                    spread_radius: px(0.),
-                    inset: false,
-                }]),
-        )
+/// A dithered light along the panel's bottom edge over the segment `w` wide starting at `x`: a glow field (brightest
+/// at the segment's middle and the bottom row, rising higher as `alpha` grows) sampled on a grid of square cells and
+/// thresholded by a 4x4 Bayer matrix. Cells above their threshold are solid squares, whitening toward the peak; the
+/// rest still in the glow are faint specks. The grid is fixed to the window, so the pattern stays put while the
+/// light moves over it.
+fn light(x: f32, w: f32, lit: &Lit, t: f32) -> impl IntoElement {
+    const CELL: f32 = 3.;
+    const ROWS: usize = 6;
+    const BAYER: [f32; 16] = [
+        0., 8., 2., 10., 12., 4., 14., 6., 3., 11., 1., 9., 15., 7., 13., 5.,
+    ];
+    let (rgb, a, mix) = (lit.rgb, lit.a.clamp(0., 1.), lit.colorful);
+    canvas(
+        |_, _, _| {},
+        move |b, _, window, _| {
+            if w <= 0. {
+                return;
+            }
+            let left: f32 = b.origin.x.into();
+            let bottom: f32 = f32::from(b.origin.y) + f32::from(b.size.height);
+            let (mid, half) = (left + x + w / 2., w / 2.);
+            let reach = 0.3 + 0.7 * a;
+            let (c0, c1) = (
+                ((left + x) / CELL).floor() as i32,
+                ((left + x + w) / CELL).ceil() as i32,
+            );
+            for row in 0..ROWS {
+                let fall = (1. - (row as f32 + 0.5) / ROWS as f32 / reach)
+                    .max(0.)
+                    .powf(1.6);
+                if fall <= 0. {
+                    continue;
+                }
+                let cy = bottom - (row as f32 + 0.5) * CELL;
+                for col in c0..c1 {
+                    let cx = (col as f32 + 0.5) * CELL;
+                    let fx = (1. - (cx - mid).abs() / half).max(0.);
+                    let i = fx.powf(0.9) * fall * (0.55 + 0.45 * a);
+                    if i <= 0.02 {
+                        continue;
+                    }
+                    let h = (i.powf(0.65) * 1.15).min(1.);
+                    let th = BAYER[(row & 3) * 4 + (col & 3) as usize] / 16.;
+                    let rgb = if mix > 0. {
+                        let r = rainbow(cx - mid, half, t);
+                        std::array::from_fn(|i| rgb[i] + (r[i] - rgb[i]) * mix)
+                    } else {
+                        rgb
+                    };
+                    let (side, c) = if h >= th * 0.92 + 0.03 {
+                        // Toward the peak the color runs to white.
+                        let k = ((h - 0.7) / 0.3).max(0.) * 0.6;
+                        let v = |c: f32| c + (1. - c) * k;
+                        (CELL * 0.8, color([v(rgb[0]), v(rgb[1]), v(rgb[2]), 1.]))
+                    } else if h >= 0.06 {
+                        (CELL * 0.4, color([rgb[0], rgb[1], rgb[2], 0.3]))
+                    } else {
+                        continue;
+                    };
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(px(cx - side / 2.), px(cy - side / 2.)),
+                            size(px(side), px(side)),
+                        ),
+                        c,
+                    ));
+                }
+            }
+        },
+    )
+    .absolute()
+    .left_0()
+    .right_0()
+    .bottom_0()
+    .h(px(ROWS as f32 * CELL))
+}
+
+/// Listening colors, one per lobe: the middle lobe first, then alternating left and right outward.
+const RAINBOW: [u32; 7] = [
+    0xff4678, 0x3cbeff, 0xaf46ff, 0x3cdc82, 0xff9628, 0x5a64ff, 0x28c8be,
+];
+
+/// The listening color `dx` from the light's middle (`half` is half its width): the lobe colors blended by nearness,
+/// each lobe swaying a little over time so the colors drift, then pushed a bit more saturated.
+fn rainbow(dx: f32, half: f32, t: f32) -> [f32; 4] {
+    const SLOT: [f32; 7] = [0., -1., 1., -2., 2., -3., 3.];
+    let sigma = (half * 0.24).max(6.);
+    let (mut sum, mut c) = (0., [0f32; 3]);
+    for (k, hex) in RAINBOW.iter().enumerate() {
+        let at = half * (SLOT[k] / 3. * 0.8 + 0.08 * (t * 0.9 + k as f32 * 1.7).sin());
+        let d = (dx - at) / sigma;
+        let wk = (-d * d).exp();
+        let v = rgba(hex << 8 | 0xff);
+        sum += wk;
+        for i in 0..3 {
+            c[i] += v[i] * wk;
+        }
+    }
+    if sum < 1e-6 {
+        return rgba(RAINBOW[0] << 8 | 0xff);
+    }
+    let c = c.map(|v| v / sum);
+    let l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    let s = |v: f32| (l + (v - l) * 1.35).clamp(0., 1.);
+    [s(c[0]), s(c[1]), s(c[2]), 1.]
 }
 
 /// Translucent key cap for the dark panel.
@@ -748,6 +826,7 @@ impl Render for Hud {
         // The light runs between the corner curves, so it never spills past the rounded edge.
         let track = panel_w - 2. * RADIUS;
         let lit = self.current();
+        let t = self.clock.elapsed().as_secs_f32();
         if busy || (self.visible && self.sizing()) {
             self.last = Some(now);
             window.request_animation_frame();
@@ -775,11 +854,11 @@ impl Render for Hud {
                         .opacity(self.opacity())
                         .w(px(PANEL_MIN_W))
                         .h(px(PANEL_PAD_Y))
-                        .child(light(RADIUS + lit.x * track, lit.w * track, lit.rgb, lit.a)),
+                        .child(light(RADIUS + lit.x * track, lit.w * track, &lit, t)),
                 )
                 .into_any_element();
         }
-        let edge = light(RADIUS + lit.x * track, lit.w * track, lit.rgb, lit.a);
+        let edge = light(RADIUS + lit.x * track, lit.w * track, &lit, t);
         // The text wraps at the widest panel and is clipped to the rows in view, scrolled to keep the newest row
         // last; the panel easing around it never reflows it.
         let line = div()
@@ -816,6 +895,8 @@ impl Render for Hud {
                     ])
                     .font(mav::font())
                     .text_color(mav::hex(WHITE))
+                    // Under the text: the dithered light rises into the bottom padding.
+                    .child(edge)
                     .when_some(header, |d, (label, hints)| {
                         d.child(
                             div()
@@ -842,8 +923,7 @@ impl Render for Hud {
                                 })),
                         )
                     })
-                    .child(line.child(scroll.child(StyledText::new(text).with_highlights(fades))))
-                    .child(edge),
+                    .child(line.child(scroll.child(StyledText::new(text).with_highlights(fades)))),
             )
             .into_any_element()
     }
