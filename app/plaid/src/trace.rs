@@ -11,15 +11,20 @@ pub fn log(s: &str) {
     );
     eprint!("{line}");
     let path = crate::config::data_dir().join("events.log");
-    let Ok(mut f) = std::fs::OpenOptions::new()
-        .read(true)
-        .append(true)
-        .open(&path)
-    else {
+    // Threads log concurrently from launch on: create in append mode so a second first writer can't truncate.
+    let open = || {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .open(&path)
+    };
+    let Ok(mut f) = open().or_else(|_| {
         if let Some(d) = path.parent() {
             let _ = std::fs::create_dir_all(d);
         }
-        let _ = std::fs::write(&path, line);
+        open()
+    }) else {
         return;
     };
     let end = f.metadata().map(|m| m.len()).unwrap_or(0);
