@@ -732,10 +732,9 @@ impl Refine {
         cx.notify();
     }
 
-    /// 风格: the per-app summary, then one card per style.
+    /// 风格: one card per style.
     fn styles_block(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let list = llm::styles(config::raw);
-        let used = used_apps(&self.model.read(cx).store);
         let new = small_button(
             "style-new",
             "+ 新建",
@@ -761,7 +760,6 @@ impl Refine {
                     )))
                     .child(new),
             )
-            .child(styles_summary(&list, &used))
             .child(div().grid().grid_cols(2).gap(px(10.)).children(cards))
     }
 
@@ -1333,84 +1331,6 @@ fn app_chip(
             d.child(div().text_size(px(11.)).child("· 不润色"))
         })
         .child(x)
-}
-
-/// Which styles each app gets, app first: "Rex：编程术语 + 精炼".
-fn styles_summary(list: &[llm::Style], used: &[String]) -> Div {
-    let mut apps: Vec<String> = vec![];
-    for st in list {
-        for a in &st.apps {
-            if !apps.iter().any(|x| x.eq_ignore_ascii_case(a)) {
-                apps.push(a.clone());
-            }
-        }
-    }
-    // Most used first, the rest in list order.
-    apps.sort_by_key(|a| {
-        used.iter()
-            .position(|u| u.eq_ignore_ascii_case(a))
-            .unwrap_or(usize::MAX)
-    });
-    let names = |app: Option<&str>| -> Vec<String> {
-        list.iter()
-            .filter(|s| s.applies(app))
-            .map(|s| s.name.clone())
-            .collect()
-    };
-    let mut lines: Vec<(String, Vec<String>, bool)> = apps
-        .iter()
-        .map(|a| {
-            let live = llm::level(config::value) >= llm::Level::Light;
-            (a.clone(), names(Some(a)), live)
-        })
-        .collect();
-    let rest = names(None);
-    if !rest.is_empty() {
-        let live = llm::level(config::value) >= llm::Level::Light;
-        lines.push((
-            if apps.is_empty() {
-                "所有应用".into()
-            } else {
-                "其他应用".into()
-            },
-            rest,
-            live,
-        ));
-    }
-    if lines.is_empty() {
-        return div().child(hint("还没有风格分配给应用：在卡片上点「+ 应用」。"));
-    }
-    group_body()
-        .gap(px(6.))
-        .children(lines.into_iter().map(|(app, names, live)| {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .h(px(24.))
-                .child(
-                    div()
-                        .w(px(150.))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .child(app_icon(&app, 18.).map_or_else(
-                            || app_badge(&app).size(px(18.)).into_any_element(),
-                            IntoElement::into_any_element,
-                        ))
-                        .child(div().min_w_0().truncate().child(app)),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(hex(if live { VIOLET } else { TEXT3 }))
-                        .child(names.join(" + ")),
-                )
-                .when(!live, |d| d.child(hint("该应用不调用 LLM")))
-        }))
 }
 
 fn timeout_ms() -> u64 {
@@ -2014,7 +1934,6 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     ui.click("style-new")?;
     ui.key("cmd-a")?;
     ui.type_text("短句")?;
-    ui.scroll("style-new", -300.)?;
     ui.click("style-4-prompt")?;
     ui.type_text("每句不超过二十字")?;
     let list = llm::styles(config::raw);
