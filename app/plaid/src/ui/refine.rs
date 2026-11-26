@@ -1456,12 +1456,12 @@ fn preview() -> Div {
     };
     let changed: usize = deleted
         .iter()
-        .map(|r| RULE_SAMPLE[r.clone()].chars().count())
+        .map(|r| plaid_core::records::chars(&RULE_SAMPLE[r.clone()]))
         .sum::<usize>()
         .max(
             inserted
                 .iter()
-                .map(|r| out[r.clone()].chars().count())
+                .map(|r| plaid_core::records::chars(&out[r.clone()]))
                 .sum::<usize>(),
         );
     let label = |tag: &'static str, note: &'static str, right: String, lit: bool| {

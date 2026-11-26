@@ -1196,7 +1196,7 @@ impl Controller {
             .setting("llmMinChars")
             .and_then(|s| s.parse().ok())
             .unwrap_or(REFINE_MIN_CHARS);
-        if raw.chars().count() < min {
+        if crate::records::chars(&raw) < min {
             p.log("refine skipped: short");
             return self.deliver(&raw, &raw, "off", None, asr_at, true, p);
         }
@@ -1854,7 +1854,7 @@ mod tests {
     #[test]
     fn rerefine_rewrites_the_record_without_pasting() {
         let mut t = T::new();
-        refining(&mut t, 1, "嗯你好，我们今天下午三点在公司楼下见面吧");
+        refining(&mut t, 1, "嗯你好，我们今天下午三点在公司楼下见面吧好吗");
         llm(&mut t, 1, Err("timeout"));
         t.flush();
         let id = t.c.store.all.last().unwrap().at;
@@ -1966,12 +1966,12 @@ mod tests {
     #[test]
     fn refine_pastes_the_rewrite_or_fails_open() {
         let mut t = T::new();
-        let out = refining(&mut t, 1, "嗯你好，我们今天下午三点在公司楼下见面吧");
+        let out = refining(&mut t, 1, "嗯你好，我们今天下午三点在公司楼下见面吧好吗");
         assert!(
             has(&out, "llm 1")
                 && has(
                     &out,
-                    "hud Refining(\"嗯你好，我们今天下午三点在公司楼下见面吧\")"
+                    "hud Refining(\"嗯你好，我们今天下午三点在公司楼下见面吧好吗\")"
                 )
                 && !has(&out, "verify"),
             "{out:?}"
@@ -1989,7 +1989,7 @@ mod tests {
                 r.outcome.as_deref()
             ),
             (
-                "嗯你好，我们今天下午三点在公司楼下见面吧",
+                "嗯你好，我们今天下午三点在公司楼下见面吧好吗",
                 "你好。",
                 "ok",
                 None
@@ -1999,10 +1999,13 @@ mod tests {
 
         for (err, llm_field) in [("HTTP 500: x", "HTTP 500: x"), ("timeout", "timeout")] {
             let mut t = T::new();
-            refining(&mut t, 1, "这是一段识别出来的原文，长度超过二十个字");
+            refining(&mut t, 1, "这是一段识别出来的原文，长度已经超过二十个字");
             let out = llm(&mut t, 1, Err(err));
             assert!(
-                has(&out, "verify 1 这是一段识别出来的原文，长度超过二十个字"),
+                has(
+                    &out,
+                    "verify 1 这是一段识别出来的原文，长度已经超过二十个字"
+                ),
                 "{out:?}"
             );
             t.flush();
@@ -2014,22 +2017,25 @@ mod tests {
     fn refine_interrupted() {
         // esc: paste the raw text now; the late reply is ignored.
         let mut t = T::new();
-        refining(&mut t, 1, "这是一段识别出来的原文，长度超过二十个字");
+        refining(&mut t, 1, "这是一段识别出来的原文，长度已经超过二十个字");
         let out = t.send(Msg::Escape);
         assert!(
-            has(&out, "verify 1 这是一段识别出来的原文，长度超过二十个字"),
+            has(
+                &out,
+                "verify 1 这是一段识别出来的原文，长度已经超过二十个字"
+            ),
             "{out:?}"
         );
         let out = t.flush();
         assert!(
-            has(&out, "paste 这是一段识别出来的原文，长度超过二十个字"),
+            has(&out, "paste 这是一段识别出来的原文，长度已经超过二十个字"),
             "{out:?}"
         );
         assert_eq!(t.c.store.all.last().unwrap().llm, "skipped");
         assert!(llm(&mut t, 1, Ok("改写")).is_empty());
         // New press: the raw text is only saved.
         let mut t = T::new();
-        refining(&mut t, 1, "这是一段识别出来的原文，长度超过二十个字");
+        refining(&mut t, 1, "这是一段识别出来的原文，长度已经超过二十个字");
         let out = t.key(StartHold);
         assert!(has(&out, "session 2") && !has(&out, "verify"), "{out:?}");
         let r = t.c.store.all.last().unwrap();
@@ -2039,7 +2045,7 @@ mod tests {
         );
         // Chord cancel: dropped.
         let mut t = T::new();
-        refining(&mut t, 1, "这是一段识别出来的原文，长度超过二十个字");
+        refining(&mut t, 1, "这是一段识别出来的原文，长度已经超过二十个字");
         assert_eq!(t.key(Cancel), vec!["hud Hide"]);
         assert!(llm(&mut t, 1, Ok("改写")).is_empty());
         assert!(t.c.store.all.is_empty());

@@ -19,7 +19,8 @@ For longer passages, tap the key once to go hands-free and tap again (or press �
 ### Speech in, written text out
 
 Spoken sentences carry fillers like 那个 / 就是 and loose punctuation. With polishing on, an LLM cleans that up
-before pasting, while the strip shows it working. Levels are 关 / 轻度 / 通顺. Short sentences (under 20 characters by default) skip the LLM
+before pasting, while the strip shows it working. Levels are 关 / 轻度 / 通顺. Short sentences (under 20 characters or
+words by default) skip the LLM
 so they paste immediately.
 
 ![Polishing before paste](docs/screenshots/hud-refining.png)

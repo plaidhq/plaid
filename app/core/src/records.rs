@@ -2,10 +2,12 @@
 use crate::text::{self, is_alnum, is_ideographic, is_newline, is_punct, is_symbol, trim_ws};
 use unicode_segmentation::UnicodeSegmentation;
 
-/// Characters as a reader counts them in mixed text: one per CJK ideograph, one per run of letters/digits.
+/// Characters as a reader counts them in mixed text: one per CJK ideograph, one per word of letters/digits
+/// ("don't", "3.5" and "2,000" are one word each).
 pub fn chars(s: &str) -> usize {
     let (mut n, mut in_word) = (0, false);
-    for c in s.chars() {
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
         if is_ideographic(c) {
             n += 1;
             in_word = false;
@@ -13,7 +15,11 @@ pub fn chars(s: &str) -> usize {
             n += !in_word as usize;
             in_word = true;
         } else {
-            in_word = false;
+            let joins = matches!(c, '\'' | '’' | '.' | ',')
+                && it
+                    .peek()
+                    .is_some_and(|&d| is_alnum(d) && !is_ideographic(d));
+            in_word &= joins;
         }
     }
     n
@@ -82,4 +88,16 @@ fn suffix(s: &str, n: usize) -> &str {
 fn prefix(s: &str, n: usize) -> &str {
     let end = s.grapheme_indices(true).nth(n).map_or(s.len(), |(i, _)| i);
     &s[..end]
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn counts_ideographs_and_words() {
+        assert_eq!(super::chars("今天开会。"), 4);
+        assert_eq!(super::chars("Ship the release today."), 4);
+        assert_eq!(super::chars("讨论Q4的预算，大概 2,000 万"), 10);
+        assert_eq!(super::chars("don't stop at 3.5"), 4);
+        assert_eq!(super::chars("end. Next"), 2);
+    }
 }

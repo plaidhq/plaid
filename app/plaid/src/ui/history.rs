@@ -1179,18 +1179,12 @@ impl History {
         let (deleted, inserted) = super::perf::diff(&original, &r.text);
         let changed: usize = deleted
             .iter()
-            .map(|g| {
-                original[g.clone()]
-                    .chars()
-                    .filter(|c| !c.is_whitespace())
-                    .count()
-            })
-            .chain(inserted.iter().map(|g| {
-                r.text[g.clone()]
-                    .chars()
-                    .filter(|c| !c.is_whitespace())
-                    .count()
-            }))
+            .map(|g| plaid_core::records::chars(&original[g.clone()]))
+            .chain(
+                inserted
+                    .iter()
+                    .map(|g| plaid_core::records::chars(&r.text[g.clone()])),
+            )
             .sum();
         let struck = HighlightStyle {
             color: Some(hex(TEXT3)),
@@ -1335,7 +1329,7 @@ impl History {
         });
 
         let llm_bad = !matches!(r.llm.as_str(), "ok" | "off");
-        let chars = r.text.chars().filter(|c| !c.is_whitespace()).count() as i64;
+        let chars = plaid_core::records::chars(&r.text) as i64;
         let facts = [
             (
                 "松开 → 粘贴",
@@ -1785,10 +1779,7 @@ fn record_row(r: &Record, selected: bool, latency: bool, retrying: bool) -> Stat
             .when(r.edited.is_some(), |d| {
                 d.child(icon("plaid/pencil.svg", 10., hex(AMBER)))
             })
-            .child(format!(
-                "{} 字",
-                r.text.chars().filter(|c| !c.is_whitespace()).count()
-            ))
+            .child(format!("{} 字", plaid_core::records::chars(&r.text)))
     } else {
         div().text_color(hex(color)).child(tag)
     };
