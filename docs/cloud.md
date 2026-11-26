@@ -14,7 +14,7 @@ one by one; BYOK stays the default and keeps working exactly as before.
   in-memory database. No ORM: the queries are a handful of inserts and sums.
 - The server keeps no text and no audio, on any path, error paths included. Logs carry ids, sizes and timings
   only.
-- Keys (Volc, LLM) come from the environment, never from files or the database.
+- Settings, keys included (Volc, LLM), come from one TOML config file, never from the database.
 
 ## Accounts
 
@@ -46,7 +46,7 @@ bad_request, disconnected), never upstream text.
 - Amounts are integer millionths of a credit. The unit's display name is `plaid_core::cloud::CREDIT`, the one
   place to rename it; prices are set in that unit.
 - ASR is priced per hour of audio sent to Volc (`sent_ms`, after the server-side gate). The LLM is priced per
-  million input and output tokens, from the provider's `usage` field. All prices come from the environment.
+  million input and output tokens, from the provider's `usage` field. All prices come from the config file.
 - The balance is checked when a request starts; at zero or below it is refused with `quota`, and the device
   shows `Cloud credit 已用完，请联系管理员充值`. It does not fall back to BYOK. A request in progress is never cut
   off, so the request that crosses zero leaves the balance slightly negative.
@@ -174,21 +174,19 @@ Not planned:
 
 ## Running it
 
+All settings are in one TOML file, `plaid-cloud.toml` in the working directory or `--config FILE`. The
+annotated template is `app/cloud/plaid-cloud.example.toml`. Only `[volc] key` is required. Without `[llm]`,
+dictations are not refined. Without `[prices]`, credit is never spent. Unknown keys are an error. The file holds
+keys, so keep it `chmod 600`; the server warns at startup when others can read it. `db` is relative to the
+file's directory.
+
 ```
-PLAID_VOLC_KEY=…                       # required
-PLAID_LLM_BASE=… PLAID_LLM_MODEL=…     # both or neither; without them dictations are not refined
-PLAID_LLM_KEY=…  PLAID_LLM_FORMAT=openai|anthropic
-PLAID_LLM_EXTRA='{"reasoning_effort":"none"}'   # merged into the body; reasoning on costs ~1 s and 30x output tokens
-PLAID_LLM_TIMEOUT_MS=8000              # cap on the device's timeout
-PLAID_LLM_PROXY=socks5h://[user:pass@]host:port   # LLM traffic only (also socks5, http, https); unset = direct
-PLAID_PRICE_ASR_HOUR=… PLAID_PRICE_LLM_IN=… PLAID_PRICE_LLM_OUT=…   # credit per hour / per million tokens; unset = 0
-PLAID_CLOUD_DB=plaid-cloud.db PLAID_CLOUD_ADDR=127.0.0.1:8787
-plaid-cloud serve
-plaid-cloud admin invite <name> [--credit N]
-plaid-cloud admin credit <name> <N|-N>
+plaid-cloud --config /etc/plaid-cloud/plaid-cloud.toml serve
+plaid-cloud --config /etc/plaid-cloud/plaid-cloud.toml admin invite <name> [--credit N]
+plaid-cloud --config /etc/plaid-cloud/plaid-cloud.toml admin credit <name> <N|-N>
 ```
 
-`PLAID_LLM_PROXY` carries every server→LLM request: refine, learn and the warm-up. Volc stays direct. With
+`llm.proxy` carries every server→LLM request: refine, learn and the warm-up. Volc stays direct. With
 `socks5h` the proxy resolves the LLM host; with `socks5` the server does. An invalid value stops the server at
 startup; the log shows only `scheme://host:port`, never credentials.
 

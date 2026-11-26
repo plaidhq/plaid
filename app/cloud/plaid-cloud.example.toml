@@ -1,0 +1,29 @@
+# Plaid Cloud server settings. Copy to plaid-cloud.toml (or pass --config FILE) and chmod 600: it holds keys.
+# Unknown keys are an error, so a typo stops the server instead of being ignored.
+
+listen = "127.0.0.1:8787"
+# SQLite file; a relative path is relative to this file's directory.
+db = "plaid-cloud.db"
+
+[volc]
+key = ""
+# url = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
+# resource = "volc.seedasr.sauc.duration"
+
+# Remove this section to skip refine: dictations come back as recognized.
+[llm]
+format = "openai"            # openai | anthropic
+base = "https://api.cerebras.ai/v1"
+model = "qwen-3.8-27b"
+key = ""
+timeout_ms = 8000            # cap on the device's timeout
+# Merged into every request body; reasoning on costs ~1 s and 30x output tokens.
+extra = { reasoning_effort = "none" }
+# LLM traffic only (refine, learn, warm-up); Volc stays direct. Also socks5, http, https.
+# proxy = "socks5h://user:pass@host:1080"
+
+# Credit per hour of audio sent to Volc and per million LLM tokens. All 0: credit is never spent.
+[prices]
+asr_hour = 0
+llm_in = 0
+llm_out = 0

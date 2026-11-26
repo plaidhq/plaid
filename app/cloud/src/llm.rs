@@ -5,7 +5,7 @@ use crate::log;
 use plaid_core::llm::{self, Failure};
 use std::time::{Duration, Instant};
 
-/// `proxy` (PLAID_LLM_PROXY) carries every LLM request; None keeps reqwest's default (direct, or the standard
+/// `proxy` (llm.proxy) carries every LLM request; None keeps reqwest's default (direct, or the standard
 /// proxy environment variables).
 pub fn client(proxy: Option<&reqwest::Url>) -> reqwest::Client {
     let mut b = reqwest::Client::builder();

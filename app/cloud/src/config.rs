@@ -1,5 +1,8 @@
-//! Server settings, all from the environment. Keys never come from files or the database.
+//! Server settings, from one TOML file (`--config`, default plaid-cloud.toml; example in
+//! cloud/plaid-cloud.example.toml). Keys live only there, never in the database.
 use plaid_core::llm::Endpoint;
+use serde::Deserialize;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Clone)]
@@ -19,9 +22,9 @@ pub struct Llm {
     pub proxy: Option<reqwest::Url>,
 }
 
-/// Parses PLAID_LLM_PROXY. The port is required so the startup log can show where traffic goes.
+/// Parses llm.proxy. The port is required so the startup log can show where traffic goes.
 pub fn proxy(v: &str) -> Result<reqwest::Url, String> {
-    let bad = |why: &str| format!("PLAID_LLM_PROXY: {why} (expected socks5h://host:port)");
+    let bad = |why: &str| format!("llm.proxy: {why} (expected socks5h://host:port)");
     let url = reqwest::Url::parse(v.trim()).map_err(|_| bad("not a URL"))?;
     if !matches!(url.scheme(), "socks5" | "socks5h" | "http" | "https") {
         return Err(bad("scheme must be socks5, socks5h, http or https"));
@@ -83,54 +86,139 @@ pub fn micros(amount: &str) -> Result<i64, String> {
     Ok((y * 1e6).round() as i64)
 }
 
-impl Config {
-    pub fn from_env() -> Result<Config, String> {
-        Self::from(|k| std::env::var(k).ok().filter(|v| !v.trim().is_empty()))
+/// The config file as written.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct File {
+    pub listen: Option<String>,
+    /// Relative to the config file's directory.
+    pub db: Option<PathBuf>,
+    pub volc: Option<FileVolc>,
+    /// Absent: dictations are never refined.
+    pub llm: Option<FileLlm>,
+    #[serde(default)]
+    pub prices: FilePrices,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileVolc {
+    pub key: String,
+    pub url: Option<String>,
+    pub resource: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileLlm {
+    pub format: Option<String>,
+    pub base: String,
+    pub model: String,
+    pub key: Option<String>,
+    /// Merged over each request body.
+    pub extra: Option<serde_json::Map<String, serde_json::Value>>,
+    pub timeout_ms: Option<u64>,
+    pub proxy: Option<String>,
+}
+
+/// Credit per hour of audio and per million tokens; absent = 0.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct FilePrices {
+    #[serde(default)]
+    pub asr_hour: f64,
+    #[serde(default)]
+    pub llm_in: f64,
+    #[serde(default)]
+    pub llm_out: f64,
+}
+
+/// The parsed file plus where it was read from, so relative paths resolve against it.
+pub struct Settings {
+    pub file: File,
+    dir: PathBuf,
+}
+
+impl Settings {
+    pub fn load(path: &Path) -> Result<Settings, String> {
+        let text =
+            std::fs::read_to_string(path).map_err(|e| format!("config {}: {e}", path.display()))?;
+        let file = Self::parse(&text).map_err(|e| format!("config {}: {e}", path.display()))?;
+        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        Ok(Settings { file, dir })
     }
 
-    pub fn from(env: impl Fn(&str) -> Option<String>) -> Result<Config, String> {
-        let key = env("PLAID_VOLC_KEY").ok_or("PLAID_VOLC_KEY is not set")?;
-        let llm_proxy = env("PLAID_LLM_PROXY").map(|v| proxy(&v)).transpose()?;
-        let llm = match (env("PLAID_LLM_BASE"), env("PLAID_LLM_MODEL")) {
-            (Some(base), Some(model)) => Some(Llm {
-                endpoint: Endpoint::new(
-                    &env("PLAID_LLM_FORMAT").unwrap_or_else(|| "openai".into()),
-                    &base,
-                    &model,
-                ),
-                key: env("PLAID_LLM_KEY"),
-                extra: env("PLAID_LLM_EXTRA"),
-                proxy: llm_proxy,
-            }),
-            (None, None) => None,
-            _ => return Err("set both PLAID_LLM_BASE and PLAID_LLM_MODEL, or neither".into()),
+    pub fn parse(text: &str) -> Result<File, String> {
+        toml::from_str(text).map_err(|e| e.to_string())
+    }
+
+    pub fn listen(&self) -> String {
+        self.file
+            .listen
+            .clone()
+            .unwrap_or_else(|| "127.0.0.1:8787".into())
+    }
+
+    pub fn db(&self) -> PathBuf {
+        let db = self
+            .file
+            .db
+            .clone()
+            .unwrap_or_else(|| "plaid-cloud.db".into());
+        self.dir.join(db)
+    }
+}
+
+fn price(name: &str, v: f64) -> Result<f64, String> {
+    if !v.is_finite() || v < 0. {
+        return Err(format!("prices.{name}: not an amount: {v}"));
+    }
+    Ok((v * 1e6).round())
+}
+
+fn set(v: Option<String>) -> Option<String> {
+    v.filter(|s| !s.trim().is_empty())
+}
+
+impl Config {
+    pub fn from(file: &File) -> Result<Config, String> {
+        let volc = file.volc.as_ref().ok_or("[volc] is missing")?;
+        let key = set(Some(volc.key.clone())).ok_or("volc.key is empty")?;
+        let (llm, timeout) = match &file.llm {
+            Some(l) => {
+                if l.base.trim().is_empty() || l.model.trim().is_empty() {
+                    return Err("llm.base and llm.model are required in [llm]".into());
+                }
+                let llm = Llm {
+                    endpoint: Endpoint::new(
+                        l.format.as_deref().unwrap_or("openai"),
+                        &l.base,
+                        &l.model,
+                    ),
+                    key: set(l.key.clone()),
+                    extra: l
+                        .extra
+                        .as_ref()
+                        .map(|m| serde_json::Value::Object(m.clone()).to_string()),
+                    proxy: set(l.proxy.clone()).map(|v| proxy(&v)).transpose()?,
+                };
+                (Some(llm), l.timeout_ms.unwrap_or(8000))
+            }
+            None => (None, 8000),
         };
-        let price = |k: &str| -> Result<f64, String> {
-            env(k).map_or(Ok(0.), |v| {
-                micros(&v)
-                    .map(|m| m as f64)
-                    .map_err(|e| format!("{k}: {e}"))
-            })
-        };
-        let timeout = env("PLAID_LLM_TIMEOUT_MS")
-            .map(|v| {
-                v.parse::<u64>()
-                    .map_err(|_| format!("PLAID_LLM_TIMEOUT_MS: {v}"))
-            })
-            .transpose()?
-            .unwrap_or(8000);
+        let p = &file.prices;
         Ok(Config {
             volc: Volc {
                 key,
-                url: env("PLAID_VOLC_URL"),
-                resource: env("PLAID_VOLC_RESOURCE"),
+                url: set(volc.url.clone()),
+                resource: set(volc.resource.clone()),
             },
             llm,
             llm_timeout: Duration::from_millis(timeout),
             prices: Prices {
-                asr_hour: price("PLAID_PRICE_ASR_HOUR")?,
-                llm_in: price("PLAID_PRICE_LLM_IN")?,
-                llm_out: price("PLAID_PRICE_LLM_OUT")?,
+                asr_hour: price("asr_hour", p.asr_hour)?,
+                llm_in: price("llm_in", p.llm_in)?,
+                llm_out: price("llm_out", p.llm_out)?,
             },
         })
     }
@@ -140,32 +228,66 @@ impl Config {
 mod tests {
     use super::*;
 
+    fn cfg(text: &str) -> Result<Config, String> {
+        Config::from(&Settings::parse(text)?)
+    }
+
     #[test]
     fn reads_prices() {
-        let env = |k: &str| match k {
-            "PLAID_VOLC_KEY" => Some("k".to_string()),
-            "PLAID_PRICE_ASR_HOUR" => Some("2.3".into()),
-            "PLAID_PRICE_LLM_IN" => Some("4".into()),
-            _ => None,
-        };
-        let c = Config::from(env).unwrap();
+        let c = cfg("[volc]\nkey = \"k\"\n[prices]\nasr_hour = 2.3\nllm_in = 4\n").unwrap();
         assert!(c.llm.is_none());
         assert_eq!(c.llm_timeout, Duration::from_millis(8000));
         // 10 s of audio at 2.3/h, 1000 input tokens at 4/M.
         assert_eq!(c.prices.cost(10_000, 1000, 0), 6389 + 4000);
-        assert!(Config::from(|k| (k == "PLAID_LLM_BASE").then(|| "x".into())).is_err());
+        assert!(cfg("[volc]\nkey = \"k\"\n[prices]\nllm_in = -1\n").is_err());
+        assert!(cfg("[volc]\nkey = \"\"\n").is_err());
+        assert!(cfg("").is_err());
+        assert!(cfg("[volc]\nkey = \"k\"\n[llm]\nbase = \"x\"\n").is_err());
+        // A typo is an error, not a silently ignored setting.
+        assert!(cfg("[volc]\nkey = \"k\"\n[prices]\nasr_hours = 1\n").is_err());
         assert_eq!(micros("0.5"), Ok(500_000));
         assert!(micros("-1").is_err() && micros("abc").is_err());
     }
 
     #[test]
+    fn reads_llm() {
+        let c = cfg(r#"
+[volc]
+key = "k"
+[llm]
+base = "https://api.example.com/v1"
+model = "m"
+timeout_ms = 5000
+extra = { reasoning_effort = "none" }
+"#)
+        .unwrap();
+        let l = c.llm.unwrap();
+        assert_eq!(l.extra.as_deref(), Some(r#"{"reasoning_effort":"none"}"#));
+        assert_eq!(c.llm_timeout, Duration::from_millis(5000));
+        assert!(l.proxy.is_none() && l.key.is_none());
+    }
+
+    #[test]
+    fn resolves_db_against_the_config_dir() {
+        let s = Settings {
+            file: Settings::parse("db = \"data/p.db\"").unwrap(),
+            dir: "/etc/plaid".into(),
+        };
+        assert_eq!(s.db(), PathBuf::from("/etc/plaid/data/p.db"));
+        let s = Settings {
+            file: Settings::parse("db = \"/var/lib/p.db\"").unwrap(),
+            dir: "/etc/plaid".into(),
+        };
+        assert_eq!(s.db(), PathBuf::from("/var/lib/p.db"));
+        assert_eq!(s.listen(), "127.0.0.1:8787");
+    }
+
+    #[test]
     fn reads_proxy() {
-        let with = |p: &'static str| {
-            Config::from(move |k: &str| match k {
-                "PLAID_VOLC_KEY" | "PLAID_LLM_BASE" | "PLAID_LLM_MODEL" => Some("x".to_string()),
-                "PLAID_LLM_PROXY" => Some(p.into()),
-                _ => None,
-            })
+        let with = |p: &str| {
+            cfg(&format!(
+                "[volc]\nkey = \"x\"\n[llm]\nbase = \"x\"\nmodel = \"x\"\nproxy = \"{p}\"\n"
+            ))
         };
         let c = with("socks5h://user:secret@127.0.0.1:1080").unwrap();
         let url = c.llm.unwrap().proxy.unwrap();
