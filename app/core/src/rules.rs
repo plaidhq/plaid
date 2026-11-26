@@ -4,7 +4,8 @@
 
 use crate::text::is_ideographic;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Rules {
     /// Drop standalone 嗯/呃/那个 clauses and stray 嗯/呃.
     pub fillers: bool,

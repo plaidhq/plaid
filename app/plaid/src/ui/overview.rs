@@ -1194,6 +1194,7 @@ impl Render for Overview {
 pub(super) fn fixture_facts() -> super::Facts {
     super::Facts {
         volc_key: true,
+        cloud_token: false,
         mics: vec![
             (
                 "BuiltInMicrophoneDevice".into(),

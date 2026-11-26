@@ -2,8 +2,10 @@
 //! on one thread, every side effect goes through `Platform`. Inputs from other threads (mic, ASR, timers,
 //! focus reads) carry the utterance generation they belong to; stale ones are dropped.
 use crate::actions::{self, Action, Parsed};
+use crate::cloud;
 use crate::gate::Gate;
 use crate::llm::{self, Endpoint, Level};
+use crate::refine::{self, Plan, Skip};
 use crate::rules::Rules;
 use crate::session::{Event, Session};
 use crate::store::{Record, Store};
@@ -24,6 +26,8 @@ const LEARN_TIMEOUT: Duration = Duration::from_secs(20);
 const CONFIRM_WAIT: Duration = Duration::from_secs(8);
 /// Default for `llmMinChars`: shorter results paste as recognized; the LLM rarely changes them, and it adds 0.7-3.6 s.
 pub const REFINE_MIN_CHARS: usize = 20;
+/// Past the plan's timeout, how long the device waits for Cloud's refine before pasting the recognized text.
+const CLOUD_GRACE: Duration = Duration::from_millis(1500);
 /// UTF-16 units of the field text before the caret sent as ASR context (commands get all of `Msg::Field`'s).
 const ASR_BEFORE: usize = 300;
 
@@ -69,6 +73,8 @@ pub enum Timer {
     LowInput,
     /// Drop a command still waiting for ⏎.
     Confirm,
+    /// Give up on the Cloud refine and paste the recognized text.
+    Refine,
 }
 
 #[derive(Debug)]
@@ -156,8 +162,9 @@ pub trait Platform {
     /// Post `msg` to the controller after `after`.
     fn timer(&mut self, after: Duration, msg: Msg);
     fn setting(&mut self, key: &str) -> Option<String>;
-    /// Opens an ASR session whose events come back as `Msg::Session { generation }`.
-    fn open_session(&mut self, generation: u64) -> Result<Session, String>;
+    /// Opens an ASR session (Volc, or Plaid Cloud when `cloud`) whose events come back as
+    /// `Msg::Session { generation }`.
+    fn open_session(&mut self, generation: u64, cloud: bool) -> Result<Session, String>;
     /// Name of the frontmost app; also remembers it as the paste target for this generation.
     fn front_app(&mut self, generation: u64) -> (Option<String>, Option<String>);
     /// Reads the focused field off-thread, then posts `Msg::Field`.
@@ -177,6 +184,8 @@ pub trait Platform {
     fn llm_key(&mut self, base: &str) -> Option<String>;
     /// Sends the request off-thread, then posts `Msg::Llm { id }`.
     fn llm(&mut self, id: u64, req: llm::Request);
+    /// Sends `text` through Plaid Cloud's LLM off-thread, then posts `Msg::Llm { id }`.
+    fn cloud_llm(&mut self, id: u64, kind: cloud::Kind, text: String, plan: Plan);
     /// Opens a pooled connection to the refine endpoint off-thread, so the request after release skips the handshake.
     fn warm(&mut self, base: &str);
     /// After a paste: watch the generation's field for manual corrections of `text`; posts `Msg::Edited`.
@@ -236,6 +245,10 @@ struct Utterance {
     wake: String,
     /// ASR final before the local rules, set only when they changed it.
     asr: Option<String>,
+    /// Recognized and refined by Plaid Cloud (serviceMode, read at key-down).
+    cloud: bool,
+    /// The refine plan sent with a Cloud `begin`; the device decides with the same one.
+    plan: Option<Plan>,
 }
 
 impl Utterance {
@@ -327,6 +340,13 @@ fn style_names(p: &mut impl Platform, app: Option<&str>) -> String {
     }
 }
 
+/// `llmTimeoutMs`.
+fn timeout_ms(p: &mut impl Platform) -> u64 {
+    p.setting("llmTimeoutMs")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4000)
+}
+
 fn ms(from: Instant, to: Instant) -> i64 {
     to.saturating_duration_since(from).as_millis() as i64
 }
@@ -341,12 +361,15 @@ struct Refine {
     id: u64,
     raw: String,
     asr_at: Instant,
+    /// The Cloud session doing the refine; dropping it cancels the server's LLM call.
+    cloud: Option<Session>,
 }
 
 /// Background learning (BackgroundLearner): one request at a time, results applied only while idle.
 #[derive(Default)]
 struct Learner {
-    queue: VecDeque<(DateTime<Utc>, String, Endpoint)>,
+    /// No endpoint: through Plaid Cloud.
+    queue: VecDeque<(DateTime<Utc>, String, Option<Endpoint>)>,
     running: Option<(u64, DateTime<Utc>, String)>,
     done: Vec<(DateTime<Utc>, String)>,
 }
@@ -407,6 +430,10 @@ impl Controller {
     /// Record being recognized again, if any.
     pub fn recovering(&self) -> Option<DateTime<Utc>> {
         self.recovering
+    }
+
+    pub fn rerefining(&self) -> bool {
+        self.rerefining.is_some()
     }
 
     pub fn idle(&self) -> bool {
@@ -485,8 +512,9 @@ impl Controller {
                 if current(generation) && self.phase == (Phase::Finalizing { finished: false }) =>
             {
                 self.phase = Phase::Finalizing { finished: true };
-                if let Some(u) = &mut self.u {
-                    u.begun = true;
+                // Begins without context if the field read is still out (a Cloud start must carry the plan).
+                self.begin(vec![], p);
+                if let Some(u) = &self.u {
                     p.log(&format!(
                         "end levels={} p90={} sentMs={}",
                         u.levels.len(),
@@ -514,13 +542,13 @@ impl Controller {
                     .filter(|u| u.use_ctx)
                     .map(|u| u.dialog(before_asr.as_deref()));
                 if let Some(d) = dialog {
-                    self.begin(d);
+                    self.begin(d, p);
                 }
             }
             Msg::Timer { generation, timer } if current(generation) => match timer {
                 Timer::Context => {
                     if let Some(d) = self.u.as_ref().map(|u| u.dialog(None)) {
-                        self.begin(d);
+                        self.begin(d, p);
                     }
                 }
                 Timer::Tail => {
@@ -536,7 +564,32 @@ impl Controller {
                     }
                 }
                 Timer::Confirm => self.confirm = None,
+                Timer::Refine => {
+                    if let Some(r) = self.refine.take_if(|r| r.cloud.is_some()) {
+                        p.log("refine: Cloud did not answer in time");
+                        let f = llm::Failure {
+                            message: "Cloud refine timed out".into(),
+                            timed_out: true,
+                        };
+                        self.refined(r, Err(f), p);
+                    }
+                }
             },
+            Msg::Session {
+                event: Event::Usage(u),
+                ..
+            } => p.log(&format!(
+                "cloud usage receivedMs={} sentMs={} asrWaitMs={} llmMs={} tokens={}/{} costMicros={} balanceMicros={}",
+                u.received_ms, u.sent_ms, u.asr_wait_ms, u.llm_ms, u.llm_in, u.llm_out, u.cost_micros, u.balance_micros
+            )),
+            Msg::Session {
+                generation,
+                event: Event::Refined(r),
+            } if current(generation) => {
+                if let Some(rf) = self.refine.take_if(|r| r.cloud.is_some()) {
+                    self.refined(rf, r, p);
+                }
+            }
             Msg::Session { generation, event } if current(generation) && self.session.is_some() => {
                 match event {
                     Event::Text(t) => {
@@ -550,6 +603,7 @@ impl Controller {
                         p.hud(Hud::Text { text: t, command });
                     }
                     Event::Done(r) => self.finished(r, p),
+                    Event::Refined(_) | Event::Usage(_) => {}
                 }
             }
             Msg::Verified {
@@ -592,16 +646,21 @@ impl Controller {
         }
     }
 
-    fn begin(&mut self, dialog: Vec<String>) {
-        let (Some(u), Some(s)) = (&mut self.u, &self.session) else {
+    fn begin(&mut self, dialog: Vec<String>, p: &mut impl Platform) {
+        let (Some(u), Some(_)) = (&self.u, &self.session) else {
             return;
         };
         if u.begun {
             return;
         }
+        let plan = u.cloud.then(|| self.dictation_plan(p));
+        let (Some(u), Some(s)) = (&mut self.u, &self.session) else {
+            return;
+        };
         u.begun = true;
         u.ctx = dialog.clone();
-        s.begin(dialog);
+        u.plan = plan.clone();
+        s.begin(dialog, plan);
     }
 
     fn start(&mut self, trigger_ms: Option<i64>, p: &mut impl Platform) {
@@ -634,7 +693,8 @@ impl Controller {
         self.confirm = None;
         self.generation += 1;
         let g = self.generation;
-        let session = match p.open_session(g) {
+        let cloud = p.setting("serviceMode").as_deref() == Some("cloud");
+        let session = match p.open_session(g, cloud) {
             Ok(s) => s,
             Err(e) => {
                 p.log(&format!("start failed: {e}"));
@@ -677,11 +737,13 @@ impl Controller {
             actions,
             wake,
             asr: None,
+            cloud,
+            plan: None,
         });
         self.session = Some(session);
         self.phase = Phase::Recording { toggled: false };
         if !use_ctx {
-            self.begin(vec![]);
+            self.begin(vec![], p);
         }
         p.read_field(g);
         p.check_edits();
@@ -704,7 +766,8 @@ impl Controller {
                     u.mic_start_ms.unwrap_or(-1)
                 ));
                 u.mic = Some(name);
-                if llm::level(|k| p.setting(k)) > Level::Off
+                if !cloud
+                    && llm::level(|k| p.setting(k)) > Level::Off
                     && let Some(ep) = Self::configured(p)
                     && !llm::loopback(&ep.base)
                 {
@@ -817,7 +880,11 @@ impl Controller {
                 u.audio_end = Instant::now();
             }
         }
-        self.session = None;
+        // A Cloud session stays open for the server's refine.
+        let session = self
+            .session
+            .take()
+            .filter(|_| self.u.as_ref().is_some_and(|u| u.cloud));
         self.phase = Phase::Idle;
         let Some(u) = &self.u else { return };
         let partial = u.latest.clone();
@@ -841,7 +908,7 @@ impl Controller {
                         return self.command(a, args, raw, p);
                     }
                 }
-                self.refine_or_deliver(raw, p);
+                self.refine_or_deliver(raw, session, p);
             }
             Ok(_) => {
                 if u.p90().unwrap_or(0) >= QUIET_RMS && u.audio.len() >= 16000 {
@@ -1148,37 +1215,102 @@ impl Controller {
         (!ep.base.is_empty()).then_some(ep)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn llm_request(
+    /// The refine plan for the current utterance from the settings now. The prompt is left empty when the level
+    /// runs no LLM.
+    fn dictation_plan(&self, p: &mut impl Platform) -> Plan {
+        let u = self.u.as_ref().expect("utterance");
+        let level = llm::level(|k| p.setting(k));
+        let (system, user) = if level > Level::Off {
+            let app = if p.setting("llmAppContext").as_deref() != Some("0") {
+                [u.app.clone(), u.window.clone()]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" — ")
+            } else {
+                String::new()
+            };
+            let n = p
+                .setting("llmHistory")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3);
+            let history = self.store.recent(n, Utc::now());
+            let hotwords = p.terms(true).join(", ");
+            let fixes = self.store.fixes();
+            let fill = refine::Fill {
+                app: &app,
+                front: u.app.as_deref(),
+                history: &history,
+                hotwords: &hotwords,
+                fixes: &fixes,
+            };
+            refine::prompt(|k| p.setting(k), level == Level::Light, &fill)
+        } else {
+            Default::default()
+        };
+        Plan {
+            level,
+            rules: Rules::load(|k| p.setting(k)),
+            min_chars: p
+                .setting("llmMinChars")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(REFINE_MIN_CHARS),
+            system,
+            user,
+            commands: u
+                .actions
+                .iter()
+                .filter(|a| !text::trim_ws_nl(&a.run).is_empty())
+                .flat_map(|a| a.triggers().into_iter().map(str::to_owned))
+                .collect(),
+            wake: u.wake.clone(),
+            timeout_ms: timeout_ms(p),
+        }
+    }
+
+    /// A plan for text that always goes to the LLM (重新润色, learning).
+    fn direct_plan(
         &self,
-        ep: &Endpoint,
-        text: &str,
+        light: bool,
         app: &str,
         front: Option<&str>,
-        history: &[String],
-        light: bool,
-        timeout: Duration,
+        timeout_ms: u64,
+        p: &mut impl Platform,
+    ) -> Plan {
+        let hotwords = p.terms(true).join(", ");
+        let fixes = self.store.fixes();
+        let fill = refine::Fill {
+            app,
+            front,
+            history: &[],
+            hotwords: &hotwords,
+            fixes: &fixes,
+        };
+        refine::direct(|k| p.setting(k), light, &fill, timeout_ms)
+    }
+
+    /// The request to the configured endpoint (an empty base fails with "no base URL").
+    fn byok_request(
+        ep: &Endpoint,
+        plan: &Plan,
+        user: &str,
         p: &mut impl Platform,
     ) -> Result<llm::Request, String> {
-        let hotwords = p.terms(true).join(", ");
         let key = p.llm_key(&ep.base);
-        let fill = llm::Fill {
-            text,
-            app,
-            history,
-            hotwords: &hotwords,
-            fixes: &self.store.fixes(),
-            light,
-            front,
-        };
-        llm::refine_request(|k| p.setting(k), ep, key.as_deref(), &fill, timeout)
+        let extra = p.setting("llmExtraBody");
+        plan.request(ep, key.as_deref(), user, extra.as_deref())
     }
 
     /// Optional LLM pass between the ASR final and the paste. Fails open: errors and timeouts paste the raw text.
-    fn refine_or_deliver(&mut self, asr: String, p: &mut impl Platform) {
+    /// With a Cloud session the server is already refining with the plan sent at `begin`.
+    fn refine_or_deliver(&mut self, asr: String, cloud: Option<Session>, p: &mut impl Platform) {
         let asr_at = Instant::now();
-        let level = llm::level(|k| p.setting(k));
-        let raw = Rules::load(|k| p.setting(k)).apply(&asr);
+        let plan = match self.u.as_mut().and_then(|u| u.plan.take()) {
+            Some(plan) => plan,
+            None => self.dictation_plan(p),
+        };
+        let d = plan.decide(&asr);
+        let raw = d.text;
         if raw != asr {
             p.log(&format!(
                 "rules: {} → {} chars",
@@ -1189,69 +1321,57 @@ impl Controller {
                 u.asr = Some(asr);
             }
         }
-        if level <= Level::Off {
-            return self.deliver(&raw, &raw, "off", None, asr_at, true, p);
-        }
-        let min = p
-            .setting("llmMinChars")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(REFINE_MIN_CHARS);
-        if crate::records::chars(&raw) < min {
-            p.log("refine skipped: short");
-            return self.deliver(&raw, &raw, "off", None, asr_at, true, p);
-        }
-        let ep = Self::configured(p).unwrap_or_else(|| Endpoint::new("openai", "", ""));
-        let u = self.u.as_ref().expect("utterance");
-        let app = if p.setting("llmAppContext").as_deref() != Some("0") {
-            [u.app.clone(), u.window.clone()]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-                .join(" — ")
-        } else {
-            String::new()
-        };
-        let n = p
-            .setting("llmHistory")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(3);
-        let history = self.store.recent(n, Utc::now());
-        let timeout = Duration::from_millis(
-            p.setting("llmTimeoutMs")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(4000),
-        );
-        let light = level == Level::Light;
-        let front = u.app.clone();
-        match self.llm_request(
-            &ep,
-            &raw,
-            &app,
-            front.as_deref(),
-            &history,
-            light,
-            timeout,
-            p,
-        ) {
-            Err(e) => self.deliver(&raw, &raw, &e, Some(0), asr_at, true, p),
-            Ok(req) => {
-                self.llm_seq += 1;
-                let styles = style_names(p, front.as_deref());
-                p.log(&format!(
-                    "refine model={} chars={}{styles}",
-                    ep.model,
-                    raw.chars().count(),
-                ));
-                p.llm(self.llm_seq, req);
-                self.refine = Some(Refine {
-                    id: self.llm_seq,
-                    raw: raw.clone(),
-                    asr_at,
-                });
-                self.phase = Phase::Refining;
-                p.hud(Hud::Refining(raw));
+        let user = match d.llm {
+            Ok(user) => user,
+            Err(skip) => {
+                if skip == Skip::Short {
+                    p.log("refine skipped: short");
+                }
+                return self.deliver(&raw, &raw, "off", None, asr_at, true, p);
             }
+        };
+        let front = self.u.as_ref().and_then(|u| u.app.clone());
+        let styles = style_names(p, front.as_deref());
+        self.llm_seq += 1;
+        if let Some(session) = cloud {
+            p.log(&format!(
+                "refine cloud chars={}{styles}",
+                raw.chars().count()
+            ));
+            p.timer(
+                Duration::from_millis(plan.timeout_ms) + CLOUD_GRACE,
+                Msg::Timer {
+                    generation: self.generation,
+                    timer: Timer::Refine,
+                },
+            );
+            self.refine = Some(Refine {
+                id: self.llm_seq,
+                raw: raw.clone(),
+                asr_at,
+                cloud: Some(session),
+            });
+        } else {
+            let ep = Self::configured(p).unwrap_or_else(|| Endpoint::new("openai", "", ""));
+            let req = match Self::byok_request(&ep, &plan, &user, p) {
+                Ok(req) => req,
+                Err(e) => return self.deliver(&raw, &raw, &e, Some(0), asr_at, true, p),
+            };
+            p.log(&format!(
+                "refine model={} chars={}{styles}",
+                ep.model,
+                raw.chars().count(),
+            ));
+            p.llm(self.llm_seq, req);
+            self.refine = Some(Refine {
+                id: self.llm_seq,
+                raw: raw.clone(),
+                asr_at,
+                cloud: None,
+            });
         }
+        self.phase = Phase::Refining;
+        p.hud(Hud::Refining(raw));
     }
 
     /// History's 重新润色: the record's text after the local rules goes through the LLM at the level its app gets
@@ -1266,20 +1386,23 @@ impl Controller {
         if r.raw.trim().is_empty() {
             return p.hud(Hud::Flash("这条记录没有可润色的文字".into()));
         }
-        let Some(ep) = Self::configured(p) else {
+        let cloud = p.setting("serviceMode").as_deref() == Some("cloud");
+        let ep = Self::configured(p);
+        if ep.is_none() && !cloud {
             return p.hud(Hud::Flash(
                 "没有可用的 LLM：在「设置 → 服务」里填好 LLM 接口和 key".into(),
             ));
-        };
+        }
         let light = llm::level(|k| p.setting(k)) == Level::Light;
-        let timeout = Duration::from_millis(
-            p.setting("llmTimeoutMs")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(4000)
-                .max(15_000),
-        );
         let app = r.app.clone().unwrap_or_default();
-        match self.llm_request(&ep, &r.raw, &app, r.app.as_deref(), &[], light, timeout, p) {
+        let plan = self.direct_plan(light, &app, r.app.as_deref(), timeout_ms(p).max(15_000), p);
+        let Some(ep) = ep.filter(|_| !cloud) else {
+            self.llm_seq += 1;
+            self.rerefining = Some((self.llm_seq, id, Instant::now()));
+            p.log(&format!("rerefine cloud chars={}", r.raw.chars().count()));
+            return p.cloud_llm(self.llm_seq, cloud::Kind::Refine, r.raw.clone(), plan);
+        };
+        match Self::byok_request(&ep, &plan, &plan.user_with(&r.raw), p) {
             Err(e) => p.hud(Hud::Flash(format!("重新润色失败：{e}"))),
             Ok(req) => {
                 self.llm_seq += 1;
@@ -1303,27 +1426,32 @@ impl Controller {
         }
     }
 
-    fn llm_done(&mut self, id: u64, result: Result<String, llm::Failure>, p: &mut impl Platform) {
-        if let Some(r) = self.refine.take_if(|r| r.id == id) {
-            self.phase = Phase::Idle;
-            let elapsed = ms(r.asr_at, Instant::now());
-            let llm_ms = Some(elapsed);
-            match result {
-                Ok(t) => {
-                    let t = Rules::load(|k| p.setting(k)).format(&t);
-                    p.log(&format!("refined ms={elapsed} chars={}", t.chars().count()));
-                    self.deliver(&r.raw, &t, "ok", llm_ms, r.asr_at, true, p);
-                }
-                Err(f) => {
-                    p.log(&format!("refine failed: {}", f.message));
-                    let llm = if f.timed_out {
-                        "timeout"
-                    } else {
-                        f.message.as_str()
-                    };
-                    self.deliver(&r.raw, &r.raw, llm, llm_ms, r.asr_at, true, p);
-                }
+    /// The dictation's refine ended (BYOK reply, Cloud `refined`, or the Cloud deadline): paste.
+    fn refined(&mut self, r: Refine, result: Result<String, llm::Failure>, p: &mut impl Platform) {
+        self.phase = Phase::Idle;
+        let elapsed = ms(r.asr_at, Instant::now());
+        let llm_ms = Some(elapsed);
+        match result {
+            Ok(t) => {
+                let t = Rules::load(|k| p.setting(k)).format(&t);
+                p.log(&format!("refined ms={elapsed} chars={}", t.chars().count()));
+                self.deliver(&r.raw, &t, "ok", llm_ms, r.asr_at, true, p);
             }
+            Err(f) => {
+                p.log(&format!("refine failed: {}", f.message));
+                let llm = if f.timed_out {
+                    "timeout"
+                } else {
+                    f.message.as_str()
+                };
+                self.deliver(&r.raw, &r.raw, llm, llm_ms, r.asr_at, true, p);
+            }
+        }
+    }
+
+    fn llm_done(&mut self, id: u64, result: Result<String, llm::Failure>, p: &mut impl Platform) {
+        if let Some(r) = self.refine.take_if(|r| r.id == id && r.cloud.is_none()) {
+            self.refined(r, result, p);
         } else if let Some((_, rid, at)) = self.rerefining.take_if(|j| j.0 == id) {
             let note = match result {
                 Ok(t) => {
@@ -1366,10 +1494,15 @@ impl Controller {
         if p.setting("autoLearn").as_deref() == Some("0") {
             return;
         }
-        let Some(ep) = Self::configured(p)
-            .filter(|ep| llm::loopback(&ep.base) || p.llm_key(&ep.base).is_some())
-        else {
-            return;
+        let ep = if p.setting("serviceMode").as_deref() == Some("cloud") {
+            None
+        } else {
+            let Some(ep) = Self::configured(p)
+                .filter(|ep| llm::loopback(&ep.base) || p.llm_key(&ep.base).is_some())
+            else {
+                return;
+            };
+            Some(ep)
         };
         let q = &mut self.learn.queue;
         q.push_back((id, raw, ep));
@@ -1402,7 +1535,14 @@ impl Controller {
             if !self.store.all.iter().any(|r| r.at == id) {
                 continue;
             }
-            match self.llm_request(&ep, &raw, "", None, &[], false, LEARN_TIMEOUT, p) {
+            let plan = self.direct_plan(false, "", None, LEARN_TIMEOUT.as_millis() as u64, p);
+            let Some(ep) = ep else {
+                self.llm_seq += 1;
+                self.learn.running = Some((self.llm_seq, id, raw.clone()));
+                p.cloud_llm(self.llm_seq, cloud::Kind::Learn, raw, plan);
+                continue;
+            };
+            match Self::byok_request(&ep, &plan, &plan.user_with(&raw), p) {
                 Ok(req) => {
                     self.llm_seq += 1;
                     self.learn.running = Some((self.llm_seq, id, raw));
@@ -1424,7 +1564,7 @@ impl Controller {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{self, Options};
+    use crate::session;
     use gesture::Action::*;
 
     /// Records effects; messages "posted" by the platform are queued for the test to deliver.
@@ -1440,6 +1580,10 @@ mod tests {
         terms: Vec<String>,
         llm_key: bool,
         warmed: Vec<String>,
+        /// Commands sent to the latest session.
+        cmds: Option<async_channel::Receiver<session::Cmd>>,
+        /// Bodies of LLM requests.
+        bodies: Vec<Vec<u8>>,
     }
 
     impl Platform for Fake {
@@ -1458,13 +1602,14 @@ mod tests {
                 .find(|s| s.0 == key)
                 .map(|s| s.1.to_string())
         }
-        fn open_session(&mut self, g: u64) -> Result<Session, String> {
+        fn open_session(&mut self, g: u64, cloud: bool) -> Result<Session, String> {
             if !self.key {
                 return Err("未设置火山引擎 API Key".into());
             }
-            self.out.push(format!("session {g}"));
-            // Never polled: no connection is made.
-            let (s, _, _) = session::start(Options::new(String::new()), Default::default());
+            self.out
+                .push(format!("session {g}{}", if cloud { " cloud" } else { "" }));
+            let (s, rx) = Session::channel();
+            self.cmds = Some(rx);
             Ok(s)
         }
         fn front_app(&mut self, _: u64) -> (Option<String>, Option<String>) {
@@ -1506,8 +1651,12 @@ mod tests {
         fn llm_key(&mut self, _: &str) -> Option<String> {
             self.llm_key.then(|| "k".into())
         }
-        fn llm(&mut self, id: u64, _: llm::Request) {
+        fn llm(&mut self, id: u64, req: llm::Request) {
             self.out.push(format!("llm {id}"));
+            self.bodies.push(req.body);
+        }
+        fn cloud_llm(&mut self, id: u64, kind: cloud::Kind, text: String, _: Plan) {
+            self.out.push(format!("cloud {} {id} {text}", kind.key()));
         }
         fn warm(&mut self, base: &str) {
             self.warmed.push(base.into());
@@ -2406,5 +2555,141 @@ mod tests {
         let reloaded = crate::store::Store::load(t.c.store.dir());
         assert_eq!(reloaded.all.len(), 1);
         assert_eq!(t.c.store.usage.values().map(|u| u.n).sum::<i64>(), usage);
+    }
+
+    const LONG: &str = "今天下午三点我们在会议室讨论一下下个季度的计划";
+
+    /// A Cloud dictation up to the final; returns the plan its `begin` carried.
+    fn cloud_final(t: &mut T, raw: &str) -> (Option<Plan>, Vec<String>) {
+        t.p.settings
+            .extend([("serviceMode", "cloud"), ("llmEnabled", "1")]);
+        let out = t.key(StartHold);
+        assert!(
+            has(&out, "session 1 cloud") && t.p.warmed.is_empty(),
+            "{out:?}"
+        );
+        t.send(Msg::Field {
+            generation: 1,
+            before: None,
+            window: Some("Inbox".into()),
+        });
+        let plan = match t.p.cmds.as_ref().unwrap().try_recv() {
+            Ok(session::Cmd::Begin(_, plan)) => plan.map(|p| *p),
+            _ => panic!("no begin"),
+        };
+        (plan, t.done(1, Ok(raw)))
+    }
+
+    fn cloud_refined(t: &mut T, r: Result<&str, llm::Failure>) -> Vec<String> {
+        t.send(Msg::Session {
+            generation: 1,
+            event: Event::Refined(r.map(String::from)),
+        })
+    }
+
+    #[test]
+    fn cloud_begin_carries_the_plan_and_the_server_refines() {
+        let mut t = T::new();
+        let (plan, out) = cloud_final(&mut t, LONG);
+        let plan = plan.expect("plan");
+        assert_eq!(plan.level, Level::Fluent);
+        assert!(
+            plan.user.contains("当前应用：Notes — Inbox"),
+            "{}",
+            plan.user
+        );
+        assert!(
+            has(&out, "hud Refining") && has(&out, "Refine") && !has(&out, "llm "),
+            "{out:?}"
+        );
+        let out = cloud_refined(&mut t, Ok("润色后"));
+        assert!(has(&out, "verify 1 润色后"), "{out:?}");
+        t.flush();
+        let r = t.c.store.all.last().unwrap();
+        assert_eq!((r.text.as_str(), r.llm.as_str()), ("润色后", "ok"));
+        // The usage line after `done` comes when the session is gone and is only logged.
+        let out = t.send(Msg::Session {
+            generation: 1,
+            event: Event::Usage(cloud::Usage::default()),
+        });
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn cloud_refine_fails_open() {
+        // The server never answers: the deadline pastes the recognized text.
+        let mut t = T::new();
+        cloud_final(&mut t, LONG);
+        let out = t.send(Msg::Timer {
+            generation: 1,
+            timer: Timer::Refine,
+        });
+        assert!(has(&out, &format!("verify 1 {LONG}")), "{out:?}");
+        t.flush();
+        assert_eq!(t.c.store.all.last().unwrap().llm, "timeout");
+        // A late answer is stale.
+        assert!(cloud_refined(&mut t, Ok("迟到")).is_empty());
+
+        // The socket drops mid-refine.
+        let mut t = T::new();
+        cloud_final(&mut t, LONG);
+        let f = llm::Failure {
+            message: "Cloud 连接已断开".into(),
+            timed_out: false,
+        };
+        let out = cloud_refined(&mut t, Err(f));
+        assert!(has(&out, &format!("verify 1 {LONG}")), "{out:?}");
+    }
+
+    #[test]
+    fn esc_during_cloud_refine_pastes_raw_and_drops_the_session() {
+        let mut t = T::new();
+        cloud_final(&mut t, LONG);
+        let cmds = t.p.cmds.clone().unwrap();
+        assert!(!cmds.is_closed());
+        let out = t.send(Msg::Escape);
+        assert!(has(&out, &format!("verify 1 {LONG}")), "{out:?}");
+        assert!(
+            cmds.is_closed(),
+            "the session must be dropped to cancel the server's LLM call"
+        );
+    }
+
+    #[test]
+    fn cloud_short_text_skips_the_wait() {
+        let mut t = T::new();
+        let (plan, out) = cloud_final(&mut t, "好的");
+        assert!(plan.is_some());
+        assert!(
+            has(&out, "verify 1 好的") && !has(&out, "Refining"),
+            "{out:?}"
+        );
+        assert!(t.p.cmds.as_ref().unwrap().is_closed());
+    }
+
+    /// BYOK sends exactly the prompt the Cloud plan carries.
+    #[test]
+    fn byok_and_cloud_send_the_same_prompt() {
+        let mut byok = T::new();
+        byok.p.llm_key = true;
+        refining(&mut byok, 1, LONG);
+        let body: serde_json::Value = serde_json::from_slice(&byok.p.bodies[0]).unwrap();
+        let mut cloud = T::new();
+        let plan = cloud_final(&mut cloud, LONG).0.unwrap();
+        let msgs = &body["messages"];
+        assert_eq!(msgs[0]["content"], plan.system.as_str());
+        assert_eq!(msgs[1]["content"], plan.decide(LONG).llm.unwrap().as_str());
+    }
+
+    #[test]
+    fn cloud_rerefine_and_learning_go_through_the_server() {
+        let mut t = T::new();
+        // Pasted text the LLM did not touch is learned from, through Cloud.
+        cloud_final(&mut t, "好的我知道了");
+        let out = t.flush();
+        assert!(has(&out, "cloud learn"), "{out:?}");
+        let id = t.c.store.all.last().unwrap().at;
+        let out = t.send(Msg::Refine { id });
+        assert!(has(&out, "cloud refine"), "{out:?}");
     }
 }

@@ -179,6 +179,7 @@ fn onboarding(out: &str) -> Result<(), String> {
     let mut ui = Ui::new(out)?;
     let missing = Facts {
         volc_key: false,
+        cloud_token: false,
         trusted: false,
         ..facts()
     };
@@ -367,6 +368,7 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
         Page::About,
         Facts {
             volc_key: false,
+            cloud_token: false,
             ..facts()
         },
     )?;
@@ -730,6 +732,7 @@ impl Ui {
 pub(super) fn facts() -> Facts {
     Facts {
         volc_key: true,
+        cloud_token: false,
         mics: vec![
             (
                 "BuiltInMicrophoneDevice".into(),

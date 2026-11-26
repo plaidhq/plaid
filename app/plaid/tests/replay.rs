@@ -42,6 +42,10 @@ fn result(text: &str, last: bool) -> Message {
 /// Accepts one utterance: answers a partial after the first audio frame and the final after the last-flagged one.
 /// Returns (first frame type, audio bytes received).
 fn serve(l: TcpListener) -> (u8, usize) {
+    serve_text(l, "你好世界。")
+}
+
+fn serve_text(l: TcpListener, text: &str) -> (u8, usize) {
     let (tcp, _) = l.accept().unwrap();
     async_io::block_on(async {
         let tcp = async_io::Async::new(tcp).unwrap();
@@ -56,7 +60,7 @@ fn serve(l: TcpListener) -> (u8, usize) {
             }
             audio += u32::from_be_bytes(d[4..8].try_into().unwrap()) as usize;
             if last {
-                ws.send(result("你好世界。", true)).await.unwrap();
+                ws.send(result(text, true)).await.unwrap();
                 break;
             }
             if audio == d.len() - 8 {
@@ -110,5 +114,110 @@ fn replay_against_mock_endpoint() {
     );
     let records = std::fs::read_to_string(dir.join("data/records.jsonl")).unwrap();
     assert!(records.contains("你好世界"), "{records}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An OpenAI-style endpoint that answers every request with the same polished text.
+async fn mock_llm() -> String {
+    let app = axum::Router::new().route(
+        "/chat/completions",
+        axum::routing::post(|| async {
+            axum::Json(serde_json::json!({
+                "choices": [{"message": {"content": "你好世界，今天我们讨论一下下周的发布计划和测试安排。"}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+            }))
+        }),
+    );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    base
+}
+
+/// `--file` in Cloud mode: the binary signs nothing itself; it streams to the real server (in-process here), which
+/// recognizes with the Volcengine stand-in, refines with the LLM stand-in, and bills the device.
+#[test]
+fn cloud_replay_against_the_real_server() {
+    use plaid_cloud::config::{Config, Llm, Prices, Volc};
+    use plaid_cloud::db::Db;
+    use plaid_cloud::server::{self, App};
+    use plaid_core::llm::Endpoint;
+    use std::sync::Arc;
+
+    let dir = std::env::temp_dir().join(format!("plaid-cloud-replay-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let wav_path = dir.join("tone.wav");
+    std::fs::write(&wav_path, wav()).unwrap();
+
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let volc = format!("ws://{}", l.local_addr().unwrap());
+    let volc_thread = std::thread::spawn(move || {
+        serve_text(l, "你好世界今天我们讨论一下下周的发布计划和测试安排。")
+    });
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (app, base) = rt.block_on(async {
+        let llm = mock_llm().await;
+        let app = Arc::new(App {
+            db: Db::open(dir.join("cloud.db").to_str().unwrap()).unwrap(),
+            cfg: Config {
+                volc: Volc {
+                    key: "mock".into(),
+                    url: Some(volc),
+                    resource: None,
+                },
+                llm: Some(Llm {
+                    endpoint: Endpoint::new("openai", &llm, "mock-model"),
+                    key: Some("k".into()),
+                    extra: None,
+                    proxy: None,
+                }),
+                llm_timeout: std::time::Duration::from_secs(8),
+                prices: Prices {
+                    asr_hour: 2_300_000.,
+                    llm_in: 4_000_000.,
+                    llm_out: 8_000_000.,
+                },
+            },
+            http: plaid_cloud::llm::client(None),
+        });
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(server::serve(app.clone(), l));
+        (app, base)
+    });
+    let code = app
+        .db
+        .invite("amy", Some(1_000_000), chrono::Utc::now())
+        .unwrap();
+    let token = plaid_core::cloud::login(&base, &code, "CI").unwrap().token;
+
+    let out = Command::new(env!("CARGO_BIN_EXE_plaid"))
+        .arg("--file")
+        .arg(&wav_path)
+        .env("PLAID_DATA_DIR", dir.join("data"))
+        .env("PLAID_SERVICE_MODE", "cloud")
+        .env("PLAID_CLOUD_URL", &base)
+        .env("PLAID_CLOUD_TOKEN", &token)
+        .env("PLAID_LLM_ENABLED", "1")
+        .env("PLAID_AUTO_LEARN", "0")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+    let (_, audio) = volc_thread.join().unwrap();
+    assert!(audio > 0, "audio reached Volcengine");
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l == "paste: 你好世界，今天我们讨论一下下周的发布计划和测试安排。"),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let report = plaid_cloud::admin::run(&app.db, &["usage".into()]).unwrap();
+    assert!(report.contains("amy\trequests=1\terrors=0"), "{report}");
+    assert!(report.contains("llm_in=100\tllm_out=20"), "{report}");
+    drop(rt);
     let _ = std::fs::remove_dir_all(&dir);
 }

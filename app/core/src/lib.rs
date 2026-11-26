@@ -1,5 +1,6 @@
 //! Platform-independent dictation logic: text processing, ASR protocol, records, controller.
 pub mod actions;
+pub mod cloud;
 pub mod dictation;
 pub mod diff;
 pub mod gate;
@@ -8,6 +9,7 @@ pub mod hotwords;
 pub mod llm;
 pub mod phonetic;
 pub mod records;
+pub mod refine;
 pub mod rules;
 pub mod session;
 pub mod store;

@@ -87,9 +87,10 @@ pub fn replay(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Recognizes a record's saved audio again (History's retry) and saves the text in place. `at` is the record's
-/// RFC 3339 time; default: the newest record with audio.
-pub fn recover(at: Option<&str>) -> Result<(), String> {
+/// Recognizes a record's saved audio again (History's retry) and saves the text in place, or with `refine`
+/// polishes its raw text again (History's 重新润色). `at` is the record's RFC 3339 time; default: the newest record
+/// with audio.
+pub fn recover(at: Option<&str>, refine: bool) -> Result<(), String> {
     let store = Store::load(&config::data_dir());
     let id = match at {
         Some(a) => DateTime::parse_from_rfc3339(a)
@@ -118,14 +119,18 @@ pub fn recover(at: Option<&str>) -> Result<(), String> {
     let mut d = Driver::replay(tx.clone(), vec![]);
     let mut c = Controller::new(store);
     let t0 = Instant::now();
-    let _ = tx.try_send(Msg::Recover { id });
+    let _ = tx.try_send(if refine {
+        Msg::Refine { id }
+    } else {
+        Msg::Recover { id }
+    });
     loop {
         let m = rx.recv_blocking().map_err(|e| e.to_string())?;
         c.handle(m, &mut d);
         for h in d.hud.drain(..) {
             eprintln!("{:6.2}s hud {h:?}", t0.elapsed().as_secs_f64());
         }
-        if c.recovering().is_none() {
+        if c.recovering().is_none() && !c.rerefining() {
             break;
         }
     }

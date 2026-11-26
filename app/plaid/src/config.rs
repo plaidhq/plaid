@@ -105,6 +105,12 @@ pub fn terms(auto: bool) -> Vec<String> {
 }
 
 fn snapshot(auto: bool) -> Snapshot {
+    let (lines, threshold) = hotword_lines(auto);
+    Snapshot::new(&lines, threshold)
+}
+
+/// The hotword file lines and the match threshold, as a Volc session (here or on the Cloud server) takes them.
+fn hotword_lines(auto: bool) -> (Vec<String>, f64) {
     let dir = data_dir();
     let read = |p: PathBuf| std::fs::read_to_string(p).unwrap_or_default();
     let extra = value("hotwordsExtra")
@@ -119,7 +125,33 @@ fn snapshot(auto: bool) -> Snapshot {
     let threshold = value("hotwordThresh")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0.85);
-    Snapshot::new(&hotwords::lines(&body), threshold)
+    (hotwords::lines(&body), threshold)
+}
+
+/// What the Cloud server's Volc session needs; the dialog is filled in by `begin`.
+pub fn cloud_asr() -> plaid_core::cloud::Asr {
+    let (hotwords, threshold) = hotword_lines(true);
+    plaid_core::cloud::Asr {
+        dialog: vec![],
+        hotwords,
+        threshold,
+        nonstream: value("nonstream").as_deref() != Some("0"),
+    }
+}
+
+/// Cloud mode (serviceMode = cloud).
+pub fn cloud() -> bool {
+    value("serviceMode").as_deref() == Some("cloud")
+}
+
+/// The Plaid Cloud server, fixed when the app is built (PLAID_CLOUD_URL at compile time). The same variable at run
+/// time overrides it, for tests.
+pub fn cloud_url() -> Result<String, String> {
+    std::env::var("PLAID_CLOUD_URL")
+        .ok()
+        .or_else(|| option_env!("PLAID_CLOUD_URL").map(String::from))
+        .filter(|u| !u.trim().is_empty())
+        .ok_or_else(|| "当前版本未提供 Cloud 服务".into())
 }
 
 /// Voice commands from actions.json (re-read per utterance) and the wake word; empty = bare mode.

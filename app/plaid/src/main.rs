@@ -3,6 +3,7 @@
 //   plaid --hud-test [s]  show the HUD, feed levels, finish, auto-hide; log activation/key-window facts, quit (exit 1 if focus moved)
 //   plaid --file a.wav    one utterance through the controller with the WAV as the mic; prints partials and the paste
 //   plaid --recover [at]  recognize a record's saved audio again (default: newest with audio), save in place
+//   plaid --refine [at]   polish a record's raw text again (History's 重新润色), save in place
 //   plaid --store-key     read the API key from stdin into this app's credential store
 //   plaid --learn-report  learned-rule evidence from the records: active, suggested, dropped (read-only)
 //   plaid --update        install the latest release into this app bundle now (no relaunch)
@@ -46,7 +47,8 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let headless = match args.get(1).map(String::as_str) {
         Some("--file") => Some(cli::replay(args.get(2).map_or("", String::as_str))),
-        Some("--recover") => Some(cli::recover(args.get(2).map(String::as_str))),
+        Some("--recover") => Some(cli::recover(args.get(2).map(String::as_str), false)),
+        Some("--refine") => Some(cli::recover(args.get(2).map(String::as_str), true)),
         Some("--store-key") => Some(cli::store_key()),
         Some("--update") => Some(update::cli()),
         Some("--learn-report") => Some(cli::learn_report()),

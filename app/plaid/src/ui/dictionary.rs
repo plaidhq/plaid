@@ -1849,6 +1849,7 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     use super::snapshot::expect;
     let facts = || super::Facts {
         volc_key: true,
+        cloud_token: false,
         mics: vec![],
         default_mic: None,
         trusted: true,

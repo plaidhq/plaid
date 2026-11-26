@@ -1,6 +1,7 @@
 //! One Volcengine streaming utterance: connect on key-down, stream PCM, finish on key-up, wait for the last
 //! response. Runtime-agnostic (async-io reactor); the caller spawns the future returned by `start`.
 use crate::hotwords::Snapshot;
+use crate::refine::Plan;
 use crate::volc::{self, AUDIO_ONLY, FULL_REQUEST};
 use async_channel::{Receiver, Sender};
 use async_tungstenite::tungstenite::{self, Message, client::IntoClientRequest, http::HeaderValue};
@@ -41,26 +42,39 @@ impl Options {
 pub enum Event {
     /// Partial result after tidy + hotword rules; only sent when it changes.
     Text(String),
-    /// Exactly once, last.
+    /// Exactly once. Last, except that a Cloud session follows it with `Refined` when the server refines, and
+    /// with `Usage`.
     Done(Result<String, String>),
+    /// Cloud only: the server's LLM pass over the final.
+    Refined(Result<String, crate::llm::Failure>),
+    /// Cloud only: what the request cost, last.
+    Usage(crate::cloud::Usage),
 }
 
-enum Cmd {
-    Begin(Vec<String>),
+pub(crate) enum Cmd {
+    /// Context texts and, for Cloud, the refine plan.
+    Begin(Vec<String>, Option<Box<Plan>>),
     Audio(Vec<u8>),
     Finish,
 }
 
-/// Commands for a running session. Dropping it without `finish` cancels the utterance (Done is still sent).
+/// Commands for a running session. Dropping it without `finish` cancels the utterance (Done is still sent); a Cloud
+/// session is also cancelled by a drop after `finish`, which aborts the server's refine.
 pub struct Session {
     tx: Sender<Cmd>,
 }
 
 impl Session {
+    pub(crate) fn channel() -> (Session, Receiver<Cmd>) {
+        let (tx, rx) = async_channel::unbounded();
+        (Session { tx }, rx)
+    }
+
     /// Sends the full request. Audio is held until then, so context gathered after key-down still goes first.
-    /// `dialog` = context texts, newest first. Only the first call counts; `finish` begins without context.
-    pub fn begin(&self, dialog: Vec<String>) {
-        let _ = self.tx.try_send(Cmd::Begin(dialog));
+    /// `dialog` = context texts, newest first; `plan` is for a Cloud session (Volc ignores it). Only the first
+    /// call counts; `finish` begins without context.
+    pub fn begin(&self, dialog: Vec<String>, plan: Option<Plan>) {
+        let _ = self.tx.try_send(Cmd::Begin(dialog, plan.map(Box::new)));
     }
 
     /// 16 kHz mono s16le.
@@ -82,13 +96,13 @@ pub fn start(
     Receiver<Event>,
     impl Future<Output = ()> + Send + 'static,
 ) {
-    let (tx, rx) = async_channel::unbounded();
+    let (session, rx) = Session::channel();
     let (etx, erx) = async_channel::unbounded();
     let fut = async move {
         let r = run(opts, hotwords, rx, &etx).await;
         let _ = etx.send(Event::Done(r)).await;
     };
-    (Session { tx }, erx, fut)
+    (session, erx, fut)
 }
 
 fn params(opts: &Options, hotwords: &Snapshot, dialog: &[String]) -> Vec<u8> {
@@ -186,12 +200,12 @@ async fn run(
         };
         futures_util::select! {
             c = cmd.fuse() => match c {
-                Ok(Cmd::Begin(dialog)) if !begun => {
+                Ok(Cmd::Begin(dialog, _)) if !begun => {
                     begun = true;
                     ws.send(Message::binary(params(&opts, &hotwords, &dialog))).await.map_err(send_err)?;
                     keepalive = Some(async_io::Timer::after(KEEPALIVE));
                 }
-                Ok(Cmd::Begin(_)) => {}
+                Ok(Cmd::Begin(..)) => {}
                 Ok(Cmd::Audio(pcm)) => buf.extend_from_slice(&pcm),
                 Ok(Cmd::Finish) => {
                     if !begun {
@@ -265,7 +279,10 @@ async fn run(
 }
 
 /// The next command; none once finished (later ones are ignored).
-async fn next_cmd(cmds: &Receiver<Cmd>, finished: bool) -> Result<Cmd, async_channel::RecvError> {
+pub(crate) async fn next_cmd(
+    cmds: &Receiver<Cmd>,
+    finished: bool,
+) -> Result<Cmd, async_channel::RecvError> {
     if finished {
         std::future::pending().await
     } else {
@@ -273,7 +290,7 @@ async fn next_cmd(cmds: &Receiver<Cmd>, finished: bool) -> Result<Cmd, async_cha
     }
 }
 
-async fn until(deadline: &mut Option<async_io::Timer>) {
+pub(crate) async fn until(deadline: &mut Option<async_io::Timer>) {
     match deadline {
         Some(t) => {
             t.await;
@@ -297,7 +314,7 @@ mod tests {
         let (s, events, fut) = start(opts, Snapshot::default());
         let t = std::thread::spawn(move || async_io::block_on(fut));
         let _held = l.accept().unwrap();
-        s.begin(vec![]);
+        s.begin(vec![], None);
         s.append(vec![0; PACKET]);
         let t0 = Instant::now();
         s.finish();
@@ -316,7 +333,7 @@ mod tests {
         let (s, events, fut) = start(opts, Snapshot::default());
         let client = std::thread::spawn(move || async_io::block_on(fut));
         let (tcp, _) = l.accept().unwrap();
-        s.begin(vec![]);
+        s.begin(vec![], None);
         for _ in 0..3 {
             s.append(vec![1; PACKET]);
         }
@@ -365,7 +382,7 @@ mod tests {
         let (s, events, fut) = start(opts, Snapshot::default());
         let client = std::thread::spawn(move || async_io::block_on(fut));
         let (tcp, _) = l.accept().unwrap();
-        s.begin(vec![]);
+        s.begin(vec![], None);
         let (mut s, mut finisher) = (Some(s), None);
         let frames = async_io::block_on(async {
             let tcp = async_io::Async::new(tcp).unwrap();

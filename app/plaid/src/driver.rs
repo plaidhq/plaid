@@ -6,8 +6,9 @@ use async_channel::Sender;
 use chrono::{DateTime, Utc};
 use plaid_core::actions::Action;
 use plaid_core::dictation::{Hud, Msg, Platform};
-use plaid_core::session::{self, Session};
-use plaid_core::{diff, gesture, llm};
+use plaid_core::refine::Plan;
+use plaid_core::session::{self, Event, Session};
+use plaid_core::{cloud, diff, gesture, llm};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -176,10 +177,8 @@ impl Platform for Driver {
         config::value(key)
     }
 
-    fn open_session(&mut self, generation: u64) -> Result<Session, String> {
-        let key = secret::api_key()?;
-        let (s, events, fut) = session::start(config::session_options(key), config::hotwords());
-        std::thread::spawn(move || async_io::block_on(fut));
+    fn open_session(&mut self, generation: u64, cloud: bool) -> Result<Session, String> {
+        let (s, events) = connect(cloud, None)?;
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             while let Ok(event) = events.recv_blocking() {
@@ -366,6 +365,20 @@ impl Platform for Driver {
         });
     }
 
+    fn cloud_llm(&mut self, id: u64, kind: cloud::Kind, text: String, plan: Plan) {
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let result = match cloud_options() {
+                Ok(opts) => async_io::block_on(cloud::refine(&opts, kind, text, plan)),
+                Err(message) => Err(llm::Failure {
+                    message,
+                    timed_out: false,
+                }),
+            };
+            let _ = tx.try_send(Msg::Llm { id, result });
+        });
+    }
+
     fn warm(&mut self, base: &str) {
         let base = base.to_owned();
         std::thread::spawn(move || llm::warm(&base, os::proxy().as_ref()));
@@ -455,28 +468,65 @@ impl Platform for Driver {
     }
 }
 
-/// One saved WAV through a fresh session without context, sent as fast as the socket takes it. Blocking.
+/// Cloud server URL, device token and app version.
+fn cloud_options() -> Result<cloud::Options, String> {
+    Ok(cloud::Options::new(
+        &config::cloud_url()?,
+        secret::cloud_token()?,
+        env!("CARGO_PKG_VERSION"),
+    ))
+}
+
+/// A Volc session, or a Cloud one; running on its own thread. `final_timeout` overrides the wait for the final.
+fn connect(
+    cloud: bool,
+    final_timeout: Option<Duration>,
+) -> Result<(Session, async_channel::Receiver<Event>), String> {
+    if cloud {
+        let mut opts = cloud_options()?;
+        if let Some(t) = final_timeout {
+            opts.final_timeout = t;
+        }
+        let (s, events, fut) = cloud::start(opts, config::cloud_asr());
+        std::thread::spawn(move || async_io::block_on(fut));
+        Ok((s, events))
+    } else {
+        let mut opts = config::session_options(secret::api_key()?);
+        if let Some(t) = final_timeout {
+            opts.final_timeout = t;
+        }
+        Ok(volc(opts))
+    }
+}
+
+fn volc(opts: session::Options) -> (Session, async_channel::Receiver<Event>) {
+    let (s, events, fut) = session::start(opts, config::hotwords());
+    std::thread::spawn(move || async_io::block_on(fut));
+    (s, events)
+}
+
+/// One saved WAV through a fresh session without context or refine, sent as fast as the socket takes it.
+/// Blocking.
 fn recognize(audio: &std::path::Path, timeout: Duration) -> Result<String, String> {
     let bytes = std::fs::read(audio).map_err(|e| format!("无法读取录音：{e}"))?;
     let pcm = plaid_core::wav::decode(&bytes)?;
     if pcm.is_empty() {
         return Err("录音为空".into());
     }
-    let mut opts = config::session_options(secret::api_key()?);
-    opts.final_timeout = timeout;
-    recognize_pcm(opts, pcm)
+    recognize_pcm(connect(config::cloud(), Some(timeout))?, pcm)
 }
 
-fn recognize_pcm(opts: session::Options, pcm: &[u8]) -> Result<String, String> {
-    let (s, events, fut) = session::start(opts, config::hotwords());
-    std::thread::spawn(move || async_io::block_on(fut));
-    s.begin(vec![]);
+fn recognize_pcm(
+    (s, events): (Session, async_channel::Receiver<Event>),
+    pcm: &[u8],
+) -> Result<String, String> {
+    s.begin(vec![], None);
     for c in pcm.chunks(3200) {
         s.append(c.to_vec());
     }
     s.finish();
     while let Ok(e) = events.recv_blocking() {
-        if let session::Event::Done(r) = e {
+        if let Event::Done(r) = e {
             return r;
         }
     }
@@ -495,7 +545,7 @@ pub enum KeyProblem {
 pub fn check_key(key: &str) -> Result<(), KeyProblem> {
     let mut opts = config::session_options(key.into());
     opts.final_timeout = Duration::from_secs(5);
-    match recognize_pcm(opts, &[0u8; 32000]) {
+    match recognize_pcm(volc(opts), &[0u8; 32000]) {
         Ok(_) => Ok(()),
         Err(e) => key_problem(&e).map_or(Ok(()), Err),
     }

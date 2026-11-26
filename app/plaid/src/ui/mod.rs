@@ -190,6 +190,8 @@ pub type Mic = (String, String);
 #[derive(Clone)]
 pub struct Facts {
     pub volc_key: bool,
+    /// A Plaid Cloud device token is stored (or given by PLAID_CLOUD_TOKEN).
+    pub cloud_token: bool,
     pub mics: Vec<Mic>,
     pub default_mic: Option<String>,
     pub trusted: bool,
@@ -202,6 +204,7 @@ impl Facts {
         let (mics, default_mic) = mics();
         Facts {
             volc_key: secret::get("apiKey").ok().flatten().is_some(),
+            cloud_token: secret::cloud_token().is_ok(),
             mics,
             default_mic,
             trusted: trusted(),
@@ -733,10 +736,22 @@ impl Settings {
     fn footer(&self, cx: &mut Context<Self>) -> Div {
         let facts = &self.model.read(cx).facts;
         let volc_key = facts.volc_key;
-        let (status, text) = if !volc_key {
-            (Status::Warn, "未设置火山 API Key")
+        // Cloud mode needs no Volcengine key of its own.
+        let cloud = crate::config::cloud();
+        let needs_service = if cloud { !facts.cloud_token } else { !volc_key };
+        let (status, text) = if needs_service {
+            (
+                Status::Warn,
+                if cloud {
+                    "Cloud 未登录"
+                } else {
+                    "未设置火山 API Key"
+                },
+            )
         } else if !facts.trusted {
             (Status::Warn, "需要辅助功能权限")
+        } else if cloud {
+            (Status::Ok, "就绪 · Cloud")
         } else {
             (Status::Ok, "就绪 · 火山引擎")
         };
@@ -755,7 +770,7 @@ impl Settings {
             .child(
                 hit("footer-status")
                     .child(badge(status, text))
-                    .when(!volc_key, |d| {
+                    .when(needs_service, |d| {
                         d.hover(|s| s.opacity(0.8))
                             .on_click(cx.listener(|this, _, _, cx| this.show(Page::Service, cx)))
                     }),

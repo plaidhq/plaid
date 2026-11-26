@@ -23,6 +23,12 @@ snapshot = ["gpui-kit/test-support", "dep:image"]
 [dev-dependencies]
 async-tungstenite = { version = "0.35", default-features = false, features = ["handshake"] }
 futures-util = "0.3.34"
+# The Cloud replay runs the real server in-process.
+plaid-cloud = { path = "../cloud" }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

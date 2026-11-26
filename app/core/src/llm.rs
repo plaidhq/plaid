@@ -30,7 +30,10 @@ pub const LIGHT_PROMPT: &str = "你是语音输入的文本校对器。输入是
 只输出校对后的文本，不加任何解释、引号或前缀。";
 
 /// How much a dictation is rewritten before the paste.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
 pub enum Level {
     /// Local rules only.
     Off,
@@ -323,10 +326,10 @@ pub fn key_account(base: &str) -> String {
 
 /// A ready HTTP request. Not Debug: a header carries the key.
 pub struct Request {
-    url: String,
-    headers: Vec<(&'static str, String)>,
-    body: Vec<u8>,
-    anthropic: bool,
+    pub url: String,
+    pub headers: Vec<(&'static str, String)>,
+    pub body: Vec<u8>,
+    pub anthropic: bool,
     pub timeout: Duration,
 }
 
@@ -361,62 +364,6 @@ pub fn endpoint(mut setting: impl FnMut(&str) -> Option<String>) -> Endpoint {
         &setting("llmFormat").unwrap_or_else(|| "openai".into()),
         &setting("llmBaseUrl").unwrap_or_default(),
         &setting("llmModel").unwrap_or_default(),
-    )
-}
-
-/// What a refine request is filled with besides the settings.
-pub struct Fill<'a> {
-    pub text: &'a str,
-    pub app: &'a str,
-    pub history: &'a [String],
-    pub hotwords: &'a str,
-    pub fixes: &'a [crate::store::Fix],
-    /// `Level::Light` picks the light prompt.
-    pub light: bool,
-    /// The front app's bare name, for the styles (`app` above is what the model sees and may be empty).
-    pub front: Option<&'a str>,
-}
-
-/// The refine request: prompt, template, context and extra body from settings; the 10 newest corrections.
-pub fn refine_request(
-    mut setting: impl FnMut(&str) -> Option<String>,
-    ep: &Endpoint,
-    key: Option<&str>,
-    f: &Fill,
-    timeout: Duration,
-) -> Result<Request, String> {
-    let system = if f.light {
-        setting("llmPromptLight").unwrap_or_else(|| LIGHT_PROMPT.into())
-    } else {
-        setting("llmPrompt").unwrap_or_else(|| DEFAULT_PROMPT.into())
-    };
-    let system = with_styles(&system, &active_styles(&mut setting, f.front));
-    let template = setting("llmTemplate").unwrap_or_else(|| DEFAULT_TEMPLATE.into());
-    let corrections: Vec<String> = f
-        .fixes
-        .iter()
-        .take(10)
-        .map(|x| format!("{} → {}", x.from, x.to))
-        .collect();
-    let context = setting("llmContext").unwrap_or_default();
-    let user = render(
-        &template,
-        &[
-            ("context", &context),
-            ("hotwords", f.hotwords),
-            ("app", f.app),
-            ("history", &f.history.join("\n")),
-            ("corrections", &corrections.join("; ")),
-            ("text", f.text),
-        ],
-    );
-    request(
-        ep,
-        key,
-        &system,
-        &user,
-        setting("llmExtraBody").as_deref(),
-        timeout,
     )
 }
 
@@ -491,6 +438,18 @@ pub fn parse(anthropic: bool, status: u16, body: &[u8]) -> Result<String, String
         Err(format!("empty output: {}", snippet(body)))
     } else {
         Ok(cleaned.to_owned())
+    }
+}
+
+/// Input and output tokens from a 200 response's `usage` (0 when absent).
+pub fn usage(anthropic: bool, body: &[u8]) -> (u64, u64) {
+    let v: Value = serde_json::from_slice(body).unwrap_or_default();
+    let u = &v["usage"];
+    let n = |k: &str| u[k].as_u64().unwrap_or(0);
+    if anthropic {
+        (n("input_tokens"), n("output_tokens"))
+    } else {
+        (n("prompt_tokens"), n("completion_tokens"))
     }
 }
 
@@ -628,6 +587,11 @@ mod tests {
                 .unwrap_err()
                 .starts_with("empty output")
         );
+        let o = br#"{"usage":{"prompt_tokens":120,"completion_tokens":30}}"#;
+        assert_eq!(usage(false, o), (120, 30));
+        let a = br#"{"usage":{"input_tokens":7,"output_tokens":2}}"#;
+        assert_eq!(usage(true, a), (7, 2));
+        assert_eq!(usage(false, b"nope"), (0, 0));
     }
 
     #[test]
@@ -698,42 +662,6 @@ mod tests {
         let sys = with_styles("SYS", &active_styles(set, Some("Rex")));
         assert!(sys.starts_with("SYS\n\n"));
         assert!(sys.ends_with("- 精炼：短\n- 客气：礼貌"));
-    }
-
-    #[test]
-    fn refine_request_appends_styles_for_the_front_app() {
-        let json = format_styles(&[Style {
-            name: "精炼".into(),
-            prompt: "短".into(),
-            apps: vec!["Rex".into()],
-            ..Style::default()
-        }]);
-        let set = |k: &str| (k == "llmStyles").then(|| json.clone());
-        let ep = Endpoint::new("openai", "https://x.test/v1", "m");
-        let system = |front, light| {
-            let f = Fill {
-                text: "t",
-                app: "",
-                history: &[],
-                hotwords: "",
-                fixes: &[],
-                light,
-                front,
-            };
-            let r = refine_request(set, &ep, None, &f, Duration::from_secs(1)).unwrap();
-            let b: Value = serde_json::from_slice(&r.body).unwrap();
-            b["messages"][0]["content"].as_str().unwrap().to_string()
-        };
-        assert!(
-            system(Some("Rex"), false).starts_with(DEFAULT_PROMPT)
-                && system(Some("Rex"), false).contains("- 精炼：短")
-        );
-        assert!(
-            system(Some("Rex"), true).starts_with(LIGHT_PROMPT)
-                && system(Some("Rex"), true).contains("- 精炼：短")
-        );
-        assert_eq!(system(Some("Mail"), false), DEFAULT_PROMPT);
-        assert_eq!(system(None, false), DEFAULT_PROMPT);
     }
 
     #[test]

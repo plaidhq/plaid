@@ -1,6 +1,6 @@
 //! API keys in the OS credential store: on macOS one Keychain item under the bundle id holding all accounts, on
 //! Windows one Credential Manager entry per account.
-//! Accounts: "apiKey" is the Volcengine key, "llm:<host>" the LLM keys.
+//! Accounts: "apiKey" is the Volcengine key, "llm:<host>" the LLM keys, "cloudToken" the Plaid Cloud device token.
 
 /// An LLM endpoint's key: PLAID_LLM_KEY, else the credential stored for its host.
 pub fn llm_key(base: &str) -> Option<String> {
@@ -16,6 +16,16 @@ pub fn api_key() -> Result<String, String> {
         return Ok(k);
     }
     get("apiKey")?.ok_or_else(|| "未设置火山引擎 API Key（设置 › 服务）".into())
+}
+
+/// PLAID_CLOUD_TOKEN wins, for replays and tests.
+pub fn cloud_token() -> Result<String, String> {
+    if let Ok(k) = std::env::var("PLAID_CLOUD_TOKEN") {
+        return Ok(k);
+    }
+    get("cloudToken")?
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| "Cloud 未登录（设置 › 服务）".into())
 }
 
 #[cfg(target_os = "macos")]

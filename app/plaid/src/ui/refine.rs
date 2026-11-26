@@ -10,9 +10,9 @@ use gpui_kit::base::input::{
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use plaid_core::dictation::pct;
-use plaid_core::llm;
 use plaid_core::rules::{KEYS, Rules};
-use std::time::{Duration, Instant};
+use plaid_core::{cloud, llm, refine};
+use std::time::Instant;
 
 /// Sets format and base URL only.
 const PRESETS: [(&str, &str, &str); 6] = [
@@ -152,6 +152,14 @@ struct Test {
     result: Option<(String, bool)>,
 }
 
+/// The signed-in Cloud account as last fetched.
+#[derive(Default)]
+struct CloudAccount {
+    busy: bool,
+    error: Option<String>,
+    info: Option<cloud::Account>,
+}
+
 pub struct Refine {
     model: Entity<Model>,
     /// Page::Refine (润色) or Page::Service (服务).
@@ -161,8 +169,10 @@ pub struct Refine {
     key: Entity<KeyField>,
     /// The Volcengine key.
     asr_key: Entity<KeyField>,
-    /// 服务 shows the Cloud tab. View state only: Cloud isn't available yet, so BYOK stays in use.
+    /// 服务 shows the Cloud tab (view state; serviceMode is the 使用 Cloud switch). Opens on Cloud in cloud mode.
     cloud: bool,
+    invite: Entity<InputState>,
+    account: CloudAccount,
     menu: Option<Menu>,
     base: Entity<InputState>,
     llm_model: Entity<InputState>,
@@ -287,13 +297,16 @@ impl Refine {
         let installed = vec![];
         let sample = cx.new(|cx| TextareaState::new(window, cx).auto_grow(2, 6));
         sample.update(cx, |i, cx| i.set_value(SAMPLE, window, cx));
+        let invite = cx.new(|cx| InputState::new(window, cx).placeholder("输入邀请码"));
         Refine {
             model,
             page,
             nav,
             key,
             asr_key,
-            cloud: false,
+            cloud: config::cloud(),
+            invite,
+            account: CloudAccount::default(),
             menu: None,
             base,
             llm_model,
@@ -447,29 +460,24 @@ impl Refine {
         cx.notify();
     }
 
-    /// The controller's request (`llm::refine_request`), built from the current settings.
+    /// The controller's prompt (`refine::prompt`), built from the current settings.
     fn request(&self, text: &str, fixture: bool, cx: &App) -> Result<llm::Request, String> {
         let ep = llm::endpoint(config::value);
         let key = (!fixture && !ep.base.is_empty())
             .then(|| secret::llm_key(&ep.base))
             .flatten();
         let front = self.test_app.as_deref();
-        let fill = llm::Fill {
-            text,
+        let fill = refine::Fill {
             app: front.unwrap_or("Plaid 设置"),
+            front,
             history: &[],
             hotwords: &config::terms(true).join(", "),
             fixes: &self.model.read(cx).store.fixes(),
-            light: llm::level(config::value) == llm::Level::Light,
-            front,
         };
-        llm::refine_request(
-            config::value,
-            &ep,
-            key.as_deref(),
-            &fill,
-            Duration::from_millis(timeout_ms()),
-        )
+        let light = llm::level(config::value) == llm::Level::Light;
+        let plan = refine::direct(config::value, light, &fill, timeout_ms());
+        let extra = config::value("llmExtraBody");
+        plan.request(&ep, key.as_deref(), &plan.user_with(text), extra.as_deref())
     }
 
     fn status(&self, cx: &App) -> String {
@@ -1789,6 +1797,197 @@ impl Refine {
             })
     }
 
+    /// The stored device token, if this device is signed in. Snapshot runs never are.
+    fn cloud_token(&self, cx: &App) -> Option<String> {
+        if self.model.read(cx).facts.fixture {
+            return None;
+        }
+        secret::get("cloudToken")
+            .ok()
+            .flatten()
+            .filter(|t| !t.is_empty())
+    }
+
+    /// Fetches the signed-in account's balance and this month's usage.
+    fn cloud_refresh(&mut self, cx: &mut Context<Self>) {
+        let Some(token) = self.cloud_token(cx) else {
+            return;
+        };
+        let Ok(base) = config::cloud_url() else {
+            return;
+        };
+        self.account.busy = true;
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn(async move { cloud::account(&base, &token) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.account.busy = false;
+                match r {
+                    Ok(a) => {
+                        this.account.info = Some(a);
+                        this.account.error = None;
+                    }
+                    Err(e) => this.account.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Exchanges the invite code for a device token, stores it and loads the account.
+    fn cloud_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.account.busy {
+            return;
+        }
+        let code = self.invite.read(cx).value().trim().to_string();
+        if code.is_empty() {
+            self.account.error = Some("请输入邀请码".into());
+            return cx.notify();
+        }
+        let base = match config::cloud_url() {
+            Ok(b) => b,
+            Err(e) => {
+                self.account.error = Some(e);
+                return cx.notify();
+            }
+        };
+        if self.model.read(cx).facts.fixture {
+            self.account.error = Some("snapshot run: not sent".into());
+            return cx.notify();
+        }
+        self.account = CloudAccount {
+            busy: true,
+            ..CloudAccount::default()
+        };
+        self.invite.update(cx, |i, cx| i.set_value("", window, cx));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn(async move { cloud::login(&base, &code, &device_name()) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.account.busy = false;
+                match r.and_then(|reply| secret::set("cloudToken", &reply.token)) {
+                    Ok(()) => {
+                        this.model.update(cx, |m, _| m.facts.cloud_token = true);
+                        this.cloud_refresh(cx)
+                    }
+                    Err(e) => this.account.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn cloud_logout(&mut self, cx: &mut Context<Self>) {
+        if let Err(e) = secret::set("cloudToken", "") {
+            self.account.error = Some(e);
+            return cx.notify();
+        }
+        self.model.update(cx, |m, cx| {
+            m.facts.cloud_token = false;
+            m.set("serviceMode", "byok", cx)
+        });
+        self.account = CloudAccount::default();
+        cx.notify();
+    }
+
+    /// 服务 › Cloud: the invite code until signed in, then the account, usage, 使用 Cloud and 退出登录.
+    fn cloud_card(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
+        let a = &self.account;
+        let status = |d: Div| {
+            d.when_some(a.error.clone(), |d, e| {
+                d.child(hint(e).text_color(hex(RED)))
+            })
+            .when(a.busy, |d| d.child(hint("连接中…")))
+        };
+        let body = group_body().child(card_head(
+            "Plaid Cloud",
+            "托管的语音识别与润色，无需配置 API Key",
+        ));
+        if let Err(e) = config::cloud_url() {
+            return hit("cloud").child(body.child(hint(e)));
+        }
+        if self.cloud_token(cx).is_none() {
+            let login = default_button(
+                "cloud-login",
+                "登录",
+                cx.listener(|this, _, window, cx| this.cloud_login(window, cx)),
+            );
+            return hit("cloud").child(status(
+                body.child(row(
+                    "邀请码",
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(field(&self.invite, 200., window, cx))
+                        .child(login),
+                )),
+            ));
+        }
+        let (name, balance, month) = match &a.info {
+            Some(i) => (
+                i.name.clone(),
+                cloud::credits(i.balance_micros),
+                format!(
+                    "本月已用 {} · 识别 {:.0} 分钟",
+                    cloud::credits(i.month_micros),
+                    i.month_ms as f64 / 60_000.
+                ),
+            ),
+            None => ("已登录".into(), "—".into(), String::new()),
+        };
+        let model = self.model.clone();
+        let refresh = small_button(
+            "cloud-refresh",
+            "刷新",
+            cx.listener(|this, _, _, cx| this.cloud_refresh(cx)),
+        );
+        let logout = small_button(
+            "cloud-logout",
+            "退出登录",
+            cx.listener(|this, _, _, cx| this.cloud_logout(cx)),
+        );
+        hit("cloud").child(status(
+            body.child(row(
+                "账户",
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(div().flex_1().min_w_0().truncate().child(name))
+                    .child(logout),
+            ))
+            .child(row(
+                "余额",
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(10.))
+                    .child(div().child(balance))
+                    .child(div().flex_1().min_w_0().truncate().child(hint(month)))
+                    .child(refresh),
+            ))
+            .child(toggle_row(
+                "serviceMode",
+                config::cloud(),
+                "使用 Cloud",
+                "识别、润色和学习均由 Cloud 完成；润色级别、风格和词典设置照常生效",
+                move |v, _, cx| {
+                    model.update(cx, |m, cx| {
+                        m.set("serviceMode", if v { "cloud" } else { "byok" }, cx)
+                    });
+                },
+            )),
+        ))
+    }
+
     /// 服务: a BYOK / Cloud tab, then for BYOK recognition (Volcengine key and options) and the LLM endpoint with
     /// its prompts and a test; Cloud is a placeholder card until it exists.
     fn service_page(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -1806,21 +2005,16 @@ impl Refine {
             move |i, _, cx| {
                 let _ = this.update(cx, |r, cx| {
                     r.cloud = i == 1;
+                    if r.cloud && r.account.info.is_none() {
+                        r.cloud_refresh(cx);
+                    }
                     cx.notify();
                 });
             },
         );
         let body = super::page_body("service").child(div().flex().child(tab));
         if self.cloud {
-            return body.child(
-                hit("cloud").child(
-                    group_body()
-                        .child(card_head("Plaid Cloud", "正在开发"))
-                        .child(hint(
-                            "识别和润色都由 Plaid 提供，不用自己申请 key，也不用配置模型。上线前一直使用 BYOK 里的设置。",
-                        )),
-                ),
-            );
+            return body.child(self.cloud_card(window, cx));
         }
         body.child(
             group("语音识别").child(
@@ -1851,6 +2045,20 @@ impl Refine {
             ),
         )
     }
+}
+
+/// The name this device shows under in the server's device list.
+fn device_name() -> String {
+    #[cfg(target_os = "macos")]
+    let name = std::process::Command::new("scutil")
+        .args(["--get", "ComputerName"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    #[cfg(not(target_os = "macos"))]
+    let name = std::env::var("COMPUTERNAME").ok();
+    name.filter(|n| !n.is_empty())
+        .unwrap_or_else(|| std::env::consts::OS.into())
 }
 
 #[cfg(all(feature = "snapshot", any(target_os = "macos", target_os = "linux")))]
@@ -2003,12 +2211,15 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &None,
     )?;
     ui.shot("service")?;
-    // Cloud is a placeholder tab: it hides the BYOK settings and stores nothing.
+    // The Cloud tab hides the BYOK settings; switching tabs stores nothing, and a signed-out device is asked to
+    // sign in (a snapshot run never sends the code); a build without a Cloud URL says so instead.
     let stored = std::fs::read_to_string(config::data_dir().join("settings.json")).ok();
     ui.click("service-mode-1")?;
     expect(
-        "cloud placeholder",
-        ui.has("cloud") && !ui.has("asrContext"),
+        "cloud sign-in",
+        ui.has("cloud")
+            && (ui.has("cloud-login") || config::cloud_url().is_err())
+            && !ui.has("asrContext"),
         &None,
     )?;
     ui.shot("service-cloud")?;
