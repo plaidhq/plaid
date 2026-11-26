@@ -10,6 +10,9 @@ use std::time::Duration;
 
 /// 200 ms of 16 kHz mono s16le, the packet size the docs recommend.
 pub const PACKET: usize = 6400;
+/// The server ends the session after ~8 s without an audio packet; while the caller holds back silence, an empty
+/// packet keeps it open without adding billed audio.
+const KEEPALIVE: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -173,6 +176,7 @@ async fn run(
 
     let (mut buf, mut begun, mut sent_last) = (Vec::<u8>::new(), false, false);
     let (mut latest, mut last_raw) = (String::new(), None::<String>);
+    let mut keepalive = None::<async_io::Timer>;
     loop {
         let cmd = async {
             match queued.pop_front() {
@@ -185,6 +189,7 @@ async fn run(
                 Ok(Cmd::Begin(dialog)) if !begun => {
                     begun = true;
                     ws.send(Message::binary(params(&opts, &hotwords, &dialog))).await.map_err(send_err)?;
+                    keepalive = Some(async_io::Timer::after(KEEPALIVE));
                 }
                 Ok(Cmd::Begin(_)) => {}
                 Ok(Cmd::Audio(pcm)) => buf.extend_from_slice(&pcm),
@@ -224,6 +229,10 @@ async fn run(
                 }
                 continue;
             },
+            _ = until(&mut keepalive).fuse() => {
+                ws.send(Message::binary(volc::frame(AUDIO_ONLY, false, false, &[]))).await.map_err(send_err)?;
+                keepalive = Some(async_io::Timer::after(KEEPALIVE));
+            },
             _ = until(&mut deadline).fuse() => {
                 // The server occasionally never sends the last packet; fall back to the latest partial.
                 let _ = ws.close(None).await;
@@ -237,6 +246,7 @@ async fn run(
                 .await
                 .map_err(send_err)?;
             buf = rest;
+            keepalive = Some(async_io::Timer::after(KEEPALIVE));
         }
         // A queued `finish` (it came while connecting) counts once the audio queued before it has gone out.
         if finished && !sent_last && queued.is_empty() {
@@ -249,6 +259,7 @@ async fn run(
             )))
             .await
             .map_err(send_err)?;
+            keepalive = None;
         }
     }
 }
@@ -341,6 +352,49 @@ mod tests {
             ]
         );
         assert_eq!(frames[0].0, FULL_REQUEST);
+        drop(events);
+        client.join().unwrap();
+    }
+
+    /// While no audio comes (the gate is holding silence), empty packets keep the server from timing out.
+    #[test]
+    fn idle_session_sends_empty_keepalive_packets() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut opts = Options::new("k".into());
+        opts.url = format!("ws://{}", l.local_addr().unwrap());
+        let (s, events, fut) = start(opts, Snapshot::default());
+        let client = std::thread::spawn(move || async_io::block_on(fut));
+        let (tcp, _) = l.accept().unwrap();
+        s.begin(vec![]);
+        let (mut s, mut finisher) = (Some(s), None);
+        let frames = async_io::block_on(async {
+            let tcp = async_io::Async::new(tcp).unwrap();
+            let mut ws = async_tungstenite::accept_async(tcp).await.unwrap();
+            let mut frames = vec![];
+            while let Some(Ok(m)) = ws.next().await {
+                let Message::Binary(d) = m else { continue };
+                // The keepalive is armed once the full request is out; finish well after one is due.
+                if frames.is_empty() {
+                    let s = s.take().unwrap();
+                    finisher = Some(std::thread::spawn(move || {
+                        std::thread::sleep(KEEPALIVE + Duration::from_millis(500));
+                        s.finish();
+                    }));
+                }
+                let last = d[1] & 0b0010 != 0;
+                frames.push((
+                    d[1] >> 4,
+                    last,
+                    u32::from_be_bytes(d[4..8].try_into().unwrap()),
+                ));
+                if last {
+                    break;
+                }
+            }
+            frames
+        });
+        assert_eq!(frames[1..], [(AUDIO_ONLY, false, 0), (AUDIO_ONLY, true, 0)]);
+        finisher.unwrap().join().unwrap();
         drop(events);
         client.join().unwrap();
     }

@@ -8,11 +8,13 @@ use std::process::Command;
 
 const SERVER_FULL: u8 = 0b1001;
 
-/// One second of a 440 Hz tone, 16 kHz mono 16-bit.
+/// One second of a 440 Hz tone pulsing every 100 ms like syllables (a steady tone reads as noise to the gate),
+/// 16 kHz mono 16-bit.
 fn wav() -> Vec<u8> {
     let pcm: Vec<u8> = (0..16000)
         .flat_map(|i| {
-            let s = (i as f64 * 440. * std::f64::consts::TAU / 16000.).sin() * 8000.;
+            let amp = if i / 1600 % 2 == 0 { 8000. } else { 100. };
+            let s = (i as f64 * 440. * std::f64::consts::TAU / 16000.).sin() * amp;
             (s as i16).to_le_bytes()
         })
         .collect();

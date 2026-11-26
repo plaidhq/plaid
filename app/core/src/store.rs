@@ -32,6 +32,9 @@ pub struct Record {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
     pub audio_ms: i64,
+    /// Audio sent to the ASR (billed); silence the gate held back is the difference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sent_ms: Option<i64>,
     /// Key-down → first partial in the HUD.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_text_ms: Option<i64>,

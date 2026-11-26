@@ -2,6 +2,7 @@
 //! on one thread, every side effect goes through `Platform`. Inputs from other threads (mic, ASR, timers,
 //! focus reads) carry the utterance generation they belong to; stale ones are dropped.
 use crate::actions::{self, Action, Parsed};
+use crate::gate::Gate;
 use crate::llm::{self, Endpoint, Level};
 use crate::rules::Rules;
 use crate::session::{Event, Session};
@@ -228,6 +229,8 @@ struct Utterance {
     latest: String,
     audio: Vec<u8>,
     levels: Vec<i64>,
+    /// Decides which of `audio` reaches the ASR.
+    gate: Gate,
     silence: f64,
     actions: Vec<Action>,
     wake: String,
@@ -485,9 +488,10 @@ impl Controller {
                 if let Some(u) = &mut self.u {
                     u.begun = true;
                     p.log(&format!(
-                        "end levels={} p90={}",
+                        "end levels={} p90={} sentMs={}",
                         u.levels.len(),
-                        u.p90().unwrap_or(0)
+                        u.p90().unwrap_or(0),
+                        u.gate.sent_bytes / 32
                     ));
                 }
                 if let Some(s) = &self.session {
@@ -668,6 +672,7 @@ impl Controller {
             latest: String::new(),
             audio: vec![],
             levels: vec![],
+            gate: Gate::default(),
             silence,
             actions,
             wake,
@@ -723,8 +728,11 @@ impl Controller {
         let r = rms(&pcm);
         u.audio.extend_from_slice(&pcm);
         u.levels.push(r as i64);
-        if let Some(s) = &self.session {
-            s.append(pcm);
+        let out = u.gate.push(pcm, r);
+        if let Some(s) = &self.session
+            && !out.is_empty()
+        {
+            s.append(out);
         }
         p.hud(Hud::Level(r));
         // 2 s in without any transcript and the input still near silence: say which device is recording.
@@ -870,6 +878,7 @@ impl Controller {
             at: u.at,
             app: u.app.clone(),
             audio_ms: ms(u.start, u.audio_end),
+            sent_ms: Some(u.gate.sent_bytes as i64 / 32),
             first_text_ms: u.first_text.map(|t| ms(u.start, t)),
             asr_ms: ms(release, asr_at),
             llm_ms,

@@ -2,6 +2,7 @@
 pub mod actions;
 pub mod dictation;
 pub mod diff;
+pub mod gate;
 pub mod gesture;
 pub mod hotwords;
 pub mod llm;
