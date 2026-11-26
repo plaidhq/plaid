@@ -548,3 +548,31 @@ async fn llm_requests_go_through_the_configured_proxy() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(conns.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn users_rename_themselves_to_a_free_name_of_up_to_eight_characters() {
+    let f = fixture().await;
+    let token = f.token(1_000_000).await;
+    f.app.db.invite("bob", None, chrono::Utc::now()).unwrap();
+    let (base, t) = (f.base.clone(), token.clone());
+    let (taken, ok, name) = tokio::task::spawn_blocking(move || {
+        let taken = cloud::rename(&base, &t, "BOB");
+        let ok = cloud::rename(&base, &t, " 鲸鱼🐳 ");
+        (taken, ok, cloud::account(&base, &t).unwrap().name)
+    })
+    .await
+    .unwrap();
+    assert_eq!(taken, Err("这个名字已经有人用了".into()));
+    assert_eq!((ok, name.as_str()), (Ok(()), "鲸鱼🐳"));
+    // The server checks too: a client that skips check_name gets its message back.
+    let r = reqwest::Client::new()
+        .post(format!("{}/v1/name", f.base))
+        .bearer_auth(&token)
+        .header("content-type", "application/json")
+        .body(r#"{"name":"九个字的名字呀呀呀"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 400);
+    assert_eq!(r.text().await.unwrap(), "名字最多 8 个字符");
+}

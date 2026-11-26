@@ -158,6 +158,8 @@ struct CloudAccount {
     busy: bool,
     error: Option<String>,
     info: Option<cloud::Account>,
+    /// The 账户 row shows the name field instead of the name.
+    renaming: bool,
 }
 
 pub struct Refine {
@@ -170,6 +172,8 @@ pub struct Refine {
     /// The Volcengine key.
     asr_key: Entity<KeyField>,
     invite: Entity<InputState>,
+    /// 服务 › Cloud: the new user name while renaming.
+    new_name: Entity<InputState>,
     account: CloudAccount,
     menu: Option<Menu>,
     base: Entity<InputState>,
@@ -296,6 +300,15 @@ impl Refine {
         let sample = cx.new(|cx| TextareaState::new(window, cx).auto_grow(2, 6));
         sample.update(cx, |i, cx| i.set_value(SAMPLE, window, cx));
         let invite = cx.new(|cx| InputState::new(window, cx).placeholder("输入邀请码"));
+        let new_name = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(format!("最多 {} 个字符", cloud::NAME_MAX))
+        });
+        cx.subscribe_in(&new_name, window, |this, _, e: &InputEvent, _, cx| {
+            if matches!(e, InputEvent::PressEnter { .. }) {
+                this.cloud_rename(cx);
+            }
+        })
+        .detach();
         Refine {
             model,
             page,
@@ -303,6 +316,7 @@ impl Refine {
             key,
             asr_key,
             invite,
+            new_name,
             account: CloudAccount::default(),
             menu: None,
             base,
@@ -1817,6 +1831,16 @@ impl Refine {
         if self.account.busy {
             return;
         }
+        #[cfg(feature = "snapshot")]
+        if self.model.read(cx).facts.fixture && self.account.info.is_none() {
+            self.account.info = Some(cloud::Account {
+                name: "neo".into(),
+                balance_micros: 77_693_900,
+                month_micros: 83_100_000,
+                month_ms: 138_000,
+            });
+            return cx.notify();
+        }
         let Some(token) = self.cloud_token(cx) else {
             return;
         };
@@ -1883,6 +1907,78 @@ impl Refine {
         .detach();
     }
 
+    /// Opens the name field on the current name.
+    fn cloud_rename_start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self
+            .account
+            .info
+            .as_ref()
+            .map(|i| i.name.clone())
+            .unwrap_or_default();
+        self.new_name.update(cx, |i, cx| {
+            i.set_value(name, window, cx);
+            i.focus(window, cx);
+        });
+        self.account.renaming = true;
+        self.account.error = None;
+        cx.notify();
+    }
+
+    /// Sends the new name; the server refuses a name someone else has.
+    fn cloud_rename(&mut self, cx: &mut Context<Self>) {
+        if self.account.busy || !self.account.renaming {
+            return;
+        }
+        let name = match cloud::check_name(self.new_name.read(cx).value().as_ref()) {
+            Ok(n) => n,
+            Err(e) => {
+                self.account.error = Some(e);
+                return cx.notify();
+            }
+        };
+        if self.account.info.as_ref().is_some_and(|i| i.name == name) {
+            self.account.renaming = false;
+            self.account.error = None;
+            return cx.notify();
+        }
+        // Snapshot runs: "amy" stands for a name someone else has.
+        if self.model.read(cx).facts.fixture {
+            if name.eq_ignore_ascii_case("amy") {
+                self.account.error = Some("这个名字已经有人用了".into());
+            } else if let Some(i) = &mut self.account.info {
+                i.name = name;
+                self.account.renaming = false;
+                self.account.error = None;
+            }
+            return cx.notify();
+        }
+        let Some(token) = self.cloud_token(cx) else {
+            return;
+        };
+        let base = config::cloud_url();
+        self.account.busy = true;
+        self.account.error = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn(async move { cloud::rename(&base, &token, &name) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.account.busy = false;
+                match r {
+                    Ok(()) => {
+                        this.account.renaming = false;
+                        this.cloud_refresh(cx);
+                    }
+                    Err(e) => this.account.error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn cloud_logout(&mut self, cx: &mut Context<Self>) {
         if let Err(e) = secret::set("cloudToken", "") {
             self.account.error = Some(e);
@@ -1907,7 +2003,7 @@ impl Refine {
             "Plaid Cloud",
             "识别、润色和学习由 Cloud 完成，无需 API Key；润色级别、风格和词典照常生效",
         ));
-        if self.cloud_token(cx).is_none() {
+        if !self.model.read(cx).facts.cloud_token {
             let login = default_button(
                 "cloud-login",
                 "登录",
@@ -1947,17 +2043,51 @@ impl Refine {
             "退出登录",
             cx.listener(|this, _, _, cx| this.cloud_logout(cx)),
         );
+        let account = if a.renaming {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .child(field(&self.new_name, 160., window, cx))
+                .child(default_button(
+                    "cloud-rename-save",
+                    "保存",
+                    cx.listener(|this, _, _, cx| this.cloud_rename(cx)),
+                ))
+                .child(small_button(
+                    "cloud-rename-cancel",
+                    "取消",
+                    cx.listener(|this, _, _, cx| {
+                        this.account.renaming = false;
+                        this.account.error = None;
+                        cx.notify();
+                    }),
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(hint("鲸喷榜上显示这个名字，不能和别人重名")),
+                )
+        } else {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .child(div().min_w_0().truncate().child(name))
+                .when(a.info.is_some(), |d| {
+                    d.child(small_button(
+                        "cloud-rename",
+                        "改名",
+                        cx.listener(|this, _, window, cx| this.cloud_rename_start(window, cx)),
+                    ))
+                })
+                .child(div().flex_1())
+                .child(logout)
+        };
         hit("cloud").child(status(
-            body.child(row(
-                "账户",
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .child(div().flex_1().min_w_0().truncate().child(name))
-                    .child(logout),
-            ))
-            .child(row(
+            body.child(row("账户", account)).child(row(
                 "余额",
                 div()
                     .flex()

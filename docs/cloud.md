@@ -25,6 +25,8 @@ one by one; BYOK stays the default and keeps working exactly as before.
 - The database stores only the SHA-256 of tokens and codes.
 - `admin credit <name> <N|-N>` adds or takes credit. `admin users` and `admin usage [YYYY-MM]` cover the rest.
   There is no web admin.
+- Names are 1–8 characters (Unicode, trimmed, no control characters), unique ignoring ASCII case, stored as
+  SQLite TEXT. Users rename themselves in 设置 › 服务 › Cloud; `admin rename <name> <new>` does the same.
 
 ### Tables
 
@@ -59,6 +61,8 @@ bad_request, disconnected), never upstream text.
 - `GET /v1/board?days=N` (bearer, N 1–90, default 7) → `{days, me, joined, rows:[{name, chars, audio_ms, dictations}]}`:
   completed dictations of users who take part, most characters first. A user who left gets `joined: false` and no rows.
 - `POST /v1/board` (bearer) `{join}` → 204: leave or rejoin 鲸喷榜.
+- `POST /v1/name` (bearer) `{name}` → 204, 400 with the reason as plain text (empty, too long), or 409 when
+  another user has the name.
 - `GET /v1/ws` (bearer), websocket. One request per connection in v1. Whether a persistent connection is worth
   having gets measured from `done` timings first.
 

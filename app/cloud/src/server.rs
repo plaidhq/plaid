@@ -10,7 +10,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use chrono::Utc;
 use plaid_core::cloud::{
-    Account, Asr, Board, BoardJoin, ClientMsg, ErrorCode, Kind, Login, LoginReply, ServerMsg, Usage,
+    Account, Asr, Board, BoardJoin, ClientMsg, ErrorCode, Kind, Login, LoginReply, Rename,
+    ServerMsg, Usage, check_name,
 };
 use plaid_core::dictation::rms;
 use plaid_core::gate::Gate;
@@ -42,6 +43,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/v1/login", post(login))
         .route("/v1/account", get(account))
         .route("/v1/board", get(board).post(board_join))
+        .route("/v1/name", post(rename))
         .route("/v1/ws", get(ws))
         .with_state(app)
 }
@@ -147,6 +149,28 @@ async fn board_join(
             log!("board user={} join={}", d.user, req.join);
             StatusCode::NO_CONTENT.into_response()
         }
+        Err(e) => {
+            log!("db error: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn rename(State(app): State<Arc<App>>, h: HeaderMap, Json(req): Json<Rename>) -> Response {
+    let d = match authorize(&app, &h) {
+        Ok(d) => d,
+        Err(s) => return s.into_response(),
+    };
+    let name = match check_name(&req.name) {
+        Ok(n) => n,
+        Err(why) => return (StatusCode::BAD_REQUEST, why).into_response(),
+    };
+    match app.db.rename(d.user_id, &name) {
+        Ok(true) => {
+            log!("rename user={} to={name}", d.user);
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => StatusCode::CONFLICT.into_response(),
         Err(e) => {
             log!("db error: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()

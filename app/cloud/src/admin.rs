@@ -2,10 +2,11 @@
 use crate::config::micros;
 use crate::db::Db;
 use chrono::{Datelike, Utc};
-use plaid_core::cloud::credits;
+use plaid_core::cloud::{check_name, credits};
 
 pub const USAGE: &str = "plaid-cloud admin <command>
   invite <name> [--credit N]    create the user if needed, add N credit and print a one-time code (7 days)
+  rename <name> <new name>      change a user's name (at most 8 characters, unique ignoring case)
   credit <name> <N|-N>          add (or take) credit and print the balance
   users                         users, devices, balance and this month's spend
   devices                       devices and when they were last seen
@@ -35,8 +36,19 @@ pub fn run(db: &Db, args: &[String]) -> Result<String, String> {
     let now = Utc::now();
     let db_err = |e: rusqlite::Error| e.to_string();
     match a.as_slice() {
-        ["invite", name] => db.invite(name, None, now).map_err(db_err),
-        ["invite", name, "--credit", n] => db.invite(name, Some(micros(n)?), now).map_err(db_err),
+        ["invite", name] => db.invite(&check_name(name)?, None, now).map_err(db_err),
+        ["invite", name, "--credit", n] => db
+            .invite(&check_name(name)?, Some(micros(n)?), now)
+            .map_err(db_err),
+        ["rename", name, new] => {
+            let new = check_name(new)?;
+            let id = db.user_id(name).map_err(db_err)?.ok_or("no such user")?;
+            if db.rename(id, &new).map_err(db_err)? {
+                Ok("ok".into())
+            } else {
+                Err(format!("name taken: {new}"))
+            }
+        }
         ["credit", name, n] => match db.credit(name, signed(n)?, now).map_err(db_err)? {
             Some(b) => Ok(format!("{name}\tbalance={}", credits(b))),
             None => Err("no such user".into()),

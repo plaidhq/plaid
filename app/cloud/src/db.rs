@@ -239,12 +239,24 @@ impl Db {
         now: DateTime<Utc>,
     ) -> rusqlite::Result<String> {
         let c = self.conn();
-        c.execute(
-            "INSERT INTO users (name, created) VALUES (?1, ?2) ON CONFLICT(name) DO NOTHING",
-            params![name, ts(now)],
-        )?;
-        let user: i64 =
-            c.query_row("SELECT id FROM users WHERE name = ?1", [name], |r| r.get(0))?;
+        // An existing user is matched ignoring ASCII case, as rename keeps names unique.
+        let found: Option<i64> = c
+            .query_row(
+                "SELECT id FROM users WHERE name = ?1 COLLATE NOCASE",
+                [name],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let user = match found {
+            Some(id) => id,
+            None => {
+                c.execute(
+                    "INSERT INTO users (name, created) VALUES (?1, ?2)",
+                    params![name, ts(now)],
+                )?;
+                c.last_insert_rowid()
+            }
+        };
         if let Some(a) = credit {
             add_credit(&c, user, a, now)?;
         }
@@ -418,6 +430,34 @@ impl Db {
         Ok((joined, rows))
     }
 
+    /// Renames a user; false when another user has the name (ignoring ASCII case). The name is checked by the caller.
+    pub fn rename(&self, user_id: i64, name: &str) -> rusqlite::Result<bool> {
+        let c = self.conn();
+        let taken = c
+            .query_row(
+                "SELECT 1 FROM users WHERE name = ?1 COLLATE NOCASE AND id != ?2",
+                params![name, user_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if taken {
+            return Ok(false);
+        }
+        c.execute(
+            "UPDATE users SET name = ?1 WHERE id = ?2",
+            params![name, user_id],
+        )?;
+        Ok(true)
+    }
+
+    /// The id of the user named exactly `name`.
+    pub fn user_id(&self, name: &str) -> rusqlite::Result<Option<i64>> {
+        self.conn()
+            .query_row("SELECT id FROM users WHERE name = ?1", [name], |r| r.get(0))
+            .optional()
+    }
+
     pub fn set_board(&self, user_id: i64, join: bool) -> rusqlite::Result<()> {
         self.conn().execute(
             "UPDATE users SET board = ?1 WHERE id = ?2",
@@ -535,6 +575,23 @@ mod tests {
 
     fn at(s: &str) -> DateTime<Utc> {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn rename_keeps_names_unique_ignoring_case() {
+        let db = Db::memory();
+        let now = at("2026-11-25T10:00:00Z");
+        db.invite("amy", None, now).unwrap();
+        db.invite("bob", None, now).unwrap();
+        let amy = db.user_id("amy").unwrap().unwrap();
+        assert!(!db.rename(amy, "BOB").unwrap());
+        assert!(db.rename(amy, "Amy").unwrap(), "own name in another case");
+        assert!(db.rename(amy, "老王").unwrap());
+        assert_eq!(db.user_id("老王").unwrap(), Some(amy));
+        assert_eq!(db.user_id("amy").unwrap(), None);
+        // invite finds the user whatever the case, instead of making a second one.
+        db.invite("BOB", None, now).unwrap();
+        assert_eq!(db.users(now).unwrap().len(), 2);
     }
 
     #[test]

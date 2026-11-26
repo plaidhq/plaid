@@ -618,7 +618,7 @@ impl Render for Board {
                     .justify_between()
                     .gap(px(16.))
                     .child(hint(
-                        "只统计 Plaid Cloud 的听写，从上线起算；服务器只记字数和时长，不存文字。名字是邀请名。",
+                        "只统计 Plaid Cloud 的听写，从上线起算；服务器只记字数和时长，不存文字。名字在 设置 › 服务 › Cloud 里改。",
                     ).text_size(px(11.)))
                     .child(small_button("board-leave", "隐身", move |_, _, cx| {
                         let _ = this.update(cx, |b, cx| b.join(false, cx));
@@ -692,6 +692,39 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     ui.shot("board-hidden")?;
     ui.click("board-join")?;
     expect("重新上榜 brings it back", ui.has("board-me"), &None)?;
+    ui.close()?;
+    // 服务 › Cloud: 改名 opens a field on the current name; a taken or too long name stays in the field.
+    let facts = super::Facts {
+        cloud_token: true,
+        ..super::overview::fixture_facts()
+    };
+    ui.open(super::Page::Service, facts)?;
+    ui.click("service-mode-1")?;
+    expect(
+        "signed in: account row with 改名",
+        ui.has("cloud-rename") && !ui.has("cloud-login"),
+        &None,
+    )?;
+    ui.click("cloud-rename")?;
+    ui.key("cmd-a")?;
+    ui.type_text("abcdefghi")?;
+    ui.key("enter")?;
+    expect("9 characters refused", ui.has("cloud-rename-save"), &None)?;
+    ui.shot("service-cloud-rename")?;
+    ui.key("cmd-a")?;
+    ui.type_text("amy")?;
+    ui.click("cloud-rename-save")?;
+    expect("taken name refused", ui.has("cloud-rename-save"), &None)?;
+    ui.key("cmd-a")?;
+    ui.type_text("whale")?;
+    ui.key("enter")?;
+    expect(
+        "renamed: back to the account row",
+        ui.has("cloud-rename") && !ui.has("cloud-rename-save"),
+        &None,
+    )?;
+    ui.shot("service-cloud-renamed")?;
+    ui.click("service-mode-0")?;
     ui.close()?;
     let facts = super::overview::fixture_facts();
     ui.open(super::Page::Overview, facts)?;

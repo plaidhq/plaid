@@ -482,6 +482,30 @@ pub struct BoardJoin {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct Rename {
+    pub name: String,
+}
+
+/// Longest user name, in characters (Unicode scalar values): it is the 鲸喷榜 display name.
+pub const NAME_MAX: usize = 8;
+
+/// A user name as stored: trimmed, 1–`NAME_MAX` characters, no control characters. The server and the app both
+/// check with this, so the app can say what is wrong before asking.
+pub fn check_name(name: &str) -> Result<String, String> {
+    let n = name.trim();
+    if n.is_empty() {
+        return Err("名字不能为空".into());
+    }
+    if n.chars().count() > NAME_MAX {
+        return Err(format!("名字最多 {NAME_MAX} 个字符"));
+    }
+    if n.chars().any(char::is_control) {
+        return Err("名字不能含控制字符".into());
+    }
+    Ok(n.into())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Login {
     pub code: String,
     pub device: String,
@@ -596,11 +620,55 @@ pub fn board_join(base: &str, token: &str, join: bool) -> Result<(), String> {
     }
 }
 
+/// Changes the caller's user name; names are unique ignoring ASCII case. Blocking.
+pub fn rename(base: &str, token: &str, name: &str) -> Result<(), String> {
+    let name = check_name(name)?;
+    let opts = Options::new(base, token.into(), "");
+    let body = serde_json::to_vec(&Rename { name }).map_err(|e| e.to_string())?;
+    let mut resp = crate::llm::AGENT
+        .post(&opts.url("/v1/name"))
+        .header("Authorization", &format!("Bearer {token}"))
+        .header("Content-Type", "application/json")
+        .config()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .build()
+        .send(&body[..])
+        .map_err(http_err)?;
+    match resp.status().as_u16() {
+        200 | 204 => Ok(()),
+        401 => Err(describe_error(ErrorCode::Auth, "")),
+        404 => Err("Cloud 服务器还不支持改名".into()),
+        409 => Err("这个名字已经有人用了".into()),
+        // The server's own check_name message, never upstream text.
+        400 => Err(resp
+            .body_mut()
+            .read_to_string()
+            .unwrap_or_else(|_| "名字不可用".into())),
+        s => Err(format!("Cloud HTTP {s}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::llm::Level;
     use crate::rules::Rules;
+
+    #[test]
+    fn names_are_trimmed_and_capped_at_eight_characters() {
+        assert_eq!(check_name("  老王  ").as_deref(), Ok("老王"));
+        assert_eq!(
+            check_name("八个字的名字呀呀").as_deref(),
+            Ok("八个字的名字呀呀")
+        );
+        assert_eq!(
+            check_name("🐳🐳🐳🐳🐳🐳🐳🐳").as_deref(),
+            Ok("🐳🐳🐳🐳🐳🐳🐳🐳")
+        );
+        assert!(check_name("九个字的名字呀呀呀").is_err());
+        assert!(check_name("   ").is_err());
+        assert!(check_name("a\tb").is_err());
+    }
 
     fn plan() -> Plan {
         Plan {
