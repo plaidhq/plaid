@@ -1,10 +1,16 @@
-# Pushing a tag vX.Y.Z builds the macOS app (Apple silicon and Intel, one zip each) and the Windows exe, and publishes
-# both as a GitHub release. The tag must match the workspace version in app/Cargo.toml.
+# The only workflow. Pushing a tag vX.Y.Z builds the macOS app (Apple silicon and Intel, one zip each) and the Windows
+# exe, launch-tests each, runs the tests on Windows (macOS is tested locally), and publishes a GitHub release. The tag
+# must match the workspace version in app/Cargo.toml.
+#
+# Caches: tag runs can only restore caches saved on main. A manual run on main (workflow_dispatch) builds and tests
+# the same way without publishing and saves them; every tag run restores them, which keeps them from expiring (7 days
+# unused). Run it by hand after dependency or toolchain changes.
 name: release
 
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 defaults:
   run:
@@ -24,14 +30,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Tag matches version
+        if: github.ref_type == 'tag'
         run: test "v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" = "$GITHUB_REF_NAME"
       - uses: dtolnay/rust-toolchain@stable
-      # Restores what app.yml's macos-<arch> job saved on main (tags can't restore their own caches later).
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app
           shared-key: macos-${{ matrix.arch }}
-          save-if: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # A fixed self-signed identity (not trusted, not notarized): the designated requirement names its certificate,
       # so Microphone/Accessibility grants survive updates, which ad-hoc signatures (cdhash) don't.
       - name: Signing keychain
@@ -57,12 +63,27 @@ jobs:
           BIN=target/Plaid.app/Contents/MacOS/plaid
           lipo -archs "$BIN" | grep -qx "${{ matrix.arch == 'x64' && 'x86_64' || 'arm64' }}"
           vtool -show-build "$BIN" | grep -q 'minos 13.0'
-      - run: ditto -c -k --keepParent target/Plaid.app "Plaid-$GITHUB_REF_NAME-macos-${{ matrix.arch }}.zip"
-      - uses: actions/upload-artifact@v4
+      # The app must stay up, log its launch (after the GPUI windows open) and not panic.
+      - name: Launch smoke test
+        run: |
+          export PLAID_DATA_DIR="$RUNNER_TEMP/plaid-smoke"
+          target/Plaid.app/Contents/MacOS/plaid &
+          PID=$!
+          sleep 8
+          cat "$PLAID_DATA_DIR/events.log" || true
+          kill -0 $PID || { echo "plaid exited"; exit 1; }
+          kill $PID
+          grep -q 'launch ' "$PLAID_DATA_DIR/events.log"
+          ! grep -q 'panic:' "$PLAID_DATA_DIR/events.log"
+      - if: github.ref_type == 'tag'
+        run: ditto -c -k --keepParent target/Plaid.app "Plaid-$GITHUB_REF_NAME-macos-${{ matrix.arch }}.zip"
+      - if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}
           path: app/Plaid-*.zip
           if-no-files-found: error
+          retention-days: 1
 
   windows:
     runs-on: windows-latest
@@ -72,18 +93,39 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app
-          shared-key: windows-release
-          save-if: false
+          shared-key: windows-x64
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Includes the replay against a mock Volc endpoint; the Windows layer can't be tested from a Mac.
+      - run: cargo test --workspace
       - run: cargo build --release -p plaid
-      - run: 7z a "Plaid-$GITHUB_REF_NAME-windows-x64.zip" ./target/release/plaid.exe
-      - uses: actions/upload-artifact@v4
+      # windows_subsystem only applies to the release exe, so the launch test runs that. A panic shows a message box
+      # and blocks, so liveness alone proves nothing: the log must have its launch line and no panic.
+      - name: Launch smoke test
+        shell: pwsh
+        run: |
+          $env:PLAID_DATA_DIR = "$env:RUNNER_TEMP\plaid-smoke"
+          $p = Start-Process target\release\plaid.exe -PassThru
+          Start-Sleep -Seconds 8
+          $log = Get-Content "$env:PLAID_DATA_DIR\events.log" -Raw -ErrorAction SilentlyContinue
+          Write-Output $log
+          $alive = -not $p.HasExited
+          if ($alive) { Stop-Process -Id $p.Id -Force }
+          if (-not $alive) { throw "plaid.exe exited with $($p.ExitCode)" }
+          if ($log -notmatch 'launch ') { throw 'no launch line in events.log' }
+          if ($log -match 'panic:') { throw 'panicked' }
+      - if: github.ref_type == 'tag'
+        run: 7z a "Plaid-$GITHUB_REF_NAME-windows-x64.zip" ./target/release/plaid.exe
+      - if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@v4
         with:
           name: windows
           path: app/Plaid-*.zip
           if-no-files-found: error
+          retention-days: 1
 
   release:
     needs: [macos, windows]
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: write

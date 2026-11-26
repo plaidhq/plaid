@@ -128,8 +128,8 @@ cargo test --workspace
 - `plaid --learn-report`：打印学习模块收集到的内容。
 - `plaid --update`：从命令行更新。
 
-每次推送到 `main` 时 CI 会在 Windows 和 Intel macOS 上构建和测试；打 `v*` 标签会构建 macOS（arm64、x64）和
-Windows 并发布 release。
+GitHub Actions 只在打 `v*` 标签时运行：构建 macOS（arm64、x64）和 Windows，各自做启动测试，在 Windows 上跑测试，
+然后发布 release。macOS 的测试在本地跑。
 
 ## 许可
 

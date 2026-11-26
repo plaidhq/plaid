@@ -144,8 +144,8 @@ Headless helpers:
 - `plaid --learn-report` prints what the learner has collected.
 - `plaid --update` updates from the command line.
 
-CI builds and tests on Windows and Intel macOS on every push to `main`. A `v*` tag builds macOS (arm64, x64) and
-Windows and publishes a release.
+GitHub Actions runs only on `v*` tags: it builds macOS (arm64, x64) and Windows, launch-tests each, runs the tests
+on Windows and publishes a release. macOS is tested locally.
 
 ## License
 
