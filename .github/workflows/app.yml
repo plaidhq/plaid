@@ -1,19 +1,16 @@
 # GPUI app (app/): format, lint and tests (including the mock-endpoint replay) on Windows, Intel and Apple silicon
-# Macs, a launch smoke test on each, and ui-check renders. Jobs run in parallel; the slow release builds are kept out
-# of the critical path.
+# Macs, plus a launch smoke test on each. Runs on release tags, next to release.yml, and on demand; ui-check stays
+# local.
 #
-# Caches: release.yml runs on tags, which can only restore caches saved on main, under the same key. So the jobs
-# named windows-release, macos-x64 and macos-arm64 share their key with the matching release.yml job, and on main,
-# when the key misses (Cargo.lock or the toolchain changed), the macOS jobs also build the release bundle so the next
-# tag finds its dependencies compiled.
+# Caches: tag runs can only restore caches saved on main, under the same key. The jobs named windows-release,
+# macos-x64 and macos-arm64 share their key with the matching release.yml job. A manual run on main saves them and,
+# when the key misses (Cargo.lock or the toolchain changed), also builds the macOS release bundle so the next tag
+# finds its dependencies compiled. Every tag run restores them, which keeps them from expiring (7 days unused).
 name: app
 
 on:
   push:
-    branches: [main]
-    paths: [app/**, .github/workflows/app.yml]
-  pull_request:
-    paths: [app/**, .github/workflows/app.yml]
+    tags: ['v*']
   workflow_dispatch:
 
 concurrency:
@@ -112,23 +109,3 @@ jobs:
       - name: Release build for the tag cache
         if: github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
         run: ./bundle.sh release
-
-  # Offscreen renders of every settings page; the runner's GPU may not support them, so a failure is only reported.
-  ui-check:
-    runs-on: macos-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: app
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo build -p plaid --features snapshot
-      - run: PLAID_DATA_DIR="$RUNNER_TEMP/uicd" ./target/debug/plaid --ui-check "$RUNNER_TEMP/uic"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: ui-check-macos-arm64
-          path: ${{ runner.temp }}/uic
-          if-no-files-found: ignore
