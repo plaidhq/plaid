@@ -982,8 +982,10 @@ impl Controller {
             sent_ms: Some(u.gate.sent_bytes as i64 / 32),
             first_text_ms: u.first_text.map(|t| ms(u.start, t)),
             asr_ms: ms(release, asr_at),
-            llm_ms,
+            // Cloud's refine runs on the server right after the final; release → paste covers it.
+            llm_ms: llm_ms.filter(|_| !u.cloud),
             llm: llm.into(),
+            engine: u.cloud.then(|| "cloud".into()),
             total_ms: ms(release, Instant::now()),
             raw: raw.into(),
             text: text.into(),
@@ -2717,6 +2719,7 @@ mod tests {
         t.flush();
         let r = t.c.store.all.last().unwrap();
         assert_eq!((r.text.as_str(), r.llm.as_str()), ("润色后", "ok"));
+        assert!(r.is_cloud() && r.llm_ms.is_none(), "{r:?}");
         // The usage line after `done` comes when the session is gone and is only logged.
         let out = t.send(Msg::Session {
             generation: 1,

@@ -4,18 +4,19 @@ use crate::db::{self, Db, Device};
 use crate::{llm, log};
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Json, State};
+use axum::extract::{Json, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use chrono::Utc;
 use plaid_core::cloud::{
-    Account, Asr, ClientMsg, ErrorCode, Kind, Login, LoginReply, ServerMsg, Usage,
+    Account, Asr, Board, BoardJoin, ClientMsg, ErrorCode, Kind, Login, LoginReply, ServerMsg, Usage,
 };
 use plaid_core::dictation::rms;
 use plaid_core::gate::Gate;
 use plaid_core::hotwords::Snapshot;
 use plaid_core::llm::Failure;
+use plaid_core::records::chars;
 use plaid_core::refine::Plan;
 use plaid_core::session::{self, Event};
 use std::sync::Arc;
@@ -38,6 +39,7 @@ pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/v1/login", post(login))
         .route("/v1/account", get(account))
+        .route("/v1/board", get(board).post(board_join))
         .route("/v1/ws", get(ws))
         .with_state(app)
 }
@@ -95,6 +97,54 @@ async fn account(State(app): State<Arc<App>>, h: HeaderMap) -> Response {
             month_ms,
         })
         .into_response(),
+        Err(e) => {
+            log!("db error: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn board(State(app): State<Arc<App>>, h: HeaderMap, RawQuery(q): RawQuery) -> Response {
+    let d = match authorize(&app, &h) {
+        Ok(d) => d,
+        Err(s) => return s.into_response(),
+    };
+    // `days=N`; anything else is the default week.
+    let days = q
+        .as_deref()
+        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("days=")))
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(7)
+        .clamp(1, 90);
+    match app.db.board(d.user_id, days, Utc::now()) {
+        Ok((joined, rows)) => Json(Board {
+            days,
+            me: d.user,
+            joined,
+            rows,
+        })
+        .into_response(),
+        Err(e) => {
+            log!("db error: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn board_join(
+    State(app): State<Arc<App>>,
+    h: HeaderMap,
+    Json(req): Json<BoardJoin>,
+) -> Response {
+    let d = match authorize(&app, &h) {
+        Ok(d) => d,
+        Err(s) => return s.into_response(),
+    };
+    match app.db.set_board(d.user_id, req.join) {
+        Ok(()) => {
+            log!("board user={} join={}", d.user, req.join);
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => {
             log!("db error: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -287,6 +337,7 @@ impl Run {
         if plan.is_some() {
             self.row.refine = "skipped".into();
         }
+        self.row.chars = chars(&text) as i64;
         let msg = ServerMsg::Final {
             text,
             refining: llm.is_some(),
@@ -343,6 +394,9 @@ impl Run {
         let msg = match reply.result {
             Ok(text) => {
                 self.row.refine = "ok".into();
+                if self.row.kind == Kind::Dictate.key() {
+                    self.row.chars = chars(&text) as i64;
+                }
                 ServerMsg::Refined { text }
             }
             Err(Failure { message, timed_out }) => {

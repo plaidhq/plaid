@@ -305,8 +305,8 @@ async fn dictation_is_recognized_refined_and_billed_without_storing_text() {
         assert!(!stored.contains(t), "{t} stored:\n{stored}");
     }
 
-    let base = f.base.clone();
-    let account = tokio::task::spawn_blocking(move || cloud::account(&base, &token).unwrap())
+    let (base, t) = (f.base.clone(), token.clone());
+    let account = tokio::task::spawn_blocking(move || cloud::account(&base, &t).unwrap())
         .await
         .unwrap();
     assert_eq!(
@@ -317,6 +317,31 @@ async fn dictation_is_recognized_refined_and_billed_without_storing_text() {
         ),
         ("amy", u.cost_micros, u.balance_micros)
     );
+
+    // 鲸喷榜 counts the refined text's characters; leaving takes the row off.
+    let (base, t) = (f.base.clone(), token.clone());
+    let (board, after) = tokio::task::spawn_blocking(move || {
+        let b = cloud::board(&base, &t, 7).unwrap();
+        cloud::board_join(&base, &t, false).unwrap();
+        (b, cloud::board(&base, &t, 7).unwrap())
+    })
+    .await
+    .unwrap();
+    let refined = format!("润色：U: {final_text}");
+    assert_eq!(
+        (board.me.as_str(), board.joined, board.days),
+        ("amy", true, 7)
+    );
+    assert_eq!(board.rows.len(), 1);
+    assert_eq!(
+        (
+            board.rows[0].chars,
+            board.rows[0].audio_ms,
+            board.rows[0].dictations
+        ),
+        (plaid_core::records::chars(&refined) as i64, 1000, 1)
+    );
+    assert!(!after.joined && after.rows.is_empty(), "{after:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

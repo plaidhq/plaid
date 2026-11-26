@@ -1330,8 +1330,10 @@ impl History {
                 false,
             ),
             (
-                "LLM",
+                if r.is_cloud() { "润色" } else { "LLM" },
                 match r.llm.as_str() {
+                    // Cloud: the refine is inside release → paste.
+                    "ok" if r.is_cloud() => "Cloud".into(),
                     "ok" => r
                         .llm_ms
                         .map_or("—".into(), |v| format!("{:.2}s", v as f64 / 1000.)),
@@ -1446,6 +1448,16 @@ impl History {
         if llm_bad {
             fields.push(("LLM", r.llm.clone(), true));
         }
+        fields.push((
+            "服务",
+            if r.is_cloud() {
+                "Plaid Cloud"
+            } else {
+                "自带 Key"
+            }
+            .into(),
+            false,
+        ));
         fields.push(("首字", ms(r.first_text_ms), false));
         fields.push(("识别", ms(Some(r.asr_ms).filter(|v| *v > 0)), false));
         if let Some(v) = r.trigger_ms {
@@ -1922,7 +1934,14 @@ fn path_tag(r: &Record, retrying: bool) -> (&'static str, u32) {
     } else if r.outcome.as_deref() == Some("saved") {
         ("未粘贴", AMBER)
     } else if r.llm == "ok" {
-        ("LLM 润色", VIOLET)
+        (
+            if r.is_cloud() {
+                "Cloud 润色"
+            } else {
+                "LLM 润色"
+            },
+            VIOLET,
+        )
     } else {
         ("直接粘贴", CYAN)
     }
@@ -2023,6 +2042,19 @@ fn record_row(r: &Record, selected: bool, latency: bool, retrying: bool) -> Stat
 /// Swift's "首字 X · 识别 X · LLM X · 粘贴 X", in ms.
 fn latency_line(r: &Record) -> String {
     let n = |v: Option<i64>| v.map_or("—".to_string(), thousands);
+    if r.is_cloud() {
+        let llm = if r.llm == "ok" {
+            String::new()
+        } else {
+            format!(" · LLM {}", r.llm)
+        };
+        return format!(
+            "Cloud · 首字 {} · 识别 {}{llm} · 粘贴 {}",
+            n(r.first_text_ms),
+            n(Some(r.asr_ms)),
+            n(Some(r.total_ms))
+        );
+    }
     let llm = if r.llm == "ok" {
         n(r.llm_ms)
     } else {

@@ -1,12 +1,14 @@
 //! Accounts and usage in SQLite. Tokens and invite codes are stored as SHA-256; no text or audio is ever stored.
 use chrono::{DateTime, Datelike, SecondsFormat, TimeZone, Utc};
+use plaid_core::cloud::BoardRow;
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::sync::Mutex;
 
 const INVITE_DAYS: i64 = 7;
 
-const MIGRATIONS: &[&str] = &["
+const MIGRATIONS: &[&str] = &[
+    "
 CREATE TABLE users (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
@@ -54,7 +56,12 @@ CREATE TABLE credits (
     amount_micros INTEGER NOT NULL
 );
 CREATE INDEX credits_user ON credits(user_id);
-"];
+",
+    "
+ALTER TABLE usage ADD COLUMN chars INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN board INTEGER NOT NULL DEFAULT 1;
+",
+];
 
 pub struct Db(Mutex<Connection>);
 
@@ -106,6 +113,8 @@ pub struct Usage {
     pub cost_micros: i64,
     /// auth, quota, upstream, bad_request, disconnected.
     pub error: Option<String>,
+    /// Characters delivered by a dictation (refined when refined), for 鲸喷榜. A count, never the text.
+    pub chars: i64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -353,8 +362,8 @@ impl Db {
     pub fn add_usage(&self, u: &Usage, now: DateTime<Utc>) -> rusqlite::Result<()> {
         self.conn().execute(
             "INSERT INTO usage (at, user_id, device_id, kind, client, received_ms, sent_ms, asr_wait_ms, llm_model,
-                 llm_in, llm_out, llm_ms, refine, cost_micros, error)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                 llm_in, llm_out, llm_ms, refine, cost_micros, error, chars)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 ts(now),
                 u.user_id,
@@ -370,8 +379,49 @@ impl Db {
                 u.llm_ms,
                 u.refine,
                 u.cost_micros,
-                u.error
+                u.error,
+                u.chars
             ],
+        )?;
+        Ok(())
+    }
+
+    /// 鲸喷榜 for the `days` days up to `now`: completed dictations of users who take part, most characters first.
+    /// The flag says whether `user_id` takes part.
+    pub fn board(
+        &self,
+        user_id: i64,
+        days: i64,
+        now: DateTime<Utc>,
+    ) -> rusqlite::Result<(bool, Vec<BoardRow>)> {
+        let c = self.conn();
+        let joined = c.query_row("SELECT board FROM users WHERE id = ?1", [user_id], |r| {
+            r.get(0)
+        })?;
+        let mut q = c.prepare(
+            "SELECT u.name, SUM(g.chars), SUM(g.received_ms), COUNT(*)
+             FROM usage g JOIN users u ON u.id = g.user_id
+             WHERE u.board = 1 AND u.disabled = 0 AND g.kind = 'dictate' AND g.error IS NULL AND g.chars > 0
+                 AND g.at >= ?1
+             GROUP BY u.id ORDER BY SUM(g.chars) DESC, u.name",
+        )?;
+        let rows = q
+            .query_map([ts(now - chrono::Duration::days(days))], |r| {
+                Ok(BoardRow {
+                    name: r.get(0)?,
+                    chars: r.get(1)?,
+                    audio_ms: r.get(2)?,
+                    dictations: r.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok((joined, rows))
+    }
+
+    pub fn set_board(&self, user_id: i64, join: bool) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE users SET board = ?1 WHERE id = ?2",
+            params![join, user_id],
         )?;
         Ok(())
     }
@@ -580,6 +630,52 @@ mod tests {
         assert_eq!(db.credit("di", -50, now).unwrap(), Some(50));
         assert_eq!(db.users(now).unwrap()[0].balance_micros, 50);
         assert_eq!(db.credit("nobody", 1, now).unwrap(), None);
+    }
+
+    #[test]
+    fn board_counts_completed_dictations_of_members() {
+        let db = Db::memory();
+        let now = at("2026-11-25T10:00:00Z");
+        let mut ids = vec![];
+        for name in ["amy", "bo", "cy"] {
+            let (token, _) = db
+                .login(&db.invite(name, None, now).unwrap(), "d", now)
+                .unwrap()
+                .unwrap();
+            ids.push(db.auth(&token, now).unwrap().unwrap());
+        }
+        let row = |d: &Device, kind: &str, chars: i64, error: Option<&str>| Usage {
+            user_id: d.user_id,
+            device_id: d.id,
+            kind: kind.into(),
+            client: "t".into(),
+            received_ms: 60_000,
+            refine: "ok".into(),
+            error: error.map(Into::into),
+            chars,
+            ..Usage::default()
+        };
+        let (a, b, c) = (&ids[0], &ids[1], &ids[2]);
+        db.add_usage(&row(a, "dictate", 100, None), now).unwrap();
+        db.add_usage(&row(a, "dictate", 50, None), now).unwrap();
+        // A refine run, a failed dictation and one older than the window don't count.
+        db.add_usage(&row(a, "refine", 999, None), now).unwrap();
+        db.add_usage(&row(a, "dictate", 999, Some("upstream")), now)
+            .unwrap();
+        db.add_usage(&row(b, "dictate", 999, None), at("2026-11-17T10:00:00Z"))
+            .unwrap();
+        db.add_usage(&row(b, "dictate", 200, None), now).unwrap();
+        db.add_usage(&row(c, "dictate", 10, None), now).unwrap();
+        db.set_board(c.user_id, false).unwrap();
+        let (joined, rows) = db.board(a.user_id, 7, now).unwrap();
+        assert!(joined);
+        let got: Vec<_> = rows
+            .iter()
+            .map(|r| (r.name.as_str(), r.chars, r.audio_ms, r.dictations))
+            .collect();
+        assert_eq!(got, [("bo", 200, 60_000, 1), ("amy", 150, 120_000, 2)]);
+        assert!(!db.board(c.user_id, 7, now).unwrap().0);
+        assert_eq!(db.board(a.user_id, 30, now).unwrap().1[0].chars, 1199);
     }
 
     #[test]

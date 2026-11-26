@@ -450,6 +450,37 @@ pub struct Account {
     pub month_ms: i64,
 }
 
+/// 鲸喷榜: Cloud dictations of the last `days` days, per user who takes part. Counts only, never text.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Board {
+    pub days: i64,
+    /// The caller's name; their row is among `rows` unless they left the board or have not dictated.
+    pub me: String,
+    /// The caller takes part (they can leave and come back).
+    #[serde(default = "yes")]
+    pub joined: bool,
+    pub rows: Vec<BoardRow>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BoardRow {
+    pub name: String,
+    /// Characters delivered (refined when refined), counted as `records::chars`.
+    pub chars: i64,
+    /// Audio received for those dictations.
+    pub audio_ms: i64,
+    pub dictations: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BoardJoin {
+    pub join: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Login {
     pub code: String,
@@ -522,6 +553,47 @@ pub fn account(base: &str, token: &str) -> Result<Account, String> {
     }
     let body = resp.body_mut().read_to_vec().map_err(http_err)?;
     serde_json::from_slice(&body).map_err(|e| format!("Cloud 回复无法解析：{e}"))
+}
+
+/// 鲸喷榜 for the last `days` days. Blocking.
+pub fn board(base: &str, token: &str, days: i64) -> Result<Board, String> {
+    let opts = Options::new(base, token.into(), "");
+    let mut resp = crate::llm::AGENT
+        .get(&opts.url(&format!("/v1/board?days={days}")))
+        .header("Authorization", &format!("Bearer {token}"))
+        .config()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .build()
+        .call()
+        .map_err(http_err)?;
+    match resp.status().as_u16() {
+        200 => {}
+        401 => return Err(describe_error(ErrorCode::Auth, "")),
+        404 => return Err("Cloud 服务器还不支持鲸喷榜".into()),
+        s => return Err(format!("Cloud HTTP {s}")),
+    }
+    let body = resp.body_mut().read_to_vec().map_err(http_err)?;
+    serde_json::from_slice(&body).map_err(|e| format!("Cloud 回复无法解析：{e}"))
+}
+
+/// Joins or leaves 鲸喷榜. Blocking.
+pub fn board_join(base: &str, token: &str, join: bool) -> Result<(), String> {
+    let opts = Options::new(base, token.into(), "");
+    let body = serde_json::to_vec(&BoardJoin { join }).map_err(|e| e.to_string())?;
+    let resp = crate::llm::AGENT
+        .post(&opts.url("/v1/board"))
+        .header("Authorization", &format!("Bearer {token}"))
+        .header("Content-Type", "application/json")
+        .config()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .build()
+        .send(&body[..])
+        .map_err(http_err)?;
+    match resp.status().as_u16() {
+        200 | 204 => Ok(()),
+        401 => Err(describe_error(ErrorCode::Auth, "")),
+        s => Err(format!("Cloud HTTP {s}")),
+    }
 }
 
 #[cfg(test)]

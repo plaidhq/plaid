@@ -169,8 +169,6 @@ pub struct Refine {
     key: Entity<KeyField>,
     /// The Volcengine key.
     asr_key: Entity<KeyField>,
-    /// 服务 shows the Cloud tab (view state; serviceMode is the 使用 Cloud switch). Opens on Cloud in cloud mode.
-    cloud: bool,
     invite: Entity<InputState>,
     account: CloudAccount,
     menu: Option<Menu>,
@@ -304,7 +302,6 @@ impl Refine {
             nav,
             key,
             asr_key,
-            cloud: config::cloud(),
             invite,
             account: CloudAccount::default(),
             menu: None,
@@ -1808,8 +1805,18 @@ impl Refine {
             .filter(|t| !t.is_empty())
     }
 
+    /// The page came into view: 服务 in Cloud mode loads the account (balance and usage move between visits).
+    pub fn shown(&mut self, cx: &mut Context<Self>) {
+        if self.page == Page::Service && config::cloud() {
+            self.cloud_refresh(cx);
+        }
+    }
+
     /// Fetches the signed-in account's balance and this month's usage.
     fn cloud_refresh(&mut self, cx: &mut Context<Self>) {
+        if self.account.busy {
+            return;
+        }
         let Some(token) = self.cloud_token(cx) else {
             return;
         };
@@ -1881,15 +1888,13 @@ impl Refine {
             self.account.error = Some(e);
             return cx.notify();
         }
-        self.model.update(cx, |m, cx| {
-            m.facts.cloud_token = false;
-            m.set("serviceMode", "byok", cx)
-        });
+        // The mode stays: the tab is the choice, and the footer says Cloud is signed out.
+        self.model.update(cx, |m, _| m.facts.cloud_token = false);
         self.account = CloudAccount::default();
         cx.notify();
     }
 
-    /// 服务 › Cloud: the invite code until signed in, then the account, usage, 使用 Cloud and 退出登录.
+    /// 服务 › Cloud: the invite code until signed in, then the account, usage and 退出登录.
     fn cloud_card(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let a = &self.account;
         let status = |d: Div| {
@@ -1900,7 +1905,7 @@ impl Refine {
         };
         let body = group_body().child(card_head(
             "Plaid Cloud",
-            "托管的语音识别与润色，无需配置 API Key",
+            "识别、润色和学习由 Cloud 完成，无需 API Key；润色级别、风格和词典照常生效",
         ));
         if self.cloud_token(cx).is_none() {
             let login = default_button(
@@ -1932,7 +1937,6 @@ impl Refine {
             ),
             None => ("已登录".into(), "—".into(), String::new()),
         };
-        let model = self.model.clone();
         let refresh = small_button(
             "cloud-refresh",
             "刷新",
@@ -1962,23 +1966,12 @@ impl Refine {
                     .child(div().child(balance))
                     .child(div().flex_1().min_w_0().truncate().child(hint(month)))
                     .child(refresh),
-            ))
-            .child(toggle_row(
-                "serviceMode",
-                config::cloud(),
-                "使用 Cloud",
-                "识别、润色和学习均由 Cloud 完成；润色级别、风格和词典设置照常生效",
-                move |v, _, cx| {
-                    model.update(cx, |m, cx| {
-                        m.set("serviceMode", if v { "cloud" } else { "byok" }, cx)
-                    });
-                },
             )),
         ))
     }
 
-    /// 服务: a BYOK / Cloud tab, then for BYOK recognition (Volcengine key and options) and the LLM endpoint with
-    /// its prompts and a test; Cloud is a placeholder card until it exists.
+    /// 服务: the BYOK / Cloud tab is the service mode (serviceMode). BYOK shows recognition (Volcengine key and
+    /// options) and the LLM endpoint with its prompts and a test; Cloud shows the sign-in or the account.
     fn service_page(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let toggle = |key: &'static str, label: &'static str, sub: &'static str| {
             let model = self.model.clone();
@@ -1987,14 +1980,16 @@ impl Refine {
             })
         };
         let this = cx.entity().downgrade();
+        let cloud = config::cloud();
         let tab = segmented(
             "service-mode",
             &["BYOK", "Cloud"],
-            self.cloud as usize,
+            cloud as usize,
             move |i, _, cx| {
                 let _ = this.update(cx, |r, cx| {
-                    r.cloud = i == 1;
-                    if r.cloud && r.account.info.is_none() {
+                    let mode = if i == 1 { "cloud" } else { "byok" };
+                    r.model.update(cx, |m, cx| m.set("serviceMode", mode, cx));
+                    if i == 1 {
                         r.cloud_refresh(cx);
                     }
                     cx.notify();
@@ -2002,7 +1997,7 @@ impl Refine {
             },
         );
         let body = super::page_body("service").child(div().flex().child(tab));
-        if self.cloud {
+        if cloud {
             return body.child(self.cloud_card(window, cx));
         }
         body.child(
@@ -2200,22 +2195,20 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         &None,
     )?;
     ui.shot("service")?;
-    // The Cloud tab hides the BYOK settings; switching tabs stores nothing, and a signed-out device is asked to
-    // sign in (a snapshot run never sends the code).
-    let stored = std::fs::read_to_string(config::data_dir().join("settings.json")).ok();
+    // The tab is the service mode. The Cloud tab hides the BYOK settings, and a signed-out device is asked to sign
+    // in (a snapshot run never sends the code).
     ui.click("service-mode-1")?;
     expect(
-        "cloud sign-in",
-        ui.has("cloud") && ui.has("cloud-login") && !ui.has("asrContext"),
+        "cloud tab: cloud mode, sign-in",
+        config::cloud() && ui.has("cloud") && ui.has("cloud-login") && !ui.has("asrContext"),
         &None,
     )?;
     ui.shot("service-cloud")?;
     ui.click("service-mode-0")?;
-    expect("byok back", ui.has("asrContext") && !ui.has("cloud"), &None)?;
     expect(
-        "cloud tab stores nothing",
-        std::fs::read_to_string(config::data_dir().join("settings.json")).ok() == stored,
-        &None,
+        "byok tab: byok mode",
+        !config::cloud() && ui.has("asrContext") && !ui.has("cloud"),
+        &config::raw("serviceMode"),
     )?;
     let before = config::raw("nonstream");
     ui.click("nonstream")?;

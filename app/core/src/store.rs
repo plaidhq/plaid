@@ -40,6 +40,7 @@ pub struct Record {
     pub first_text_ms: Option<i64>,
     /// Release → ASR final.
     pub asr_ms: i64,
+    /// ASR final → refine end, BYOK only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub llm_ms: Option<i64>,
     /// off | ok | timeout | skipped | error message
@@ -68,6 +69,7 @@ pub struct Record {
     /// ASR dialog context sent with this utterance, newest first.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ctx: Option<Vec<String>>,
+    /// "cloud": recognized and refined through Plaid Cloud. None: BYOK ("volc" / "local" on old records).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -92,6 +94,11 @@ pub struct Record {
 impl Record {
     pub fn is_failure(&self) -> bool {
         self.outcome.as_deref() == Some("failed")
+    }
+
+    /// Through Plaid Cloud: no separate LLM time, the refine is inside release → paste.
+    pub fn is_cloud(&self) -> bool {
+        self.engine.as_deref() == Some("cloud")
     }
 }
 

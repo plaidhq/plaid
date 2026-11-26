@@ -30,10 +30,10 @@ one by one; BYOK stays the default and keeps working exactly as before.
 
 | Table | Columns |
 |---|---|
-| `users` | id, name, disabled, created |
+| `users` | id, name, disabled, created, board (takes part in 鲸喷榜, default 1) |
 | `devices` | id, user_id, token_hash, name, created, last_seen, revoked |
 | `invites` | code_hash, user_id, expires, used_at |
-| `usage` | one row per request: at, user_id, device_id, kind, client, received_ms, sent_ms, asr_wait_ms, llm_model, llm_in, llm_out, llm_ms, refine, cost_micros, error |
+| `usage` | one row per request: at, user_id, device_id, kind, client, received_ms, sent_ms, asr_wait_ms, llm_model, llm_in, llm_out, llm_ms, refine, cost_micros, error, chars (characters delivered, never the text) |
 | `credits` | one row per top-up or correction: at, user_id, amount_micros (negative takes credit) |
 
 `usage.refine` is one of none, skipped, ok, timeout, error. `usage.error` holds a code (auth, quota, upstream,
@@ -56,6 +56,9 @@ bad_request, disconnected), never upstream text.
 
 - `POST /v1/login` `{code, device}` → `{token, name}`, or 401 with the reason as plain text (unknown, used, expired, disabled), which the app shows as is.
 - `GET /v1/account` (bearer) → `{name, balance_micros, month_micros, month_ms}`, for the settings page.
+- `GET /v1/board?days=N` (bearer, N 1–90, default 7) → `{days, me, joined, rows:[{name, chars, audio_ms, dictations}]}`:
+  completed dictations of users who take part, most characters first. A user who left gets `joined: false` and no rows.
+- `POST /v1/board` (bearer) `{join}` → 204: leave or rejoin 鲸喷榜.
 - `GET /v1/ws` (bearer), websocket. One request per connection in v1. Whether a persistent connection is worth
   having gets measured from `done` timings first.
 

@@ -217,6 +217,7 @@ pub fn check(args: &[String]) -> Result<(), String> {
     super::dictionary::check(&mut ui)?;
     super::refine::check(&mut ui)?;
     super::commands::check(&mut ui)?;
+    super::board::check(&mut ui)?;
     ui.check_close()?;
     println!("ui-check: PASS");
     Ok(())
@@ -898,9 +899,19 @@ pub(super) fn fixture(dir: &Path) -> std::io::Result<()> {
             r.outcome = None;
             r.error = None;
         }
+        // The newest went through Plaid Cloud: no separate LLM time.
         if let Some(r) = records.last_mut() {
             r.speech_rms = Some(820);
             r.noise_rms = Some(64);
+            r.engine = Some("cloud".into());
+            r.llm = "ok".into();
+            r.llm_ms = None;
+            r.total_ms = r.asr_ms + 760;
+            r.outcome = None;
+            r.error = None;
+            if r.text.is_empty() {
+                r.text = r.raw.clone();
+            }
         }
         for r in records {
             store.add(r);

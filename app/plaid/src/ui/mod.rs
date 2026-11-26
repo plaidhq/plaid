@@ -2,6 +2,7 @@
 //! from settings.json and the dictation history from disk (refreshed when records.jsonl changes); anything that
 //! changes records goes to the controller as a `Msg`, which owns the store while the app runs.
 pub mod assets;
+mod board;
 mod commands;
 mod dictionary;
 mod general;
@@ -98,6 +99,8 @@ pub enum Page {
     /// 概览: usage over a picked range, then the 性能 diagnostics for the same range.
     Overview,
     History,
+    /// 鲸喷榜: Cloud users' leaderboard; its tab shows only while signed in to Cloud.
+    Board,
     /// 设置 → 通用: talk keys, microphone and recording, the HUD.
     General,
     /// 设置 → 服务: which services run recognition and the LLM, and their keys (Volcengine, the LLM endpoint and
@@ -115,9 +118,10 @@ pub enum Page {
 
 impl Page {
     #[cfg_attr(not(feature = "snapshot"), allow(dead_code))]
-    pub const ALL: [Page; 9] = [
+    pub const ALL: [Page; 10] = [
         Page::Overview,
         Page::History,
+        Page::Board,
         Page::General,
         Page::Service,
         Page::Refine,
@@ -128,7 +132,7 @@ impl Page {
     ];
 
     /// The header tabs; 设置 stands for the settings pages.
-    const TOP: [Page; 3] = [Page::Overview, Page::History, Page::General];
+    const TOP: [Page; 4] = [Page::Overview, Page::History, Page::Board, Page::General];
 
     /// The 设置 sidebar, in order; a rule goes before 数据 and 关于.
     const SETTINGS: [Page; 7] = [
@@ -145,6 +149,7 @@ impl Page {
         match self {
             Page::Overview => "概览",
             Page::History => "历史",
+            Page::Board => "鲸喷榜",
             Page::General => "通用",
             Page::Service => "服务",
             Page::Refine => "润色",
@@ -172,6 +177,7 @@ impl Page {
         match self {
             Page::Overview => "overview",
             Page::History => "history",
+            Page::Board => "board",
             Page::Service => "service",
             Page::Refine => "refine",
             Page::Dictionary => "dictionary",
@@ -493,7 +499,19 @@ impl Settings {
         if page.is_setting() {
             self.setting = page;
         }
+        self.shown(page, cx);
         cx.notify();
+    }
+
+    /// Tells a cached page it is in view again (a new one is told when created).
+    fn shown(&self, page: Page, cx: &mut Context<Self>) {
+        let view = self.pages.iter().find(|(p, _)| *p == page);
+        let Some((_, v)) = view else { return };
+        if let Ok(r) = v.clone().downcast::<refine::Refine>() {
+            r.update(cx, |r, cx| r.shown(cx));
+        } else if let Ok(b) = v.clone().downcast::<board::Board>() {
+            b.update(cx, |b, cx| b.shown(cx));
+        }
     }
 
     fn view(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) -> AnyView {
@@ -519,6 +537,7 @@ impl Settings {
             }
             Page::Commands => cx.new(|cx| commands::Commands::new(m, window, cx)).into(),
             Page::Overview => cx.new(|cx| overview::Overview::new(m, window, cx)).into(),
+            Page::Board => cx.new(|cx| board::Board::new(m, window, cx)).into(),
             Page::Dictionary => {
                 let nav = cx.entity().downgrade();
                 cx.new(|cx| dictionary::Dictionary::new(m, nav, window, cx))
@@ -526,6 +545,7 @@ impl Settings {
             }
         };
         self.pages.push((page, v.clone()));
+        self.shown(page, cx);
         v
     }
 
@@ -594,7 +614,11 @@ impl Settings {
                     ),
             );
         }
+        let cloud = self.model.read(cx).facts.cloud_token;
         for p in Page::TOP {
+            if p == Page::Board && !cloud {
+                continue;
+            }
             if p == Page::General {
                 nav = nav.child(div().w(px(1.)).h(px(14.)).mx(px(8.)).bg(hexa(LINE3)));
             }
