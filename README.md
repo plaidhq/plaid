@@ -77,7 +77,7 @@ name (up to 8 characters) in 设置 › 服务 › Cloud.
 
 ## Requirements
 
-- macOS 13+ (Apple silicon or Intel), or Windows 11 x64.
+- macOS 13+ (Apple silicon or Intel), or Windows 10 1809+ / Windows 11 (x64). On Windows 10 the settings window has no blurred glass.
 - One of:
   - **BYOK**: a Volcengine API key with Doubao streaming speech recognition (bigmodel) enabled, plus optionally any
     OpenAI-compatible or Anthropic-compatible LLM endpoint for polishing.

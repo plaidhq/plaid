@@ -67,7 +67,7 @@ macOS 和 Windows 上的语音输入。按住一个键说话，松开后文字�
 
 ## 系统要求
 
-- macOS 13 及以上（Apple 芯片或 Intel），或 Windows 11 x64。
+- macOS 13 及以上（Apple 芯片或 Intel），或 Windows 10 1809 及以上 / Windows 11（x64）。Windows 10 上设置窗口没有毛玻璃效果。
 - 二选一：
   - **BYOK（自带 key）**：开通了豆包流式语音识别（大模型版）的火山引擎 API key；润色可选任意 OpenAI 兼容或
     Anthropic 兼容的 LLM 接口。
