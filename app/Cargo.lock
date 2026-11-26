@@ -6095,7 +6095,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "plaid"
-version = "0.11.61"
+version = "0.11.62"
 dependencies = [
  "async-channel",
  "async-io",
@@ -6126,7 +6126,7 @@ dependencies = [
 
 [[package]]
 name = "plaid-cloud"
-version = "0.11.61"
+version = "0.11.62"
 dependencies = [
  "async-channel",
  "async-io",
@@ -6147,7 +6147,7 @@ dependencies = [
 
 [[package]]
 name = "plaid-core"
-version = "0.11.61"
+version = "0.11.62"
 dependencies = [
  "async-channel",
  "async-io",
