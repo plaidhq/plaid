@@ -69,7 +69,7 @@ fn eval(f: &str, i: &Value) -> Value {
             match actions::parse(s(&i["text"]), &list, s(&i["wake"])) {
                 actions::Parsed::Dictation => json!(["dictation"]),
                 actions::Parsed::Unknown(r) => json!(["unknown", r]),
-                actions::Parsed::Run(a, args) => json!(["run", a.name, args]),
+                actions::Parsed::Run(a, args, _) => json!(["run", a.name, args]),
             }
         }
         "volc.frame" => json!(hex(&volc::frame(

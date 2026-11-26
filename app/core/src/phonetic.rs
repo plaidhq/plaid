@@ -149,6 +149,19 @@ pub fn apply(text: &str, entries: &[Entry], threshold: f64) -> String {
     out
 }
 
+/// Two Chinese characters that read the same once tones and the common confusions are folded (指/智, 令/灵/林).
+/// `alike(c, c)` tells whether `c` has a reading at all.
+pub fn alike(a: &str, b: &str) -> bool {
+    let one = |s: &str| {
+        let mut cs = s.chars();
+        match (cs.next(), cs.next()) {
+            (Some(c), None) => pinyin(c).map(|p| p.1),
+            _ => None,
+        }
+    };
+    one(a).is_some_and(|k| one(b) == Some(k))
+}
+
 trait GraphemesAll {
     fn graphemes_all(&self, f: fn(&str) -> bool) -> bool;
 }

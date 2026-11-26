@@ -11,6 +11,9 @@ pub struct Snapshot {
     pub entries: Vec<Entry>,
     replacements: Vec<(String, String)>,
     threshold: f64,
+    /// Words only sent as ASR hotwords (the wake word and command names): never rewritten into the text and
+    /// not learning's wanted spellings.
+    boost: Vec<String>,
 }
 
 fn target(line: &str) -> &str {
@@ -75,7 +78,19 @@ impl Snapshot {
             entries,
             replacements,
             threshold,
+            boost: vec![],
         }
+    }
+
+    /// Adds ASR-only hotwords; they go first in the request, ahead of the file's terms.
+    pub fn boost(mut self, words: impl IntoIterator<Item = String>) -> Self {
+        for w in words {
+            let w = trim_ws(&w).to_owned();
+            if !w.is_empty() && !self.boost.contains(&w) {
+                self.boost.push(w);
+            }
+        }
+        self
     }
 
     /// Literal `heard -> wanted` rewrites, then sound-alike matching against targets and aliases.
@@ -91,11 +106,21 @@ impl Snapshot {
     /// ~100 tokens of this string), then `dialog_ctx` texts, newest first.
     pub fn context(&self, dialog: &[String]) -> Option<String> {
         let mut parts = vec![];
-        if !self.entries.is_empty() {
-            let v: Vec<_> = self
-                .entries
+        let words: Vec<&str> = self
+            .boost
+            .iter()
+            .map(String::as_str)
+            .chain(
+                self.entries
+                    .iter()
+                    .map(|e| e.target.as_str())
+                    .filter(|t| !self.boost.iter().any(|b| b == t)),
+            )
+            .collect();
+        if !words.is_empty() {
+            let v: Vec<_> = words
                 .iter()
-                .map(|e| serde_json::json!({ "word": e.target }))
+                .map(|w| serde_json::json!({ "word": w }))
                 .collect();
             parts.push(format!("\"hotwords\":{}", serde_json::Value::from(v)));
         }
@@ -120,4 +145,24 @@ pub fn lines(body: &str) -> Vec<String> {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .map(str::to_owned)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boost_goes_first_and_is_never_rewritten_into_text() {
+        let s = Snapshot::new(&["Claude Code", "指令"], 0.85).boost([
+            "指令".to_owned(),
+            "打开日历".to_owned(),
+            " ".to_owned(),
+        ]);
+        assert_eq!(
+            s.context(&[]).unwrap(),
+            r#"{"hotwords":[{"word":"指令"},{"word":"打开日历"},{"word":"Claude Code"}]}"#
+        );
+        assert_eq!(s.apply("打开日立"), "打开日立");
+        assert_eq!(s.terms, ["Claude Code", "指令"]);
+    }
 }

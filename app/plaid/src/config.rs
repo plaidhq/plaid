@@ -96,7 +96,19 @@ pub fn session_options(key: String) -> plaid_core::session::Options {
 
 /// hotwords.txt + hotwords.auto.txt (+ the file named by hotwordsExtra), re-read per utterance.
 pub fn hotwords() -> Snapshot {
-    snapshot(true)
+    snapshot(true).boost(command_words())
+}
+
+/// The wake word and command names, sent to the ASR as hotwords while any command is defined.
+fn command_words() -> Vec<String> {
+    let (list, wake) = actions();
+    let list: Vec<_> = list.iter().filter(|a| !a.run.trim().is_empty()).collect();
+    if list.is_empty() {
+        return vec![];
+    }
+    std::iter::once(wake)
+        .chain(list.iter().flat_map(|a| a.triggers()).map(str::to_owned))
+        .collect()
 }
 
 /// Wanted spellings. Without `auto`, only the user's own files: learned rules must not vote for themselves.
@@ -134,6 +146,7 @@ pub fn cloud_asr() -> plaid_core::cloud::Asr {
     plaid_core::cloud::Asr {
         dialog: vec![],
         hotwords,
+        boost: command_words(),
         threshold,
         nonstream: value("nonstream").as_deref() != Some("0"),
     }

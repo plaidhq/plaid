@@ -132,6 +132,64 @@ impl Usage {
 
 pub const LIMIT: usize = 1000;
 pub const AUDIO_KEEP: usize = 500;
+/// Voice-command attempts kept in commands.jsonl.
+pub const ATTEMPT_LIMIT: usize = 300;
+pub const COMMANDS: &str = "commands.jsonl";
+
+/// One voice-command attempt (commands.jsonl): an utterance that opened with the wake word or a command name.
+/// Kept apart from records.jsonl so it never feeds ASR/LLM context, learning or usage; History shows it under 命令.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Attempt {
+    /// Key-down of the utterance; the attempt's id.
+    #[serde(with = "iso")]
+    pub at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    /// The final recognized text.
+    pub heard: String,
+    /// The matched action; None when the wake word was heard without a known command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub args: String,
+    /// The wake word or name matched only by sound.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sound: bool,
+    /// nomatch | confirm | running | ok | failed | cancelled
+    pub result: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<i32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub timed_out: bool,
+    /// Last lines of stderr (failure) or stdout (success), capped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ms: Option<u64>,
+}
+
+impl Attempt {
+    /// Fills in a finished run: result, exit status, timing and a short tail of the relevant stream.
+    pub fn finish(&mut self, o: &crate::actions::Outcome) {
+        self.result = if o.ok() { "ok" } else { "failed" }.into();
+        self.code = o.code;
+        self.timed_out = o.timed_out;
+        self.ms = Some(o.ms);
+        let stream = if o.ok() { &o.out } else { &o.err };
+        let t = tail(stream.trim_end(), 600);
+        self.output = (!t.is_empty()).then(|| t.to_owned());
+    }
+}
+
+/// The last `max` bytes of `s`, cut at a char boundary.
+fn tail(s: &str, max: usize) -> &str {
+    let mut i = s.len().saturating_sub(max);
+    while !s.is_char_boundary(i) {
+        i += 1;
+    }
+    &s[i..]
+}
 
 /// A substitution the user made by hand in pasted text.
 #[derive(Clone, Debug, PartialEq)]
@@ -237,6 +295,8 @@ fn small_edit(pasted: &str, edited: &str) -> bool {
 pub struct Store {
     dir: PathBuf,
     pub all: Vec<Record>,
+    /// Voice-command attempts, oldest first.
+    pub attempts: Vec<Attempt>,
     /// Keyed by local day (yyyy-MM-dd).
     pub usage: BTreeMap<String, Usage>,
 }
@@ -276,6 +336,11 @@ impl Store {
         let mut s = Store {
             dir: dir.to_owned(),
             all: parsed[parsed.len().saturating_sub(LIMIT)..].to_vec(),
+            attempts: std::fs::read_to_string(dir.join(COMMANDS))
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|l| serde_json::from_str(l).ok())
+                .collect(),
             usage: BTreeMap::new(),
         };
         match std::fs::read(s.usage_path())
@@ -375,7 +440,9 @@ impl Store {
     /// Deletes every record and saved recording; usage totals are kept (History's 清空历史).
     pub fn clear(&mut self) {
         self.all.clear();
+        self.attempts.clear();
         let _ = std::fs::remove_file(self.records_path());
+        let _ = std::fs::remove_file(self.dir.join(COMMANDS));
         let _ = std::fs::remove_dir_all(self.audio_dir());
     }
 
@@ -395,6 +462,32 @@ impl Store {
             self.persist();
         }
         n
+    }
+
+    /// Adds a voice-command attempt, or replaces the one with the same id, and rewrites commands.jsonl.
+    pub fn put_attempt(&mut self, a: Attempt) {
+        match self.attempts.iter_mut().rev().find(|x| x.at == a.at) {
+            Some(x) => *x = a,
+            None => self.attempts.push(a),
+        }
+        let n = self.attempts.len();
+        self.attempts.drain(..n.saturating_sub(ATTEMPT_LIMIT));
+        let mut body = vec![];
+        for a in &self.attempts {
+            if let Ok(line) = serde_json::to_vec(a) {
+                body.extend(line);
+                body.push(b'\n');
+            }
+        }
+        let _ = write_atomic(&self.dir.join(COMMANDS), &body);
+    }
+
+    /// Changes the attempt with this id, if it is still kept.
+    pub fn update_attempt(&mut self, id: DateTime<Utc>, change: impl FnOnce(&mut Attempt)) {
+        if let Some(mut a) = self.attempts.iter().rev().find(|a| a.at == id).cloned() {
+            change(&mut a);
+            self.put_attempt(a);
+        }
     }
 
     /// Changes the newest record with this id (key-down time) and rewrites the log.

@@ -1,5 +1,6 @@
 //! 历史: dictation records newest first, grouped by local day, with status filter, search, a detail box, retry of
-//! the saved recording (through the controller), copy, playback, export for feedback, and clearing.
+//! the saved recording (through the controller), copy, playback, export for feedback, and clearing. The 命令 filter
+//! switches the list to voice-command attempts (commands.jsonl): one at a time, copy only.
 use super::mav::*;
 use super::{Model, Page, on_if_one, reveal, send};
 use crate::config;
@@ -9,7 +10,7 @@ use gpui_kit::base::{ElementExt as _, SelectableText, TextSelection};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use plaid_core::dictation::Msg;
-use plaid_core::store::{self, LIMIT, Record};
+use plaid_core::store::{self, Attempt, LIMIT, Record};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -27,16 +28,19 @@ enum Filter {
     Failed,
     Llm,
     Edited,
+    /// Voice-command attempts instead of records.
+    Commands,
 }
 
 impl Filter {
     /// Chip order; the first three keep their indices from the old segmented control.
-    const ALL: [Filter; 5] = [
+    const ALL: [Filter; 6] = [
         Filter::All,
         Filter::Saved,
         Filter::Failed,
         Filter::Llm,
         Filter::Edited,
+        Filter::Commands,
     ];
 
     fn keeps(self, r: &Record) -> bool {
@@ -46,6 +50,7 @@ impl Filter {
             Filter::Failed => r.is_failure(),
             Filter::Llm => r.llm == "ok",
             Filter::Edited => r.edited.is_some(),
+            Filter::Commands => false,
         }
     }
 }
@@ -65,10 +70,21 @@ struct Playing {
     generation: u64,
 }
 
-/// One line of the table: a day header or a record.
+/// One line of the table: a day header, a record, or a command attempt.
 enum Line {
     Day(String),
     Rec(Box<Record>),
+    Cmd(Box<Attempt>),
+}
+
+impl Line {
+    fn id(&self) -> Option<DateTime<Utc>> {
+        match self {
+            Line::Day(_) => None,
+            Line::Rec(r) => Some(r.at),
+            Line::Cmd(a) => Some(a.at),
+        }
+    }
 }
 
 /// A retry or 重新润色 posted to the controller. The controller reports only through the HUD, so the page infers
@@ -165,8 +181,14 @@ impl History {
     /// The history changed on disk: drop vanished selections, finish a retry whose record changed.
     fn changed(&mut self, cx: &mut Context<Self>) {
         let store = &self.model.read(cx).store;
-        self.selected
-            .retain(|id| store.all.iter().any(|r| r.at == *id));
+        let commands = self.filter == Filter::Commands;
+        self.selected.retain(|id| {
+            if commands {
+                store.attempts.iter().any(|a| a.at == *id)
+            } else {
+                store.all.iter().any(|r| r.at == *id)
+            }
+        });
         if let Some(r) = &self.retry {
             match store.all.iter().rev().find(|x| x.at == r.id) {
                 Some(x) if fingerprint(x) != r.before => {
@@ -518,7 +540,9 @@ impl History {
                 TextSelection::clear(window, cx);
                 self.step(if k.key == "up" { -1 } else { 1 }, cx);
             }
-            "backspace" | "delete" if !self.selected.is_empty() => {
+            "backspace" | "delete"
+                if !self.selected.is_empty() && self.filter != Filter::Commands =>
+            {
                 self.sheet = Some(Sheet::Delete(self.selected.clone()));
                 cx.notify();
             }
@@ -648,19 +672,24 @@ impl History {
     }
 
     /// Filter chips with counts, then the actions button.
-    fn chips(&self, counts: [usize; 5], cx: &mut Context<Self>) -> Div {
-        let labels = ["全部", "未粘贴", "失败", "润色", "改过"];
-        let mut row = div().flex().flex_none().items_center().gap(px(6.));
+    /// 命令 only shows once there is an attempt to look at.
+    fn chips(&self, counts: [usize; 6], cx: &mut Context<Self>) -> Div {
+        let labels = ["全部", "未粘贴", "失败", "润色", "改过", "命令"];
+        let any_attempt = !self.model.read(cx).store.attempts.is_empty();
+        let mut row = div().flex().flex_none().items_center().gap(px(4.));
         for (i, f) in Filter::ALL.into_iter().enumerate() {
             let on = self.filter == f;
+            if f == Filter::Commands && !any_attempt && !on {
+                continue;
+            }
             let this = cx.entity().downgrade();
             row = row.child(
                 hit(format!("history-filter-{i}"))
                     .flex()
                     .items_center()
-                    .gap(px(5.))
+                    .gap(px(4.))
                     .h(px(24.))
-                    .px(px(10.))
+                    .px(px(8.))
                     .rounded(px(12.))
                     .text_size(px(12.))
                     .whitespace_nowrap()
@@ -834,21 +863,31 @@ impl History {
         let latency = on_if_one(LATENCY);
         let retrying = self.retry.as_ref().filter(|r| !r.refine).map(|r| r.id);
         let focus = self.focus.clone();
-        let order: Rc<Vec<DateTime<Utc>>> = Rc::new(
-            lines
-                .iter()
-                .filter_map(|l| match l {
-                    Line::Rec(r) => Some(r.at),
-                    Line::Day(_) => None,
-                })
-                .collect(),
-        );
+        let order: Rc<Vec<DateTime<Utc>>> = Rc::new(lines.iter().filter_map(Line::id).collect());
         let n = lines.len();
         frame.child(
             uniform_list("history-list", n, move |range, _, _| {
                 range
                     .map(|i| match &lines[i] {
                         Line::Day(label) => day_row(label.clone()).into_any_element(),
+                        Line::Cmd(a) => {
+                            let id = a.at;
+                            let (t, page) = (this.clone(), focus.clone());
+                            let row = attempt_row(a, marked.contains(&id)).on_click(
+                                move |e, window, cx| {
+                                    if e.is_right_click() {
+                                        return;
+                                    }
+                                    page.focus(window, cx);
+                                    let _ = t.update(cx, |h, cx| {
+                                        h.selected = vec![id];
+                                        h.anchor = Some(id);
+                                        cx.notify();
+                                    });
+                                },
+                            );
+                            div().h(px(ROW_H)).py(px(2.)).child(row).into_any_element()
+                        }
                         Line::Rec(r) => {
                             let id = r.at;
                             let (t1, t2, ord) = (this.clone(), this.clone(), order.clone());
@@ -1036,57 +1075,7 @@ impl History {
         let mark = if llm { VIOLET } else { CYAN };
         let app = r.app.clone().unwrap_or_else(|| "未知应用".into());
 
-        let header = div()
-            .flex()
-            .items_center()
-            .gap(px(10.))
-            .child(app_icon(&app, 28.).map_or_else(
-                || {
-                    div()
-                        .size(px(26.))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(7.))
-                        .bg(hex(RAISED2))
-                        .font(mono())
-                        .text_size(px(10.))
-                        .child(badge(&app))
-                        .into_any_element()
-                },
-                IntoElement::into_any_element,
-            ))
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(15.))
-                    .font_weight(medium())
-                    .child(app),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .font(mono())
-                    .text_size(px(11.))
-                    .text_color(hex(TEXT2))
-                    .child(when(r.at)),
-            )
-            .child(
-                div()
-                    .ml_auto()
-                    .flex_none()
-                    .px(px(9.))
-                    .py(px(2.))
-                    .rounded(px(10.))
-                    .border_1()
-                    .border_color(tint(color, 0x66))
-                    .font(mono())
-                    .text_size(px(11.))
-                    .text_color(hex(color))
-                    .child(tag),
-            );
+        let header = detail_header(app, r.at, tag, color);
 
         let secs = format!("{}:{:02}", r.audio_ms / 60000, (r.audio_ms / 1000) % 60);
         let mut strip = div()
@@ -1528,6 +1517,134 @@ impl History {
         )
     }
 
+    /// The right panel for one command attempt: what was heard, what it matched, how the run went.
+    fn attempt_detail(&self, a: Option<Attempt>, cx: &mut Context<Self>) -> Div {
+        let panel = div()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .rounded(px(16.))
+            .bg(hexa(GLASS))
+            .border_1()
+            .border_color(hexa(LINE));
+        let Some(a) = a else {
+            return panel;
+        };
+        let (tag, color) = attempt_tag(&a);
+        let app = a.app.clone().unwrap_or_else(|| "未知应用".into());
+        let note = match (a.result.as_str(), a.sound) {
+            ("nomatch", _) => Some(format!(
+                "听到了唤醒词，但后面没有匹配的命令名。可以在 设置 → 命令 里给命令加别名，例如「{}」。",
+                after_wake(&a.heard)
+            )),
+            (_, true) => Some("按发音匹配：识别结果和唤醒词或命令名字面不同，但读音相同。".into()),
+            _ => None,
+        };
+        let mut fields: Vec<(&str, String, bool)> = vec![(
+            "命令",
+            a.action.clone().unwrap_or_else(|| "—".into()),
+            false,
+        )];
+        if !a.args.is_empty() {
+            fields.push(("参数", a.args.clone(), false));
+        }
+        fields.push(("唤醒词", wake_label(), false));
+        if let Some(c) = a.code {
+            fields.push(("退出码", c.to_string(), c != 0));
+        }
+        if let Some(v) = a.ms {
+            fields.push(("耗时", format!("{v} ms"), a.timed_out));
+        }
+        let heard = a.heard.clone();
+        let report = attempt_report(&a);
+        let _ = cx;
+        panel.child(
+            hit("history-detail")
+                .size_full()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap(px(14.))
+                .px(px(22.))
+                .py(px(18.))
+                .child(detail_header(app, a.at, tag, color))
+                .child(block(
+                    "听到",
+                    div().text_size(px(15.)).line_height(px(24.)).child(
+                        SelectableText::new(
+                            SharedString::from(format!(
+                                "history-cmd-heard-{}",
+                                a.at.timestamp_millis()
+                            )),
+                            a.heard.clone(),
+                        )
+                        .selection_color(hexa(SELECTION)),
+                    ),
+                ))
+                .children(note.map(hint))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .children(fields.into_iter().map(|(k, v, warn)| {
+                            div()
+                                .flex()
+                                .gap(px(10.))
+                                .text_size(px(12.))
+                                .child(div().w(px(56.)).flex_none().text_color(hex(TEXT2)).child(k))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_color(hex(if warn { AMBER } else { TEXT }))
+                                        .child(v),
+                                )
+                        })),
+                )
+                .when_some(a.output.clone(), |d, o| {
+                    d.child(block(
+                        if a.result == "ok" {
+                            "输出"
+                        } else {
+                            "错误输出"
+                        },
+                        div()
+                            .px(px(12.))
+                            .py(px(10.))
+                            .rounded(px(10.))
+                            .bg(hexa(GLASS_WELL))
+                            .font(mono())
+                            .text_size(px(11.))
+                            .line_height(px(16.))
+                            .text_color(hex(if a.result == "ok" { TEXT } else { AMBER }))
+                            .child(o),
+                    ))
+                })
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(8.))
+                        .child(primary(
+                            "history-cmd-copy",
+                            "复制原文",
+                            move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(heard.clone()));
+                            },
+                        ))
+                        .child(button(
+                            "history-cmd-report",
+                            "复制诊断",
+                            move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(report.clone()));
+                            },
+                        )),
+                ),
+        )
+    }
+
     fn bottom(&self, n: usize, cx: &mut Context<Self>) -> Div {
         let mut text = format!("最多保留 {LIMIT} 条 · 只保存在本机");
         if self.audio_bytes > 0 {
@@ -1670,15 +1787,28 @@ impl Render for History {
         let store = &self.model.read(cx).store;
         let total = store.all.len();
         let found: Vec<&Record> = store.all.iter().filter(|r| matches(r, &q)).collect();
-        let counts = Filter::ALL.map(|f| found.iter().filter(|r| f.keeps(r)).count());
+        let attempts: Vec<&Attempt> = store
+            .attempts
+            .iter()
+            .rev()
+            .filter(|a| attempt_matches(a, &q))
+            .collect();
+        let mut counts = Filter::ALL.map(|f| found.iter().filter(|r| f.keeps(r)).count());
+        counts[5] = attempts.len();
+        let commands = self.filter == Filter::Commands;
         let shown: Vec<&Record> = found
             .into_iter()
             .rev()
             .filter(|r| self.filter.keeps(r))
             .collect();
+        let ids: Vec<DateTime<Utc>> = if commands {
+            attempts.iter().map(|a| a.at).collect()
+        } else {
+            shown.iter().map(|r| r.at).collect()
+        };
         // With nothing selected the newest shown record fills the panel.
         let focus = match self.selected.as_slice() {
-            [] => shown.first().map(|r| r.at),
+            [] => ids.first().copied(),
             [id] => Some(*id),
             _ => None,
         };
@@ -1687,17 +1817,32 @@ impl Render for History {
         } else {
             self.selected.clone()
         };
-        let lines = Rc::new(group(&shown));
+        let lines = Rc::new(if commands {
+            group(&attempts, |a| a.at, |a| Line::Cmd(Box::new(a.clone())))
+        } else {
+            group(&shown, |r| r.at, |r| Line::Rec(Box::new(r.clone())))
+        });
         let order: Vec<(DateTime<Utc>, usize)> = lines
             .iter()
             .enumerate()
-            .filter_map(|(i, l)| match l {
-                Line::Rec(r) => Some((r.at, i)),
-                Line::Day(_) => None,
-            })
+            .filter_map(|(i, l)| Some((l.id()?, i)))
             .collect();
-        let n_shown = shown.len();
-        let empty = if total == 0 {
+        let n_shown = ids.len();
+        let attempt = commands
+            .then(|| {
+                focus.and_then(|id| attempts.iter().find(|a| a.at == id).map(|a| (*a).clone()))
+            })
+            .flatten();
+        let empty = if commands && n_shown == 0 {
+            Some(if q.is_empty() {
+                (
+                    "还没有命令记录",
+                    "以唤醒词开头说出命令名，每次尝试和结果都记在这里。",
+                )
+            } else {
+                ("没有匹配的记录", "试试其他关键词，或切换筛选。")
+            })
+        } else if total == 0 && !commands {
             Some((
                 "还没有听写记录",
                 "按住说话键开始听写，松开后文字粘贴到光标处。",
@@ -1739,7 +1884,11 @@ impl Render for History {
                             .children(self.status_line())
                             .child(self.list(lines, marked, empty, cx)),
                     )
-                    .child(self.detail(focus, TextSelection::has_selection(window, cx), cx)),
+                    .child(if commands {
+                        self.attempt_detail(attempt, cx)
+                    } else {
+                        self.detail(focus, TextSelection::has_selection(window, cx), cx)
+                    }),
             )
             .child(self.bottom(total, cx))
             .when_some(context, |d, at| d.child(self.context_menu(at, cx)))
@@ -1888,17 +2037,17 @@ fn latency_line(r: &Record) -> String {
 }
 
 /// Newest first, a header before each local day: "今天 12 句".
-fn group(shown: &[&Record]) -> Vec<Line> {
+fn group<T>(shown: &[&T], at: fn(&T) -> DateTime<Utc>, line: fn(&T) -> Line) -> Vec<Line> {
     let today = Local::now().date_naive();
     let mut out = vec![];
     let mut i = 0;
     while i < shown.len() {
-        let day = store::day(shown[i].at);
+        let day = store::day(at(shown[i]));
         let n = shown[i..]
             .iter()
-            .take_while(|r| store::day(r.at) == day)
+            .take_while(|r| store::day(at(r)) == day)
             .count();
-        let d = shown[i].at.with_timezone(&Local).date_naive();
+        let d = at(shown[i]).with_timezone(&Local).date_naive();
         let title = if d == today {
             "今天".to_string()
         } else if today.pred_opt() == Some(d) {
@@ -1913,14 +2062,161 @@ fn group(shown: &[&Record]) -> Vec<Line> {
             )
         };
         out.push(Line::Day(format!("{title} · {n} 条")));
-        out.extend(
-            shown[i..i + n]
-                .iter()
-                .map(|r| Line::Rec(Box::new((*r).clone()))),
-        );
+        out.extend(shown[i..i + n].iter().map(|r| line(r)));
         i += n;
     }
     out
+}
+
+fn attempt_matches(a: &Attempt, q: &str) -> bool {
+    q.is_empty()
+        || a.heard.to_lowercase().contains(q)
+        || a.action
+            .as_ref()
+            .is_some_and(|x| x.to_lowercase().contains(q))
+        || a.app.as_ref().is_some_and(|x| x.to_lowercase().contains(q))
+}
+
+/// The panel tag and bar color for an attempt's result.
+fn attempt_tag(a: &Attempt) -> (&'static str, u32) {
+    match a.result.as_str() {
+        "ok" => ("已执行", CYAN),
+        "failed" if a.timed_out => ("超时", RED),
+        "failed" => ("执行失败", RED),
+        "nomatch" => ("没匹配到命令", AMBER),
+        "cancelled" => ("已取消", TEXT3),
+        "confirm" => ("等待确认", TEXT2),
+        _ => ("执行中", TEXT2),
+    }
+}
+
+fn attempt_row(a: &Attempt, selected: bool) -> Stateful<Div> {
+    let (tag, color) = attempt_tag(a);
+    let title = match &a.action {
+        Some(n) if a.args.is_empty() => n.clone(),
+        Some(n) => format!("{n}：{}", a.args),
+        None => a.heard.replace('\n', " "),
+    };
+    hit(format!("history-cmd-{}", a.at.timestamp_millis()))
+        .size_full()
+        .flex()
+        .gap(px(10.))
+        .px(px(12.))
+        .py(px(6.))
+        .rounded(px(10.))
+        .border_1()
+        .map(|d| {
+            if selected {
+                d.bg(hex(RAISED)).border_color(hexa(LINE2))
+            } else {
+                d.border_color(gpui_kit::transparent_black())
+                    .hover(|s| s.bg(tint(TEXT, 0x08)))
+            }
+        })
+        .child(
+            div()
+                .w(px(2.))
+                .h_full()
+                .flex_none()
+                .rounded(px(1.))
+                .bg(hex(color)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .justify_center()
+                .gap(px(3.))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(8.))
+                        .font(mono())
+                        .text_size(px(10.))
+                        .text_color(hex(TEXT2))
+                        .child(
+                            div()
+                                .flex_none()
+                                .child(a.at.with_timezone(&Local).format("%H:%M").to_string()),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .child(a.app.clone().unwrap_or_else(|| "未知应用".into())),
+                        )
+                        .child(
+                            div()
+                                .ml_auto()
+                                .flex_none()
+                                .text_color(hex(color))
+                                .child(tag),
+                        ),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(px(13.))
+                        .text_color(hex(if a.action.is_some() { TEXT } else { TEXT2 }))
+                        .child(title),
+                ),
+        )
+}
+
+/// Plain-text summary of an attempt for a bug report (复制诊断); the heard text is the user's own.
+fn attempt_report(a: &Attempt) -> String {
+    let mut out = vec![
+        format!(
+            "time: {}",
+            a.at.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S")
+        ),
+        format!("app: {}", a.app.as_deref().unwrap_or("-")),
+        format!("heard: {}", a.heard),
+        format!("wake word: {}", wake_label()),
+        format!("action: {}", a.action.as_deref().unwrap_or("(no match)")),
+    ];
+    if !a.args.is_empty() {
+        out.push(format!("args: {}", a.args));
+    }
+    if a.sound {
+        out.push("matched: by sound".into());
+    }
+    out.push(format!("result: {}", a.result));
+    if let Some(c) = a.code {
+        out.push(format!("exit: {c}"));
+    }
+    if a.timed_out {
+        out.push("timed out".into());
+    }
+    if let Some(ms) = a.ms {
+        out.push(format!("took: {ms} ms"));
+    }
+    if let Some(o) = &a.output {
+        out.push(format!("output:\n{o}"));
+    }
+    out.push(format!("plaid: {}", env!("CARGO_PKG_VERSION")));
+    out.join("\n")
+}
+
+/// The heard text after the wake word, as an alias suggestion.
+fn after_wake(heard: &str) -> String {
+    let w = config::actions().1;
+    let t = heard.trim();
+    let rest = t.strip_prefix(w.as_str()).unwrap_or(t);
+    rest.trim_matches(|c: char| c.is_whitespace() || "，,。.！!？?、".contains(c))
+        .to_owned()
+}
+
+/// The wake word in effect, or 无 in bare mode.
+fn wake_label() -> String {
+    let w = config::actions().1;
+    if w.is_empty() {
+        "无（直接说命令名）".into()
+    } else {
+        w
+    }
 }
 
 fn matches(r: &Record, q: &str) -> bool {
@@ -1969,6 +2265,61 @@ fn block(label: &'static str, body: impl IntoElement) -> Div {
                 .child(label),
         )
         .child(body)
+}
+
+/// App icon (or initials), app name, time and the status tag along the top of the panel.
+fn detail_header(app: String, at: DateTime<Utc>, tag: &'static str, color: u32) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .child(app_icon(&app, 28.).map_or_else(
+            || {
+                div()
+                    .size(px(26.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(7.))
+                    .bg(hex(RAISED2))
+                    .font(mono())
+                    .text_size(px(10.))
+                    .child(badge(&app))
+                    .into_any_element()
+            },
+            IntoElement::into_any_element,
+        ))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(15.))
+                .font_weight(medium())
+                .child(app),
+        )
+        .child(
+            div()
+                .flex_none()
+                .font(mono())
+                .text_size(px(11.))
+                .text_color(hex(TEXT2))
+                .child(when(at)),
+        )
+        .child(
+            div()
+                .ml_auto()
+                .flex_none()
+                .px(px(9.))
+                .py(px(2.))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(tint(color, 0x66))
+                .font(mono())
+                .text_size(px(11.))
+                .text_color(hex(color))
+                .child(tag),
+        )
 }
 
 /// Two-letter app mark: initials of a multi-word name, else its first letters (first character for CJK).
@@ -2320,6 +2671,31 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
         )?;
         ui.shot(&format!("history-{name}"))?;
     }
+    // 命令: attempts instead of records, newest selected; ⌫ does nothing here.
+    ui.click("history-filter-5")?;
+    let attempts = plaid_core::store::Store::load(&dir).attempts;
+    expect(
+        "commands filter lists attempts",
+        attempts.len() == 4
+            && attempts
+                .iter()
+                .all(|a| ui.has(&format!("history-cmd-{}", a.at.timestamp_millis())))
+            && ui.has("history-cmd-report"),
+        &Some(format!("{} attempts", attempts.len())),
+    )?;
+    ui.shot("history-commands")?;
+    let miss = attempts
+        .iter()
+        .find(|a| a.result == "nomatch")
+        .ok_or("no miss")?;
+    ui.click(&format!("history-cmd-{}", miss.at.timestamp_millis()))?;
+    ui.shot("history-commands-miss")?;
+    ui.key("backspace")?;
+    expect(
+        "no delete in the commands view",
+        !ui.has("history-delete-ok"),
+        &None,
+    )?;
     // A record the local rules changed: its recognized text shows with the removals struck through.
     ui.click("history-filter-0")?;
     if let Some(r) = all

@@ -8,7 +8,7 @@ use crate::llm::{self, Endpoint, Level};
 use crate::refine::{self, Plan, Skip};
 use crate::rules::Rules;
 use crate::session::{Event, Session};
-use crate::store::{Record, Store};
+use crate::store::{Attempt, Record, Store};
 use crate::{gesture, text};
 use chrono::{DateTime, Utc};
 use std::collections::VecDeque;
@@ -313,6 +313,20 @@ pub fn rms(pcm: &[u8]) -> f64 {
     (sum / n as f64).sqrt()
 }
 
+/// Attempts left waiting or running when the app last quit.
+fn interrupted(mut store: Store) -> Store {
+    let ids: Vec<_> = store
+        .attempts
+        .iter()
+        .filter(|a| matches!(a.result.as_str(), "confirm" | "running"))
+        .map(|a| a.at)
+        .collect();
+    for id in ids {
+        store.update_attempt(id, |t| t.result = "cancelled".into());
+    }
+    store
+}
+
 fn label(a: &Action, args: &str) -> String {
     if args.is_empty() {
         a.name.clone()
@@ -386,7 +400,10 @@ pub struct Controller {
     learn: Learner,
     llm_seq: u64,
     /// A matched command marked `confirm`, waiting for ⏎ (esc drops it). Not a phase: it doesn't block the next press.
-    confirm: Option<(Action, String, actions::Env)>,
+    /// The last element is the attempt's id in commands.jsonl.
+    confirm: Option<(Action, String, actions::Env, DateTime<Utc>)>,
+    /// Commands running, by the generation that started them: the attempt to fill in when they end.
+    running: Vec<(u64, DateTime<Utc>)>,
     /// Command output pastes waiting for target verification (not recorded).
     command_pastes: Vec<DateTime<Utc>>,
     /// Record whose audio is being recognized again; dictation waits until it is done.
@@ -415,9 +432,10 @@ impl Controller {
             learn: Learner::default(),
             llm_seq: 0,
             confirm: None,
+            running: vec![],
             command_pastes: vec![],
             recovering: None,
-            store,
+            store: interrupted(store),
         }
     }
 
@@ -489,13 +507,20 @@ impl Controller {
                 if matches!(self.phase, Phase::Recording { .. }) {
                     p.log("return");
                     self.stop(p);
-                } else if let Some((a, args, env)) = self.confirm.take().filter(|_| self.idle()) {
-                    self.launch(&a, &args, env, p);
+                } else if let Some((a, args, env, id)) = self.confirm.take() {
+                    if self.idle() {
+                        self.launch(&a, &args, env, id, p);
+                    } else {
+                        self.store.update_attempt(id, |t| t.result = "cancelled".into());
+                    }
                 }
             }
             Msg::Escape => {
-                if let Some((a, ..)) = self.confirm.take().filter(|_| self.idle()) {
+                if self.idle()
+                    && let Some((a, ..)) = self.confirm.as_ref()
+                {
                     p.log(&format!("action {} cancelled", a.name));
+                    self.drop_confirm();
                     p.hud(Hud::Hide);
                 } else if self.phase == Phase::Refining {
                     p.log("refine skipped");
@@ -563,7 +588,7 @@ impl Controller {
                         p.hud(Hud::Flash(n));
                     }
                 }
-                Timer::Confirm => self.confirm = None,
+                Timer::Confirm => self.drop_confirm(),
                 Timer::Refine => {
                     if let Some(r) = self.refine.take_if(|r| r.cloud.is_some()) {
                         p.log("refine: Cloud did not answer in time");
@@ -690,7 +715,7 @@ impl Controller {
             }
             Phase::Idle => {}
         }
-        self.confirm = None;
+        self.drop_confirm();
         self.generation += 1;
         let g = self.generation;
         let cloud = p.setting("serviceMode").as_deref() == Some("cloud");
@@ -897,15 +922,25 @@ impl Controller {
                             "action: no match for {} chars",
                             rest.chars().count()
                         ));
+                        self.store.put_attempt(Attempt {
+                            at: u.at,
+                            app: u.app.clone(),
+                            heard: raw.clone(),
+                            result: "nomatch".into(),
+                            ..Default::default()
+                        });
                         return p.hud(Hud::Flash(if rest.is_empty() {
                             "没有听到命令".into()
                         } else {
                             format!("没有匹配的命令：{rest}")
                         }));
                     }
-                    Parsed::Run(a, args) => {
+                    Parsed::Run(a, args, sound) => {
                         let a = a.clone();
-                        return self.command(a, args, raw, p);
+                        if sound {
+                            p.log(&format!("action {} matched by sound", a.name));
+                        }
+                        return self.command(a, args, raw, sound, p);
                     }
                 }
                 self.refine_or_deliver(raw, session, p);
@@ -1091,9 +1126,27 @@ impl Controller {
     }
 
     /// A voice command replaces the paste. Not recorded in records.jsonl (it would feed ASR/LLM context and
-    /// learning); the trace has one line per run.
-    fn command(&mut self, a: Action, args: String, raw: String, p: &mut impl Platform) {
+    /// learning) but in commands.jsonl; the trace has one line per run, without text.
+    fn command(
+        &mut self,
+        a: Action,
+        args: String,
+        raw: String,
+        sound: bool,
+        p: &mut impl Platform,
+    ) {
         let u = self.u.as_ref().expect("utterance");
+        let id = u.at;
+        self.store.put_attempt(Attempt {
+            at: id,
+            app: u.app.clone(),
+            heard: raw.clone(),
+            action: Some(a.name.clone()),
+            args: args.clone(),
+            sound,
+            result: if a.confirm { "confirm" } else { "running" }.into(),
+            ..Default::default()
+        });
         let env = vec![
             ("PLAID_TEXT", raw),
             ("PLAID_ARGS", args.clone()),
@@ -1103,7 +1156,7 @@ impl Controller {
             ("PLAID_BEFORE", u.before.clone().unwrap_or_default()),
         ];
         if !a.confirm {
-            return self.launch(&a, &args, env, p);
+            return self.launch(&a, &args, env, id, p);
         }
         p.hud(Hud::Ask(label(&a, &args)));
         p.timer(
@@ -1113,16 +1166,38 @@ impl Controller {
                 timer: Timer::Confirm,
             },
         );
-        self.confirm = Some((a, args, env));
+        self.confirm = Some((a, args, env, id));
     }
 
-    fn launch(&mut self, a: &Action, args: &str, env: actions::Env, p: &mut impl Platform) {
+    /// A command waiting for ⏎ that won't run: esc, its timer, or the next dictation.
+    fn drop_confirm(&mut self) {
+        if let Some((.., id)) = self.confirm.take() {
+            self.store
+                .update_attempt(id, |t| t.result = "cancelled".into());
+        }
+    }
+
+    fn launch(
+        &mut self,
+        a: &Action,
+        args: &str,
+        env: actions::Env,
+        id: DateTime<Utc>,
+        p: &mut impl Platform,
+    ) {
+        self.store
+            .update_attempt(id, |t| t.result = "running".into());
+        self.running.push((self.generation, id));
         p.hud(Hud::Running(label(a, args)));
         p.run(self.generation, a, args, env);
     }
 
     /// HUD only for the utterance that started it, and only while nothing newer is on screen.
     fn ran(&mut self, generation: u64, a: Action, r: actions::Outcome, p: &mut impl Platform) {
+        if let Some(i) = self.running.iter().position(|x| x.0 == generation) {
+            let (_, id) = self.running.remove(i);
+            self.store.update_attempt(id, |t| t.finish(&r));
+        }
         let mine = self.idle() && generation == self.generation;
         if !r.ok() {
             if mine {
@@ -1955,6 +2030,15 @@ mod tests {
         let out = t.done(1, Ok("Plaid，飞起来"));
         assert!(has(&out, "没有匹配的命令：飞起来"), "{out:?}");
         assert!(t.c.store.all.is_empty());
+        let a = &t.c.store.attempts[0];
+        assert_eq!(
+            (a.heard.as_str(), a.result.as_str(), a.action.as_ref()),
+            ("Plaid，飞起来", "nomatch", None)
+        );
+        // It survives a reload; 清空历史 removes it.
+        assert_eq!(Store::load(t.c.store.dir()).attempts.len(), 1);
+        t.c.store.clear();
+        assert!(Store::load(t.c.store.dir()).attempts.is_empty());
     }
 
     #[test]
@@ -2367,8 +2451,15 @@ mod tests {
             "{out:?}"
         );
         assert!(!has(&out, "verify"), "{out:?}");
+        assert_eq!(t.c.store.attempts[0].result, "running");
         let out = ran(&mut t, 1, "日期", Some(0), "2026-11-18\n", "");
         assert!(has(&out, "verify 1 2026-11-18"), "{out:?}");
+        let a = &t.c.store.attempts[0];
+        assert_eq!(
+            (a.action.as_deref(), a.args.as_str(), a.result.as_str()),
+            (Some("日期"), "今天", "ok")
+        );
+        assert_eq!((a.code, a.output.as_deref()), (Some(0), Some("2026-11-18")));
         let out = t.flush();
         assert!(
             has(&out, "paste 2026-11-18")
@@ -2386,6 +2477,14 @@ mod tests {
         assert_eq!(out, vec!["hud Note(\"晴 12°\")"]);
         let out = ran(&mut t, 1, "天气", Some(1), "", "warn\ncurl: (6) no host\n");
         assert_eq!(out, vec!["hud Failed(\"天气 失败：curl: (6) no host\")"]);
+        t.key(StartHold);
+        t.done(2, Ok("Plaid 天气"));
+        ran(&mut t, 2, "天气", Some(6), "", "warn\ncurl: (6) no host\n");
+        let a = t.c.store.attempts.last().unwrap();
+        assert_eq!(
+            (a.result.as_str(), a.code, a.output.as_deref()),
+            ("failed", Some(6), Some("warn\ncurl: (6) no host"))
+        );
         t.key(StartHold);
         assert!(ran(&mut t, 1, "日期", Some(0), "x", "").is_empty());
     }
@@ -2426,6 +2525,17 @@ mod tests {
         t.done(4, Ok("Plaid 删除"));
         t.key(StartHold);
         assert!(t.c.confirm.is_none());
+        let results: Vec<&str> =
+            t.c.store
+                .attempts
+                .iter()
+                .map(|a| a.result.as_str())
+                .collect();
+        assert_eq!(results, ["ok", "cancelled", "cancelled", "cancelled"]);
+        // One left waiting when the app quit reads as cancelled next launch.
+        t.done(5, Ok("Plaid 删除"));
+        let c = Controller::new(Store::load(t.c.store.dir()));
+        assert_eq!(c.store.attempts.last().unwrap().result, "cancelled");
     }
 
     #[test]

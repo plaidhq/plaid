@@ -207,7 +207,10 @@ impl Run {
             opts.resource = r.clone();
         }
         opts.nonstream = asr.nonstream;
-        let (s, events, fut) = session::start(opts, Snapshot::new(&asr.hotwords, asr.threshold));
+        let (s, events, fut) = session::start(
+            opts,
+            Snapshot::new(&asr.hotwords, asr.threshold).boost(asr.boost.clone()),
+        );
         tokio::spawn(fut);
         s.begin(asr.dialog, None);
         // Like the device: make sure the provider connection is open while the user speaks. On a warm pooled

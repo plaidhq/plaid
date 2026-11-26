@@ -905,6 +905,54 @@ pub(super) fn fixture(dir: &Path) -> std::io::Result<()> {
         for r in records {
             store.add(r);
         }
+        // Voice-command attempts for History's 命令 filter: a run, a sound-alike match, a miss, a failure.
+        for (min, heard, action, args, sound, result, code, output) in [
+            (
+                200,
+                "指令，打开日历",
+                Some("打开日历"),
+                "",
+                false,
+                "ok",
+                Some(0),
+                None,
+            ),
+            (
+                150,
+                "智灵，天气北京",
+                Some("天气"),
+                "北京",
+                true,
+                "ok",
+                Some(0),
+                Some("晴 12°"),
+            ),
+            (90, "指令，播放音乐", None, "", false, "nomatch", None, None),
+            (
+                30,
+                "指令，天气",
+                Some("天气"),
+                "",
+                false,
+                "failed",
+                Some(6),
+                Some("curl: (6) Could not resolve host: wttr.in"),
+            ),
+        ] {
+            store.put_attempt(plaid_core::store::Attempt {
+                at: now - Duration::minutes(min),
+                app: Some("Safari".into()),
+                heard: heard.into(),
+                action: action.map(Into::into),
+                args: args.into(),
+                sound,
+                result: result.into(),
+                code,
+                output: output.map(Into::into),
+                ms: code.map(|_| 840),
+                ..Default::default()
+            });
+        }
         // Usage outlives records.jsonl: half a year of daily totals for the 概览 calendar.
         for day in 40..182 {
             if next(5) == 0 {

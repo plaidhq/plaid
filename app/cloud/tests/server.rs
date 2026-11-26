@@ -233,6 +233,7 @@ async fn dictate(opts: Options, plan: Option<Plan>) -> (Vec<String>, Vec<Event>)
     let asr = Asr {
         dialog: vec![],
         hotwords: vec!["Plaid".into()],
+        boost: vec![],
         threshold: 0.85,
         nonstream: false,
     };

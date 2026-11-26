@@ -41,6 +41,9 @@ pub struct Asr {
     /// Hotword file lines (terms, `heard -> wanted` rewrites, sound-alike entries).
     #[serde(default)]
     pub hotwords: Vec<String>,
+    /// ASR-only hotwords (wake word, command names); see `Snapshot::boost`.
+    #[serde(default)]
+    pub boost: Vec<String>,
     pub threshold: f64,
     pub nonstream: bool,
 }

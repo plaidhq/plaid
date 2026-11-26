@@ -260,7 +260,7 @@ impl Model {
         }
     }
 
-    /// Reloads the history when records.jsonl changed on disk.
+    /// Reloads the history when records.jsonl or commands.jsonl changed on disk.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         let s = stamp();
         if s != self.stamp {
@@ -279,10 +279,16 @@ impl Model {
     }
 }
 
+/// Latest change to records.jsonl or commands.jsonl.
 fn stamp() -> Option<SystemTime> {
-    std::fs::metadata(config::data_dir().join("records.jsonl"))
-        .and_then(|m| m.modified())
-        .ok()
+    ["records.jsonl", plaid_core::store::COMMANDS]
+        .iter()
+        .filter_map(|f| {
+            std::fs::metadata(config::data_dir().join(f))
+                .and_then(|m| m.modified())
+                .ok()
+        })
+        .max()
 }
 
 /// Bool settings the Swift app reads as `!= "0"` (unset = on).
