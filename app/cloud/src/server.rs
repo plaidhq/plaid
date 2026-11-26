@@ -26,6 +26,8 @@ use std::time::{Duration, Instant};
 const CHUNK: usize = 3200;
 /// For `start` after the upgrade.
 const START_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a closing connection waits for the client's Close.
+const CLOSE_WAIT: Duration = Duration::from_secs(2);
 /// A dictation connection is closed after this long, whatever state it is in.
 const MAX_DICTATION: Duration = Duration::from_secs(600);
 
@@ -173,7 +175,23 @@ async fn refuse(mut ws: WebSocket, code: ErrorCode, message: &str) {
         },
     )
     .await;
-    let _ = ws.send(Message::Close(None)).await;
+    close(&mut ws).await;
+}
+
+/// Sends Close and reads until the client's Close (or `CLOSE_WAIT`). Dropping the socket while audio frames sit
+/// unread makes the OS answer with a TCP reset, and the client can lose the error or `done` just sent.
+async fn close(ws: &mut WebSocket) {
+    if ws.send(Message::Close(None)).await.is_err() {
+        return;
+    }
+    let _ = tokio::time::timeout(CLOSE_WAIT, async {
+        while let Some(Ok(m)) = ws.recv().await {
+            if matches!(m, Message::Close(_)) {
+                break;
+            }
+        }
+    })
+    .await;
 }
 
 /// The first text frame, which must be `start`.
@@ -460,7 +478,7 @@ impl Run {
                     balance_micros,
                 };
                 say(&mut self.ws, &ServerMsg::Done { usage }).await;
-                let _ = self.ws.send(Message::Close(None)).await;
+                close(&mut self.ws).await;
             }
             End::Upstream(e) => {
                 // Volc's message carries a log id and a reason, not text.
