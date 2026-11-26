@@ -10,7 +10,7 @@ use gpui_kit::base::input::InputState;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-const STEPS: [&str; 5] = ["介绍", "API Key", "权限", "快捷键", "完成"];
+const STEPS: [&str; 5] = ["介绍", "API Key", "权限", "说话键", "完成"];
 pub const W: f32 = 860.;
 pub const H: f32 = 600.;
 
@@ -103,7 +103,7 @@ impl Onboarding {
                         } else {
                             "确认麦克风可用"
                         },
-                        "选一个快捷键",
+                        "选一个说话键",
                     ]
                     .map(|t| div().child(format!("•  {t}"))),
                 ),
@@ -205,14 +205,14 @@ impl Onboarding {
                 .child(perm(
                     "plaid/accessibility.svg",
                     "辅助功能",
-                    "监听快捷键，并把文字粘贴到当前应用",
+                    "监听说话键，并把文字粘贴到当前应用",
                     ax,
                     false,
                 ))
                 .child(perm(
                     "plaid/mic.svg",
                     "麦克风",
-                    "录音，只在按住快捷键时打开",
+                    "录音，只在按住说话键时打开",
                     mic,
                     true,
                 ))
@@ -223,7 +223,7 @@ impl Onboarding {
                 badge(Status::Ok, "可用")
             };
             body.gap(px(10.))
-                .child(para("Windows 不需要额外授权快捷键和粘贴，只需确认麦克风可用。"))
+                .child(para("Windows 不需要额外授权说话键和粘贴，只需确认麦克风可用。"))
                 .child(perm(
                     "plaid/mic.svg",
                     "麦克风",
@@ -245,7 +245,7 @@ impl Onboarding {
                         .text_size(px(12.))
                         .line_height(px(19.))
                         .text_color(hex(AMBER))
-                        .child("以管理员身份运行的窗口（例如任务管理器、注册表编辑器）处于前台时，快捷键和粘贴都不起作用。这是 Windows 的权限隔离，不是故障。"),
+                        .child("以管理员身份运行的窗口（例如任务管理器、注册表编辑器）处于前台时，说话键和粘贴都不起作用。这是 Windows 的权限隔离，不是故障。"),
                 )
         }
     }
@@ -267,7 +267,7 @@ impl Onboarding {
             .flex()
             .flex_col()
             .gap(px(14.))
-            .child(h2("快捷键"))
+            .child(h2("说话键"))
             .child(para("按住说话，松开粘贴；轻点一下进入开关模式。"))
             .child(
                 div()

@@ -336,6 +336,15 @@ pub fn reveal(path: &std::path::Path) {
     }
 }
 
+/// The label for buttons that call `reveal`.
+pub fn reveal_label() -> &'static str {
+    if cfg!(windows) {
+        "在资源管理器中显示"
+    } else {
+        "在访达中显示"
+    }
+}
+
 /// The data folder as the user knows it.
 pub fn data_dir_label() -> String {
     let d = config::data_dir().display().to_string();

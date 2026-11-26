@@ -399,6 +399,14 @@ impl Refine {
         if self.test.running {
             return;
         }
+        if llm::endpoint(config::value).base.is_empty() {
+            self.test = Test {
+                result: Some(("还没有填写接口地址".into(), true)),
+                ..Test::default()
+            };
+            cx.notify();
+            return;
+        }
         let t0 = Instant::now();
         let text = self.sample.read(cx).value().to_string();
         let fixture = self.model.read(cx).facts.fixture;
@@ -468,7 +476,7 @@ impl Refine {
         if !on_if_one("llmEnabled") {
             return "关：识别结果只过本地规则就粘贴".into();
         }
-        let s = "出错或超时直接粘贴原文；润色中光带变紫，按 esc 跳过";
+        let s = "出错或超时直接粘贴原文；润色时按 esc 跳过";
         let all = &self.model.read(cx).store.all;
         let ms: Vec<i64> = all[all.len().saturating_sub(50)..]
             .iter()
@@ -756,7 +764,7 @@ impl Refine {
                     .gap(px(12.))
                     .child(div().flex_1().min_w_0().child(card_head(
                         "风格",
-                        "叠加在轻度/通顺之上的要求，按应用组合。只在调用 LLM 时生效：句子短于字数门槛时不起作用。",
+                        "叠加在轻度/通顺之上，按应用分配。只在调用 LLM 时生效。",
                     )))
                     .child(new),
             )
@@ -1142,7 +1150,13 @@ impl Refine {
                     cx.listener(move |this, _, w, cx| this.reset_prompt(i, w, cx)),
                 );
                 rows.push(
-                    row("", if modified { reset } else { disabled(reset) }).into_any_element(),
+                    row(
+                        "",
+                        div()
+                            .flex()
+                            .child(if modified { reset } else { disabled(reset) }),
+                    )
+                    .into_any_element(),
                 );
             }
         }
@@ -1641,7 +1655,7 @@ impl Render for Refine {
             .gap(px(10.))
             .child(card_head(
                 "本地规则",
-                "在本机运行，不调用 LLM，短句也生效。点一下切换。",
+                "在本机运行，不调用 LLM，短句也生效。点卡片切换。",
             ))
             .child(tiles(0))
             .child(tiles(3));
@@ -1733,7 +1747,7 @@ impl Render for Refine {
             )
             .child(self.styles_block(window, cx))
             .child(section("上下文", self.context_rows(window, cx)))
-            .child(hint("启用 LLM 后，识别文本及已配置的上下文会发送给「服务」里设置的接口；使用远程接口时会离开本机。「词典 → 后台校对」独立运行，关闭润色不会关闭后台校对。"))
+            .child(hint("启用 LLM 后，识别文本和上面的上下文会发送到「服务」里设置的接口，使用远程接口时会离开本机。「词典 → 后台校对」不受这里的开关影响。"))
     }
 }
 
@@ -1825,10 +1839,17 @@ impl Refine {
                     )),
             ),
         )
-        .child(div().pt(px(8.)).child(group("LLM")))
-        .child(section("服务商", self.provider_rows(window, cx)))
-        .child(section("提示词", self.prompt_rows(window, cx)))
-        .child(section("测试", self.test_rows(window, cx)))
+        .child(
+            group("LLM").pt(px(8.)).child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .child(section("服务商", self.provider_rows(window, cx)))
+                    .child(section("提示词", self.prompt_rows(window, cx)))
+                    .child(section("测试", self.test_rows(window, cx))),
+            ),
+        )
     }
 }
 

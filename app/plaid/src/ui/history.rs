@@ -1353,7 +1353,15 @@ impl History {
                 },
                 llm_bad && r.llm != "skipped",
             ),
-            ("改动", format!("{changed} 字"), false),
+            (
+                "改动",
+                if r.text.is_empty() {
+                    "—".into()
+                } else {
+                    format!("{changed} 字")
+                },
+                false,
+            ),
             (
                 "说话速度",
                 if r.audio_ms > 0 && chars > 0 {
@@ -1416,9 +1424,11 @@ impl History {
                         });
                     }),
                 ))
-                .child(button("history-reveal", reveal_label(), move |_, _, _| {
-                    reveal(&path)
-                }));
+                .child(button(
+                    "history-reveal",
+                    super::reveal_label(),
+                    move |_, _, _| reveal(&path),
+                ));
         }
         if !r.raw.trim().is_empty() && !r.is_failure() {
             buttons = buttons.child(enabled(
@@ -1439,7 +1449,9 @@ impl History {
         ));
 
         let mut fields: Vec<(&str, String, bool)> = vec![];
-        if let Some(e) = &r.error {
+        // An empty result already shows the error in its place.
+        let error_row = r.error.as_ref().filter(|_| !r.text.is_empty());
+        if let Some(e) = error_row {
             fields.push(("错误", e.clone(), true));
         }
         if llm_bad {
@@ -1483,7 +1495,7 @@ impl History {
                 .child(disclosure(
                     "history-details",
                     details,
-                    if r.error.is_some() {
+                    if error_row.is_some() {
                         "错误与详情"
                     } else {
                         "详情"
@@ -1688,7 +1700,7 @@ impl Render for History {
         let empty = if total == 0 {
             Some((
                 "还没有听写记录",
-                "按住快捷键说话，松开后文字会粘贴到光标处。",
+                "按住说话键开始听写，松开后文字粘贴到光标处。",
             ))
         } else if n_shown > 0 {
             None
@@ -2022,14 +2034,6 @@ fn peaks(path: &Path) -> Vec<f32> {
 /// A button that does nothing and is drawn dimmed when `on` is false.
 fn enabled(on: bool, b: Stateful<Div>) -> Stateful<Div> {
     if on { b } else { disabled(b) }
-}
-
-fn reveal_label() -> &'static str {
-    if cfg!(windows) {
-        "在资源管理器中显示"
-    } else {
-        "在访达中显示"
-    }
 }
 
 fn thousands(v: i64) -> String {

@@ -1155,7 +1155,7 @@ impl Render for Overview {
                         .justify_center()
                         .child(div().font_weight(bold()).child("还没有听写记录"))
                         .child(
-                            hint("按住快捷键说话，松开后文字会粘贴到光标处。").text_size(px(12.)),
+                            hint("按住说话键开始听写，松开后文字粘贴到光标处。").text_size(px(12.)),
                         ),
                 )
                 .child(self.perf.clone());

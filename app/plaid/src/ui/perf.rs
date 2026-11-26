@@ -612,7 +612,10 @@ impl Perf {
                 "LLM 回退",
                 &format!("{failed}/{calls}"),
                 None,
-                format!("超时 {t}·跳过 {s}·出错 {}", failed.saturating_sub(t + s)),
+                format!(
+                    "超时 {t} · 跳过 {s} · 出错 {}",
+                    failed.saturating_sub(t + s)
+                ),
             )
         };
         card(
@@ -1257,7 +1260,8 @@ impl Perf {
                                     rule: false,
                                 },
                                 MenuEntry {
-                                    label: "在访达中显示 records.jsonl".into(),
+                                    label: format!("{} records.jsonl", super::reveal_label())
+                                        .into(),
                                     checked: false,
                                     rule: false,
                                 },

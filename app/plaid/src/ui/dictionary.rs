@@ -937,7 +937,7 @@ impl Dictionary {
                             .flex_1()
                             .min_w_0()
                             .text_color(hex(TEXT2))
-                            .child("个词 · 发给火山做热词，也发给 LLM 参考"),
+                            .child("个词 · 发给火山和 LLM 参考"),
                     )
                     .child(input),
             )
@@ -1154,7 +1154,11 @@ impl Dictionary {
             let when = f.last.with_timezone(&Local).format("%-m月%-d日");
             let add_word = default_button(
                 SharedString::from(format!("fix-word-{i}")),
-                "加热词",
+                if has_word {
+                    "已是热词"
+                } else {
+                    "加热词"
+                },
                 move |_, _, cx| {
                     if !has_word {
                         let _ = word.update(cx, |this, cx| this.append(&to, cx));
@@ -1202,16 +1206,16 @@ impl Dictionary {
                         ),
                 )
                 .child(
+                    hint(f.context.split('\n').collect::<Vec<_>>().join(" "))
+                        .w_full()
+                        .truncate(),
+                )
+                .child(
                     div()
                         .flex()
+                        .justify_end()
                         .items_center()
                         .gap(px(6.))
-                        .child(
-                            hint(f.context.split('\n').collect::<Vec<_>>().join(" "))
-                                .flex_1()
-                                .min_w_0()
-                                .truncate(),
-                        )
                         .child(small_button(
                             SharedString::from(format!("fix-dismiss-{i}")),
                             "忽略",
@@ -1246,9 +1250,10 @@ impl Dictionary {
             .pt(px(8.))
             .border_t_1()
             .border_color(hexa(LINE))
-            .child(hint(
-                "别名会将读音相近的错法改为目标词；最近 10 条建议也会作为 {{corrections}} 交给润色。",
-            ).w_full())
+            .child(
+                hint("加为别名后，这种错法会直接改成目标词。最近 10 条建议也会交给润色参考。")
+                    .w_full(),
+            )
             .when(d.fixes.len() > 1, |el| {
                 el.child(pick_list(
                     "fix-batch",
@@ -1366,18 +1371,15 @@ impl Dictionary {
             .child(
                 card_head("最近学会", applies_note(&learn()))
                     .pb(px(6.))
-                    .child(
-                        div()
-                            .flex_none()
-                            .font(mono())
-                            .text_size(px(11.))
-                            .text_color(hex(if on { TEXT2 } else { AMBER }))
-                            .child(if on {
-                                "自动学习 开"
-                            } else {
-                                "自动学习 关"
-                            }),
-                    ),
+                    .when(!on, |el| {
+                        el.child(
+                            div()
+                                .flex_none()
+                                .text_size(px(11.))
+                                .text_color(hex(AMBER))
+                                .child("从手动修改中学习：关"),
+                        )
+                    }),
             )
             .children(rows)
             .when(d.autos.is_empty(), |el| {
@@ -1419,9 +1421,11 @@ impl Dictionary {
                 ))
                 .into_any_element()
         } else {
-            hint("独立于润色开关：润色关闭时，仍将每句文本发送到配置的 LLM 校对，只用来发现规则，不改粘贴结果")
+            hint("润色关闭时也会把每句文本发给 LLM 校对，只用来发现规则，不改粘贴结果")
                 .into_any_element()
         };
+        let l = learn();
+        let auto = l.edits > 0 || l.rewrites > 0;
         group("学习").child(
             group_body()
                 .gap(px(10.))
@@ -1434,9 +1438,11 @@ impl Dictionary {
                 .child(switch("autoLearn", "后台校对", note))
                 .child(self.threshold("手动改过几次后自动生效", "learnEditHits", window, cx))
                 .child(self.threshold("润色改过几次后自动生效", "learnRewriteHits", window, cx))
-                .child(hint(
-                    "达到次数，且多数时候都被改掉，规则才自动生效；润色的次数需分布在两天以上。没达到的列在「最近学会」里等你采纳。",
-                )),
+                .when(auto, |el| {
+                    el.child(hint(
+                        "还需多数时候都被改掉才会生效；没达到的列在「最近学会」里等你采纳。",
+                    ))
+                }),
         )
     }
 
@@ -1703,9 +1709,9 @@ impl Render for Dictionary {
             .flex()
             .flex_col()
             .gap(px(12.))
-            .pt(px(16.))
-            .px(px(22.))
-            .pb(px(18.))
+            .pt(px(6.))
+            .px(px(28.))
+            .pb(px(24.))
             .when_some(self.error.clone(), |el, e| {
                 let this = this.clone();
                 el.child(
@@ -1739,12 +1745,12 @@ impl Render for Dictionary {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .gap(px(18.))
+                    .gap(px(16.))
                     .child(self.left(&d, window, cx))
                     .child(
                         div()
                             .id("dict-side")
-                            .w(px(290.))
+                            .w(px(300.))
                             .flex_none()
                             .h_full()
                             .overflow_y_scroll()

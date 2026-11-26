@@ -606,7 +606,7 @@ fn hud_states() -> Div {
     let states = [
         ("在听", "我们明天下午四点", TEXT, CYAN, 0.7),
         ("润色中", "我们明天下午四点开会。", TEXT, VIOLET, 0.8),
-        ("麦克风太小", "没有听到声音", AMBER, AMBER, 0.4),
+        ("声音太小", "几乎没有声音 · 麦克风", AMBER, AMBER, 0.4),
         ("出错", "网络不可用，已保存录音", RED, RED, 0.4),
     ];
     div()
@@ -858,11 +858,7 @@ impl General {
     /// 关于: version and updates, diagnostics, links.
     fn about_page(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let log = config::data_dir().join("events.log");
-        let reveal_label = if cfg!(windows) {
-            "在资源管理器中显示"
-        } else {
-            "在 Finder 中显示"
-        };
+        let reveal_label = super::reveal_label();
         let model = self.model.clone();
         let link = |id: &'static str, label: &'static str, url: &'static str| {
             small_button(id, label, move |_, _, _| super::open_url(url))
@@ -989,15 +985,11 @@ impl General {
     }
 
     fn data_page(&self) -> Stateful<Div> {
-        let reveal_label = if cfg!(windows) {
-            "在资源管理器中显示"
-        } else {
-            "在 Finder 中显示"
-        };
+        let reveal_label = super::reveal_label();
         super::page_body("data")
             .child(
                 group_body()
-                    .child(card_head("数据", "全部只存本机"))
+                    .child(card_head("数据", "记录和录音只存在本机"))
                     .child(row(
                         "数据文件夹",
                         div()
@@ -1019,10 +1011,10 @@ impl General {
                     .child(self.toggle(
                         "keepAudio",
                         "保留最近 500 条录音",
-                        "只存本机，用于回放和反馈问题",
+                        "用于回放、重新识别和反馈问题",
                     ))
                     .child(div().pt(px(6.)).child(hint(
-                        "云端识别会发送音频及已启用的上下文；LLM 润色和后台校对可能发送识别文本、热词及上下文。后台校对独立于润色开关，可在「词典」中管理。",
+                        "云端识别会发送音频和已启用的上下文；LLM 润色和后台校对会发送识别文本、热词和上下文。",
                     ))),
             )
     }
