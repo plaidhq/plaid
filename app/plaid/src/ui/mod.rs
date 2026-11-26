@@ -653,6 +653,7 @@ impl Settings {
             )
             .child(nav)
             .child(drag_area().flex_1().h_full())
+            .children(update_offer(cx))
     }
 
     /// 设置's page list. In the app the pill slides between rows when the previous page was a settings page too.
@@ -777,9 +778,12 @@ impl Settings {
             )
             .child(format!("{words} 条记录"))
             .child(div().ml_auto())
+            // The header offers it; after 稍后 this is the quiet way back (none for a skipped version).
             .when_some(
                 cx.try_global::<crate::update::Updater>()
+                    .filter(|u| u.prompt().is_none())
                     .and_then(|u| u.offer())
+                    .filter(|v| config::raw("updateSkip").as_deref() != Some(*v))
                     .map(str::to_owned),
                 |d, v| {
                     d.child(
@@ -842,6 +846,57 @@ impl Render for Settings {
             })
             .child(self.footer(cx))
     }
+}
+
+/// The header's update offer, right of the tabs: 忽略此版本 / 稍后 / 更新 (restart into the staged bundle, or the
+/// release page where the app can't replace itself).
+fn update_offer(cx: &App) -> Option<Div> {
+    let u = cx.try_global::<crate::update::Updater>()?;
+    let v = u.prompt()?.to_owned();
+    let ready = matches!(u.state, crate::update::State::Ready(..));
+    let note = if u.busy_note {
+        "听写结束后再点更新".to_string()
+    } else {
+        format!("新版本 {v}")
+    };
+    Some(
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(8.))
+            .pr(px(18.))
+            .child(
+                div()
+                    .size(px(6.))
+                    .rounded_full()
+                    .bg(hex(CYAN))
+                    .shadow(vec![glow(CYAN, 8., 0x80)]),
+            )
+            .child(div().mr(px(4.)).text_color(hex(TEXT2)).child(note))
+            .child(
+                hit("update-skip")
+                    .px(px(6.))
+                    .text_size(px(12.))
+                    .text_color(hex(TEXT3))
+                    .hover(|s| s.text_color(hex(TEXT)))
+                    .child("忽略此版本")
+                    .on_click(|_, _, cx| crate::update::skip(cx)),
+            )
+            .child(small_button("update-later", "稍后", |_, _, cx| {
+                crate::update::later(cx)
+            }))
+            .child(
+                default_button(
+                    "update-now",
+                    if ready { "更新" } else { "下载" },
+                    |_, _, cx| crate::update::apply(cx),
+                )
+                .h(px(24.))
+                .px(px(12.))
+                .text_size(px(12.)),
+            ),
+    )
 }
 
 /// The cyan count pill on 设置 and 词典 (词典 suggestions waiting for a decision).

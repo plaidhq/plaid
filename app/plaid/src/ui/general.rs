@@ -707,7 +707,7 @@ fn update_card(cx: &App) -> Div {
     };
     let busy = u.is_some_and(|u| u.busy_note);
     group_body()
-        .child(card_head("更新", "每 6 小时检查一次 GitHub 上的新版本"))
+        .child(card_head("更新", "每 30 分钟检查一次 GitHub 上的新版本"))
         .child(row(
             format!("Plaid {}", env!("CARGO_PKG_VERSION")),
             div()

@@ -348,15 +348,42 @@ fn check_general(ui: &mut Ui) -> Result<(), String> {
             Default::default(),
         ),
         busy_note: true,
+        later: None,
     };
+    let staged = ready.state.clone();
     ui.cx.update(|cx| cx.set_global(ready));
     ui.frame()?;
     expect(
-        "update offered in card and footer",
-        ui.has("update-apply") && ui.has("footer-update") && !ui.has("update-check"),
+        "update offered in card and header",
+        ui.has("update-apply")
+            && ui.has("update-now")
+            && !ui.has("footer-update")
+            && !ui.has("update-check"),
         &None,
     )?;
     ui.shot("about-update")?;
+    // 稍后 moves the offer from the header to the footer; 忽略此版本 drops it from both.
+    ui.click("update-later")?;
+    expect(
+        "later: footer only",
+        !ui.has("update-now") && ui.has("footer-update"),
+        &None,
+    )?;
+    ui.cx.update(|cx| {
+        cx.set_global(crate::update::Updater {
+            state: staged,
+            ..Default::default()
+        })
+    });
+    ui.frame()?;
+    ui.click("update-skip")?;
+    expect(
+        "skipped: no offer",
+        !ui.has("update-now")
+            && !ui.has("footer-update")
+            && config::raw("updateSkip").as_deref() == Some("0.99.0"),
+        &config::raw("updateSkip"),
+    )?;
     ui.cx
         .update(|cx| cx.set_global(crate::update::Updater::default()));
     ui.frame()?;

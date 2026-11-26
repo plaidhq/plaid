@@ -1,7 +1,8 @@
-//! In-app updates. A check runs shortly after launch and every 6 h (failures only logged), or from 设置 › 关于
+//! In-app updates. A check runs shortly after launch and every 30 min (failures only logged), or from 设置 › 关于
 //! (failures shown). On macOS a newer release is downloaded, verified against GitHub's digest and unpacked in
-//! the background; the user applies it from the tray or settings, which swaps the bundle in place and
-//! relaunches, never during a dictation. Where the app can't replace itself (Windows for now, a bare binary, a
+//! the background; the settings header then offers it (更新 / 稍后 / 忽略此版本) and the tray keeps a quiet entry.
+//! Applying swaps the bundle in place and relaunches, never during a dictation. A skipped version (updateSkip)
+//! is neither downloaded nor offered by the periodic check; a newer one is. Where the app can't replace itself (Windows for now, a bare binary, a
 //! translocated or read-only bundle) the release page is opened instead.
 use crate::{os, trace};
 use gpui_kit::*;
@@ -10,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const FIRST_CHECK: Duration = Duration::from_secs(30);
-const EVERY: Duration = Duration::from_secs(6 * 3600);
+const EVERY: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Clone, Debug, Default)]
 pub enum State {
@@ -33,6 +34,8 @@ pub struct Updater {
     pub state: State,
     /// Set when "restart to update" was clicked during a dictation.
     pub busy_note: bool,
+    /// The version 稍后 was clicked for; the header leaves it alone until the next launch.
+    pub later: Option<String>,
 }
 
 impl Global for Updater {}
@@ -45,6 +48,34 @@ impl Updater {
             _ => None,
         }
     }
+
+    /// The version the settings header offers: not snoozed (稍后) or skipped (忽略此版本).
+    pub fn prompt(&self) -> Option<&str> {
+        self.offer()
+            .filter(|v| self.later.as_deref() != Some(*v) && !skipped(v))
+    }
+}
+
+fn skipped(version: &str) -> bool {
+    crate::config::raw("updateSkip").as_deref() == Some(version)
+}
+
+/// 稍后: hide the header offer until the next launch; the footer, tray and 关于 keep theirs.
+pub fn later(cx: &mut App) {
+    let u = cx.default_global::<Updater>();
+    u.later = u.offer().map(str::to_owned);
+    cx.refresh_windows();
+}
+
+/// 忽略此版本: never offer this version again; a newer release is offered as usual.
+pub fn skip(cx: &mut App) {
+    if let Some(v) = cx.default_global::<Updater>().offer().map(str::to_owned) {
+        trace::log(&format!("update: skipping {v}"));
+        if let Err(e) = crate::config::set("updateSkip", v.into()) {
+            trace::log(&format!("settings: updateSkip: {e}"));
+        }
+    }
+    cx.refresh_windows();
 }
 
 /// Starts the periodic check.
@@ -86,6 +117,9 @@ pub fn check(manual: bool, cx: &mut App) {
     cx.spawn(async move |cx| {
         let result = task.await;
         cx.update(|cx| match result {
+            Ok(r) if !manual && skipped(&r.version) => {
+                trace::log(&format!("update: {} skipped", r.version));
+            }
             Ok(r) if update::newer(&r.version, env!("CARGO_PKG_VERSION")) => {
                 trace::log(&format!("update: {} available", r.version));
                 fetch(r, cx);
