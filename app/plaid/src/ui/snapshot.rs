@@ -486,8 +486,73 @@ impl Ui {
         mav::PROBES.with(|p| p.borrow().contains_key(id))
     }
 
+    /// Scrolls the page until the control with this id is painted clear of the top bar and the footer, as a
+    /// person would before clicking it. Fixed scroll offsets broke whenever a page's height changed.
+    fn reveal(&mut self, id: &str) -> Result<(), String> {
+        const TOP: f32 = 64.;
+        const BOTTOM: f32 = 48.;
+        let handle = self.window.ok_or("no window")?;
+        let size = self
+            .cx
+            .update_window(handle, |_, window, _| window.viewport_size())
+            .map_err(|e| e.to_string())?;
+        let (h, mid) = (
+            f32::from(size.height),
+            point(size.width / 2., size.height / 2.),
+        );
+        // Not painted at all: look further down first, then back up past where we started.
+        for i in 0..24 {
+            let dy = match mav::PROBES.with(|p| p.borrow().get(id).copied()) {
+                Some(b) => {
+                    let y = f32::from(b.center().y);
+                    if y < TOP {
+                        TOP + 40. - y
+                    } else if y > h - BOTTOM {
+                        h - BOTTOM - 40. - y
+                    } else {
+                        return Ok(());
+                    }
+                }
+                None if i < 8 => -300.,
+                None => 300.,
+            };
+            self.scroll_at(handle, mid, dy)?;
+        }
+        Ok(())
+    }
+
+    fn scroll_at(
+        &mut self,
+        handle: AnyWindowHandle,
+        at: Point<Pixels>,
+        dy: f32,
+    ) -> Result<(), String> {
+        self.cx
+            .update_window(handle, |_, window, cx| {
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position: at,
+                        modifiers: Modifiers::default(),
+                        pressed_button: None,
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::Scroll(ScrollEvent {
+                        position: at,
+                        delta: ScrollDelta::Pixels(point(px(0.), px(dy))),
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+            })
+            .map_err(|e| e.to_string())?;
+        self.frame()
+    }
+
     /// Clicks the center of the control painted with this id, then renders the result.
     pub(super) fn click(&mut self, id: &str) -> Result<(), String> {
+        self.reveal(id)?;
         let handle = self.window.ok_or("no window")?;
         let Some(b) = mav::PROBES.with(|p| p.borrow().get(id).copied()) else {
             return Err(format!("FAIL no control {id:?} on screen"));

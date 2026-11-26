@@ -19,8 +19,7 @@ For longer passages, tap the key once to go hands-free and tap again (or press �
 ### Speech in, written text out
 
 Spoken sentences carry fillers like 那个 / 就是 and loose punctuation. With polishing on, an LLM cleans that up
-before pasting, while the strip shows it working. Levels are 关 / 轻度 / 通顺 and can differ per app: off in the
-terminal, 通顺 in email. Short sentences (under 20 characters by default) skip the LLM
+before pasting, while the strip shows it working. Levels are 关 / 轻度 / 通顺. Short sentences (under 20 characters by default) skip the LLM
 so they paste immediately.
 
 ![Polishing before paste](docs/screenshots/hud-refining.png)
@@ -88,7 +87,7 @@ Plaid checks GitHub for new releases every 6 hours and can update itself (设置
 1. Open 设置 › 服务 and paste the Volcengine API key. Keys are stored locally (Keychain on macOS, Credential
    Manager on Windows).
 2. Optional: under LLM on the same page, pick a preset or enter an endpoint, model and key, then run 测试. Turn
-   polishing on in 设置 › 润色 and choose a level (关 / 轻度 / 通顺), per app if you like.
+   polishing on in 设置 › 润色 and choose a level (关 / 轻度 / 通顺).
 
 ## Use
 

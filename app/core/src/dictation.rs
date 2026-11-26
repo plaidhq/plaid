@@ -704,8 +704,7 @@ impl Controller {
                     u.mic_start_ms.unwrap_or(-1)
                 ));
                 u.mic = Some(name);
-                let app = u.app.clone();
-                if llm::level(|k| p.setting(k), app.as_deref()) > Level::Off
+                if llm::level(|k| p.setting(k)) > Level::Off
                     && let Some(ep) = Self::configured(p)
                     && !llm::loopback(&ep.base)
                 {
@@ -1178,13 +1177,8 @@ impl Controller {
     /// Optional LLM pass between the ASR final and the paste. Fails open: errors and timeouts paste the raw text.
     fn refine_or_deliver(&mut self, asr: String, p: &mut impl Platform) {
         let asr_at = Instant::now();
-        let app = self.u.as_ref().and_then(|u| u.app.clone());
-        let level = llm::level(|k| p.setting(k), app.as_deref());
-        let raw = if level == Level::Raw {
-            asr.clone()
-        } else {
-            Rules::load(|k| p.setting(k)).apply(&asr)
-        };
+        let level = llm::level(|k| p.setting(k));
+        let raw = Rules::load(|k| p.setting(k)).apply(&asr);
         if raw != asr {
             p.log(&format!(
                 "rules: {} → {} chars",
@@ -1277,7 +1271,7 @@ impl Controller {
                 "没有可用的 LLM：在「设置 → 服务」里填好 LLM 接口和 key".into(),
             ));
         };
-        let light = llm::level(|k| p.setting(k), r.app.as_deref()) == Level::Light;
+        let light = llm::level(|k| p.setting(k)) == Level::Light;
         let timeout = Duration::from_millis(
             p.setting("llmTimeoutMs")
                 .and_then(|s| s.parse().ok())
@@ -1915,10 +1909,6 @@ mod tests {
         );
         assert!(warmed(&[remote]).is_empty(), "LLM off");
         assert!(
-            warmed(&[("llmEnabled", "1"), remote, ("llmApps", "Notes\traw")]).is_empty(),
-            "front app set to 原文"
-        );
-        assert!(
             warmed(&[
                 ("llmEnabled", "1"),
                 ("llmBaseUrl", "http://localhost:11434/v1")
@@ -1926,38 +1916,6 @@ mod tests {
             .is_empty(),
             "loopback has no handshake to save"
         );
-    }
-
-    #[test]
-    fn per_app_levels_override_the_global_one() {
-        // Notes (the fake front app) set to 原文: no rules, no LLM.
-        let mut t = T::new();
-        t.p.settings.extend([
-            ("ruleFillers", "1"),
-            ("llmMinChars", "0"),
-            ("llmApps", "Slack\tlight\nnotes\traw"),
-        ]);
-        let out = refining(&mut t, 1, "嗯，先就这样吧。");
-        assert!(
-            has(&out, "verify 1 嗯，先就这样吧。") && !has(&out, "llm 1"),
-            "{out:?}"
-        );
-        // LLM off globally, Notes set to 轻度: refined.
-        let mut t = T::new();
-        t.p.settings
-            .extend([("llmMinChars", "0"), ("llmApps", "Notes\tlight")]);
-        t.p.settings.retain(|(k, _)| *k != "llmEnabled");
-        t.p.settings.push(("llmEnabled", "0"));
-        t.p.settings
-            .extend([("llmBaseUrl", "http://127.0.0.1:1/v1"), ("llmModel", "m")]);
-        t.key(StartHold);
-        t.send(Msg::Field {
-            generation: 1,
-            before: None,
-            window: None,
-        });
-        let out = t.done(1, Ok("先就这样吧。"));
-        assert!(has(&out, "llm 1"), "{out:?}");
     }
 
     #[test]

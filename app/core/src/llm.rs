@@ -32,8 +32,6 @@ pub const LIGHT_PROMPT: &str = "你是语音输入的文本校对器。输入是
 /// How much a dictation is rewritten before the paste.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
-    /// No local rules and no LLM: the recognizer's text.
-    Raw,
     /// Local rules only.
     Off,
     /// LLM with `LIGHT_PROMPT` (`llmPromptLight`).
@@ -43,11 +41,10 @@ pub enum Level {
 }
 
 impl Level {
-    pub const ALL: [Level; 4] = [Level::Raw, Level::Off, Level::Light, Level::Fluent];
+    pub const ALL: [Level; 3] = [Level::Off, Level::Light, Level::Fluent];
 
     pub fn key(self) -> &'static str {
         match self {
-            Level::Raw => "raw",
             Level::Off => "off",
             Level::Light => "light",
             Level::Fluent => "fluent",
@@ -60,7 +57,6 @@ impl Level {
 
     pub fn label(self) -> &'static str {
         match self {
-            Level::Raw => "原文",
             Level::Off => "关",
             Level::Light => "轻度",
             Level::Fluent => "通顺",
@@ -68,38 +64,8 @@ impl Level {
     }
 }
 
-/// `llmApps`: one `app<TAB>level` per line, matched against the frontmost app's name (case-insensitive).
-pub fn app_levels(s: &str) -> Vec<(String, Level)> {
-    s.lines()
-        .filter_map(|l| {
-            let (app, level) = l.rsplit_once('\t')?;
-            Some((app.trim().to_string(), Level::parse(level.trim())?))
-        })
-        .filter(|(app, _)| !app.is_empty())
-        .collect()
-}
-
-pub fn format_app_levels(v: &[(String, Level)]) -> String {
-    v.iter()
-        .map(|(app, l)| format!("{app}\t{}", l.key()))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// The level for a dictation into `app`: its `llmApps` entry, else 关 when `llmEnabled` is off, else `llmLevel`.
-pub fn level(mut setting: impl FnMut(&str) -> Option<String>, app: Option<&str>) -> Level {
-    if let Some(app) = app
-        && let Some((_, l)) = app_levels(&setting("llmApps").unwrap_or_default())
-            .into_iter()
-            .find(|(a, _)| a.eq_ignore_ascii_case(app))
-    {
-        return l;
-    }
-    global_level(setting)
-}
-
-/// The level outside any `llmApps` entry.
-pub fn global_level(mut setting: impl FnMut(&str) -> Option<String>) -> Level {
+/// 关 when `llmEnabled` is off, else `llmLevel`.
+pub fn level(mut setting: impl FnMut(&str) -> Option<String>) -> Level {
     if setting("llmEnabled").as_deref() != Some("1") {
         return Level::Off;
     }
@@ -114,10 +80,10 @@ pub fn global_level(mut setting: impl FnMut(&str) -> Option<String>) -> Level {
 pub struct Style {
     pub name: String,
     pub prompt: String,
-    /// Every app (an app's level still decides whether the LLM runs at all).
+    /// Every app.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub all: bool,
-    /// Front-app names, matched like `llmApps` (case-insensitive).
+    /// Front-app names, matched case-insensitively.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub apps: Vec<String>,
 }
@@ -772,27 +738,16 @@ mod tests {
 
     #[test]
     fn levels() {
-        let apps = app_levels("Slack\tlight\nVS Code\toff\nbad line\n\traw\nX\tnope");
-        assert_eq!(
-            apps,
-            vec![
-                ("Slack".into(), Level::Light),
-                ("VS Code".into(), Level::Off)
-            ]
-        );
-        assert_eq!(format_app_levels(&apps), "Slack\tlight\nVS Code\toff");
         let s = |on: &'static str, lvl: &'static str| {
             move |k: &str| match k {
                 "llmEnabled" => Some(on.to_string()),
                 "llmLevel" => Some(lvl.to_string()),
-                "llmApps" => Some("slack\traw".to_string()),
                 _ => None,
             }
         };
-        assert_eq!(level(s("1", ""), None), Level::Fluent);
-        assert_eq!(level(s("1", "light"), Some("Notes")), Level::Light);
-        assert_eq!(level(s("0", "light"), Some("Notes")), Level::Off);
-        assert_eq!(level(s("0", ""), Some("Slack")), Level::Raw);
+        assert_eq!(level(s("1", "")), Level::Fluent);
+        assert_eq!(level(s("1", "light")), Level::Light);
+        assert_eq!(level(s("0", "light")), Level::Off);
     }
 
     #[test]
