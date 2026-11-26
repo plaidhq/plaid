@@ -471,7 +471,7 @@ impl Platform for Driver {
 /// Cloud server URL, device token and app version.
 fn cloud_options() -> Result<cloud::Options, String> {
     Ok(cloud::Options::new(
-        &config::cloud_url()?,
+        &config::cloud_url(),
         secret::cloud_token()?,
         env!("CARGO_PKG_VERSION"),
     ))

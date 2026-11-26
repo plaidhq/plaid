@@ -111,9 +111,8 @@ and upstream errors, because Volc bills what it received.
 
 ## Client
 
-- `serviceMode` = `byok` (default) or `cloud`. The server URL is built in: `PLAID_CLOUD_URL` when the app is
-  compiled (`option_env!`); the same variable at run time overrides it, for tests. A build without it says so on
-  the Cloud tab.
+- `serviceMode` = `byok` (default) or `cloud`. The server URL is built in (`https://plaid.rsod.top`, `config::cloud_url`);
+  `PLAID_CLOUD_URL` at run time overrides it, for tests.
 - 设置 › 服务 › Cloud has the invite code and 登录, then the account, the balance, this month's
   spend and minutes, 使用 Cloud and 退出登录.
 - In cloud mode, refine, 重新润色 and learning go through the server; the LLM endpoint settings are not used.

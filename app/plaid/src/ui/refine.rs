@@ -1813,9 +1813,7 @@ impl Refine {
         let Some(token) = self.cloud_token(cx) else {
             return;
         };
-        let Ok(base) = config::cloud_url() else {
-            return;
-        };
+        let base = config::cloud_url();
         self.account.busy = true;
         cx.spawn(async move |this, cx| {
             let r = cx
@@ -1847,13 +1845,7 @@ impl Refine {
             self.account.error = Some("请输入邀请码".into());
             return cx.notify();
         }
-        let base = match config::cloud_url() {
-            Ok(b) => b,
-            Err(e) => {
-                self.account.error = Some(e);
-                return cx.notify();
-            }
-        };
+        let base = config::cloud_url();
         if self.model.read(cx).facts.fixture {
             self.account.error = Some("snapshot run: not sent".into());
             return cx.notify();
@@ -1910,9 +1902,6 @@ impl Refine {
             "Plaid Cloud",
             "托管的语音识别与润色，无需配置 API Key",
         ));
-        if let Err(e) = config::cloud_url() {
-            return hit("cloud").child(body.child(hint(e)));
-        }
         if self.cloud_token(cx).is_none() {
             let login = default_button(
                 "cloud-login",
@@ -2212,14 +2201,12 @@ pub(super) fn check(ui: &mut super::snapshot::Ui) -> Result<(), String> {
     )?;
     ui.shot("service")?;
     // The Cloud tab hides the BYOK settings; switching tabs stores nothing, and a signed-out device is asked to
-    // sign in (a snapshot run never sends the code); a build without a Cloud URL says so instead.
+    // sign in (a snapshot run never sends the code).
     let stored = std::fs::read_to_string(config::data_dir().join("settings.json")).ok();
     ui.click("service-mode-1")?;
     expect(
         "cloud sign-in",
-        ui.has("cloud")
-            && (ui.has("cloud-login") || config::cloud_url().is_err())
-            && !ui.has("asrContext"),
+        ui.has("cloud") && ui.has("cloud-login") && !ui.has("asrContext"),
         &None,
     )?;
     ui.shot("service-cloud")?;

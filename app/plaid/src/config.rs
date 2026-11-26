@@ -157,14 +157,12 @@ pub fn cloud() -> bool {
     value("serviceMode").as_deref() == Some("cloud")
 }
 
-/// The Plaid Cloud server, fixed when the app is built (PLAID_CLOUD_URL at compile time). The same variable at run
-/// time overrides it, for tests.
-pub fn cloud_url() -> Result<String, String> {
+/// The Plaid Cloud server. PLAID_CLOUD_URL at run time overrides it, for tests.
+pub fn cloud_url() -> String {
     std::env::var("PLAID_CLOUD_URL")
         .ok()
-        .or_else(|| option_env!("PLAID_CLOUD_URL").map(String::from))
         .filter(|u| !u.trim().is_empty())
-        .ok_or_else(|| "当前版本未提供 Cloud 服务".into())
+        .unwrap_or_else(|| "https://plaid.rsod.top".into())
 }
 
 /// Voice commands from actions.json (re-read per utterance) and the wake word; empty = bare mode.
