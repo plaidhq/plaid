@@ -1,5 +1,11 @@
-# GPUI app (app/): Windows build, tests (including the mock-endpoint replay) and an unsigned exe artifact; the same
-# on an Intel Mac, plus ui-check renders. Apple silicon macOS is built and tested locally.
+# GPUI app (app/): format, lint and tests (including the mock-endpoint replay) on Windows, Intel and Apple silicon
+# Macs, a launch smoke test on each, and ui-check renders. Jobs run in parallel; the slow release builds are kept out
+# of the critical path.
+#
+# Caches: release.yml runs on tags, which can only restore caches saved on main, under the same key. So the jobs
+# named windows-release, macos-x64 and macos-arm64 share their key with the matching release.yml job, and on main,
+# when the key misses (Cargo.lock or the toolchain changed), the macOS jobs also build the release bundle so the next
+# tag finds its dependencies compiled.
 name: app
 
 on:
@@ -29,9 +35,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
+
+  # The release exe on its own: windows_subsystem only applies without debug_assertions, and the silent-launch class
+  # of bugs only shows there.
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+          shared-key: windows-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build --release -p plaid
       # Launch the GUI exe for real: it must stay up, log its launch and not panic (a panic shows a message box
       # and blocks, so liveness alone proves nothing).
@@ -54,26 +74,33 @@ jobs:
           path: app/target/release/plaid.exe
           if-no-files-found: error
 
-  macos-intel:
-    runs-on: macos-15-intel
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x64
+          - runner: macos-latest
+            arch: arm64
+    name: macos-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        id: cache
         with:
           workspaces: app
+          shared-key: macos-${{ matrix.arch }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test --workspace
-      - run: ./bundle.sh release
-      - name: Intel binary for macOS 13
-        run: |
-          BIN=target/Plaid.app/Contents/MacOS/plaid
-          lipo -archs "$BIN" | grep -qx x86_64
-          vtool -show-build "$BIN" | grep -q 'minos 13.0'
+      - run: cargo build -p plaid
       # Same as the Windows smoke test: the app must stay up, log its launch (after the GPUI windows open) and not panic.
       - name: Launch smoke test
         run: |
           export PLAID_DATA_DIR="$RUNNER_TEMP/plaid-smoke"
-          target/Plaid.app/Contents/MacOS/plaid &
+          target/debug/plaid &
           PID=$!
           sleep 8
           cat "$PLAID_DATA_DIR/events.log" || true
@@ -81,19 +108,24 @@ jobs:
           kill $PID
           grep -q 'launch ' "$PLAID_DATA_DIR/events.log"
           ! grep -q 'panic:' "$PLAID_DATA_DIR/events.log"
-      - run: ditto -c -k --keepParent target/Plaid.app Plaid-macos-x64.zip
-      - uses: actions/upload-artifact@v4
+      # Fills the cache release.yml restores; bundle.sh sets the same MACOSX_DEPLOYMENT_TARGET as the release build.
+      - name: Release build for the tag cache
+        if: github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
+        run: ./bundle.sh release
+
+  # Offscreen renders of every settings page; the runner's GPU may not support them, so a failure is only reported.
+  ui-check:
+    runs-on: macos-15-intel
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
         with:
-          name: plaid-macos-x64
-          path: app/Plaid-macos-x64.zip
-          if-no-files-found: error
-      # Offscreen renders of every settings page; the runner's GPU may not support them, so a failure here is only
-      # reported.
-      - name: ui-check
-        continue-on-error: true
-        run: |
-          cargo build -p plaid --features snapshot
-          PLAID_DATA_DIR="$RUNNER_TEMP/uicd" ./target/debug/plaid --ui-check "$RUNNER_TEMP/uic"
+          workspaces: app
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build -p plaid --features snapshot
+      - run: PLAID_DATA_DIR="$RUNNER_TEMP/uicd" ./target/debug/plaid --ui-check "$RUNNER_TEMP/uic"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

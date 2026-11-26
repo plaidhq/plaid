@@ -26,9 +26,12 @@ jobs:
       - name: Tag matches version
         run: test "v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" = "$GITHUB_REF_NAME"
       - uses: dtolnay/rust-toolchain@stable
+      # Restores what app.yml's macos-<arch> job saved on main (tags can't restore their own caches later).
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app
+          shared-key: macos-${{ matrix.arch }}
+          save-if: false
       # A fixed self-signed identity (not trusted, not notarized): the designated requirement names its certificate,
       # so Microphone/Accessibility grants survive updates, which ad-hoc signatures (cdhash) don't.
       - name: Signing keychain
@@ -69,6 +72,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app
+          shared-key: windows-release
+          save-if: false
       - run: cargo build --release -p plaid
       - run: 7z a "Plaid-$GITHUB_REF_NAME-windows-x64.zip" ./target/release/plaid.exe
       - uses: actions/upload-artifact@v4
