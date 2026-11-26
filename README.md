@@ -3,8 +3,9 @@
 English | [简体中文](README.zh-CN.md)
 
 Voice dictation for macOS and Windows. Hold a key, speak, release: the text is pasted into whatever input field has
-focus. Recognition uses Volcengine's Doubao streaming ASR (bigmodel). An optional LLM pass removes fillers and fixes
-typos and punctuation before pasting. The UI is in Simplified Chinese; screenshots below use sample data.
+focus. Recognition uses Volcengine's Doubao streaming ASR (bigmodel), either with your own API key or through Plaid
+Cloud (invite-only, no key needed). An optional LLM pass removes fillers and fixes typos and punctuation before
+pasting. The UI is in Simplified Chinese; screenshots below use sample data.
 
 ![Text appears in the HUD while you speak](docs/screenshots/hud-typing.png)
 
@@ -65,11 +66,23 @@ plus 7, 30 and 90-day views.
 
 ![概览](docs/screenshots/overview.png)
 
+### Comparing with friends
+
+With Plaid Cloud, a 鲸喷榜 tab ranks Cloud users over the last 7 or 30 days: by characters dictated, and by
+characters per minute of speech once someone has spoken for 10 (or 30) minutes. It shows your rank, the gap to the
+next place and how many books your total adds up to. You can leave the board at any time (隐身) and change your
+name (up to 8 characters) in 设置 › 服务 › Cloud.
+
+![鲸喷榜](docs/screenshots/board.png)
+
 ## Requirements
 
 - macOS 13+ (Apple silicon or Intel), or Windows 11 x64.
-- A Volcengine API key with Doubao streaming speech recognition (bigmodel) enabled. Plaid is bring-your-own-key.
-- Optional: any OpenAI-compatible or Anthropic-compatible LLM endpoint for polishing.
+- One of:
+  - **BYOK**: a Volcengine API key with Doubao streaming speech recognition (bigmodel) enabled, plus optionally any
+    OpenAI-compatible or Anthropic-compatible LLM endpoint for polishing.
+  - **Plaid Cloud**: an invite code. Recognition, polishing and learning run on the Cloud server; usage is paid
+    from a credit balance the admin tops up.
 
 ## Install
 
@@ -85,10 +98,15 @@ Plaid checks GitHub for new releases every 6 hours and can update itself (设置
 
 ## Setup
 
-1. Open 设置 › 服务 and paste the Volcengine API key. Keys are stored locally (Keychain on macOS, Credential
-   Manager on Windows).
-2. Optional: under LLM on the same page, pick a preset or enter an endpoint, model and key, then run 测试. Turn
-   polishing on in 设置 › 润色 and choose a level (关 / 轻度 / 通顺).
+Open 设置 › 服务 and pick a tab:
+
+- **Cloud**: enter the invite code and choose 登录. The page then shows your account, credit balance and this
+  month's usage. Codes are single-use and expire after 7 days; the device keeps a token in the OS credential store.
+- **BYOK**: paste the Volcengine API key. Optionally, under LLM pick a preset or enter an endpoint, model and key,
+  then run 测试. Keys are stored locally (Keychain on macOS, Credential Manager on Windows).
+
+Then turn polishing on in 设置 › 润色 and choose a level (关 / 轻度 / 通顺). Levels, styles and the dictionary
+work the same in both modes.
 
 ## Use
 
@@ -98,15 +116,19 @@ Plaid checks GitHub for new releases every 6 hours and can update itself (设置
 
 ## Data
 
-- Audio goes to Volcengine. With 发送上下文 on, a short piece of text before the cursor and the app name go too.
-- With polishing or background checking on, the recognized text, app name and window title go to the LLM endpoint
-  you configured.
+- BYOK: audio goes to Volcengine. With 发送上下文 on, a short piece of text before the cursor and the app name go
+  too. With polishing or background checking on, the recognized text, app name and window title go to the LLM
+  endpoint you configured.
+- Plaid Cloud: the same data goes to the Cloud server, which passes it to Volcengine and its LLM provider. The
+  server stores no audio and no text, and its logs carry only ids, sizes and timings. It records per dictation the
+  audio length, character count, token counts and cost, which feed the balance and 鲸喷榜.
 - History, recordings and edit records stay on this machine. Keeping recordings can be turned off in 设置 › 数据, and
   entries can be deleted in 历史.
 
 ## Build
 
-The app is Rust, using [GPUI](https://www.gpui.rs) through `gpui-kit`. It lives in `app/`.
+The app is Rust, using [GPUI](https://www.gpui.rs) through `gpui-kit`. It lives in `app/`: `core` (pipeline,
+no UI), `plaid` (the app) and `cloud` (the Plaid Cloud server, see [docs/cloud.md](docs/cloud.md)).
 
 ```sh
 cd app
@@ -122,7 +144,8 @@ Headless helpers:
 - `plaid --learn-report` prints what the learner has collected.
 - `plaid --update` updates from the command line.
 
-CI builds and tests on Windows on every push to `main`. A `v*` tag builds both platforms and publishes a release.
+CI builds and tests on Windows and Intel macOS on every push to `main`. A `v*` tag builds macOS (arm64, x64) and
+Windows and publishes a release.
 
 ## License
 
